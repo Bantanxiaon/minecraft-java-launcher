@@ -4333,7 +4333,9 @@ fn validate_metadata_url(value: &str) -> Result<reqwest::Url, LauncherError> {
         .map_err(|_| LauncherError::validation("版本元数据 URL 无效。"))?;
     let allowed_host = matches!(
         url.host_str(),
-        Some("piston-meta.mojang.com") | Some("launchermeta.mojang.com")
+        Some("piston-meta.mojang.com")
+            | Some("launchermeta.mojang.com")
+            | Some("bmclapi2.bangbang93.com")
     );
     if url.scheme() != "https" || !allowed_host {
         return Err(LauncherError::validation(
@@ -4360,6 +4362,7 @@ fn validate_resource_url(value: &str) -> Result<reqwest::Url, LauncherError> {
             | Some("maven.minecraftforge.net")
             | Some("maven.neoforged.net")
             | Some("cdn.modrinth.com")
+            | Some("bmclapi2.bangbang93.com")
     );
     if url.scheme() != "https" || !allowed_host {
         return Err(LauncherError::validation(
@@ -4367,6 +4370,41 @@ fn validate_resource_url(value: &str) -> Result<reqwest::Url, LauncherError> {
         ));
     }
     Ok(url)
+}
+
+/// 把 Mojang 官方下载地址映射为 BMCLAPI 国内镜像地址。
+/// 所有镜像文件下载后仍按 SHA-1 / 大小校验，镜像无法篡改内容。
+fn bmclapi_mirror_url(original: &reqwest::Url) -> Option<reqwest::Url> {
+    let host = original.host_str()?;
+    let path = original.path();
+    let mirror = match host {
+        "piston-meta.mojang.com" | "launchermeta.mojang.com" => {
+            if path.ends_with("version_manifest.json") || path.ends_with("version_manifest_v2.json")
+            {
+                "https://bmclapi2.bangbang93.com/mc/game/version_manifest.json".to_string()
+            } else if let Some(stem) = path
+                .rsplit('/')
+                .next()
+                .and_then(|name| name.strip_suffix(".json"))
+                .filter(|stem| !stem.is_empty())
+            {
+                format!("https://bmclapi2.bangbang93.com/version/{stem}/json")
+            } else {
+                return None;
+            }
+        }
+        "piston-data.mojang.com" => format!("https://bmclapi2.bangbang93.com{path}"),
+        "resources.download.minecraft.net" => {
+            format!("https://bmclapi2.bangbang93.com/assets{path}")
+        }
+        "libraries.minecraft.net"
+        | "maven.fabricmc.net"
+        | "maven.quiltmc.org"
+        | "maven.minecraftforge.net"
+        | "maven.neoforged.net" => format!("https://bmclapi2.bangbang93.com/maven{path}"),
+        _ => return None,
+    };
+    reqwest::Url::parse(&mirror).ok()
 }
 
 fn validate_loader_token(value: &str) -> Result<(), LauncherError> {
@@ -5440,23 +5478,104 @@ async fn download_verified_file_with_progress(
         true,
     )
     .await;
-    if first
-        .as_ref()
-        .is_err_and(|error| error.message == "下载文件大小或 SHA-1 校验失败。")
-    {
-        return download_verified_file_attempt(
-            app,
-            instance_id,
-            url,
-            expected_sha1,
-            expected_size,
-            target,
-            emit_file_progress,
-            false,
-        )
-        .await;
+    if let Err(primary_error) = &first {
+        // 1) 官方源校验失败时，去掉断点再试一次，排除残留的部分文件。
+        if primary_error.message == "下载文件大小或 SHA-1 校验失败。" {
+            if let Ok(size) = download_verified_file_attempt(
+                app,
+                instance_id,
+                url,
+                expected_sha1,
+                expected_size,
+                target,
+                emit_file_progress,
+                false,
+            )
+            .await
+            {
+                return Ok(size);
+            }
+        }
+        // 2) 官方源网络失败时，自动改用 BMCLAPI 国内镜像重试一次（SHA-1 校验不变）。
+        if let Ok(parsed) = validate_resource_url(url) {
+            if let Some(mirror) = bmclapi_mirror_url(&parsed) {
+                if let Ok(size) = download_verified_file_attempt(
+                    app,
+                    instance_id,
+                    mirror.as_str(),
+                    expected_sha1,
+                    expected_size,
+                    target,
+                    emit_file_progress,
+                    false,
+                )
+                .await
+                {
+                    return Ok(size);
+                }
+            }
+        }
+        return first;
     }
     first
+}
+
+async fn fetch_manifest_bytes(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<Vec<u8>, LauncherError> {
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|error| LauncherError::storage(format!("获取官方版本清单失败：{error}")))?;
+    let response = response
+        .error_for_status()
+        .map_err(|error| LauncherError::storage(format!("官方版本服务返回错误：{error}")))?;
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_MANIFEST_BYTES as u64)
+    {
+        return Err(LauncherError::validation("版本清单超过安全大小限制。"));
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    if bytes.len() > MAX_MANIFEST_BYTES {
+        return Err(LauncherError::validation("版本清单超过安全大小限制。"));
+    }
+    Ok(bytes.to_vec())
+}
+
+async fn fetch_version_details_from(
+    client: &reqwest::Client,
+    url: &reqwest::Url,
+    expected_sha1: &str,
+) -> Result<serde_json::Value, LauncherError> {
+    let response = client
+        .get(url.clone())
+        .send()
+        .await
+        .map_err(|error| LauncherError::storage(format!("获取版本元数据失败：{error}")))?;
+    let response = response
+        .error_for_status()
+        .map_err(|error| LauncherError::storage(format!("版本元数据服务返回错误：{error}")))?;
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_VERSION_JSON_BYTES as u64)
+    {
+        return Err(LauncherError::validation("版本元数据超过安全大小限制。"));
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    if bytes.len() > MAX_VERSION_JSON_BYTES || !verify_sha1(&bytes, expected_sha1) {
+        return Err(LauncherError::validation("版本元数据 SHA-1 校验失败。"));
+    }
+    serde_json::from_slice(&bytes)
+        .map_err(|error| LauncherError::storage(format!("版本元数据格式无效：{error}")))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6715,34 +6834,24 @@ async fn fetch_version_details(
     if expected_sha1.len() != 40 || !expected_sha1.chars().all(|value| value.is_ascii_hexdigit()) {
         return Err(LauncherError::validation("版本元数据 SHA-1 无效。"));
     }
-    let url = validate_metadata_url(&url)?;
+    let parsed = validate_metadata_url(&url)?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .user_agent("SHLauncher/0.1")
         .build()
         .map_err(|error| LauncherError::storage(error.to_string()))?;
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|error| LauncherError::storage(format!("获取版本元数据失败：{error}")))?
-        .error_for_status()
-        .map_err(|error| LauncherError::storage(format!("版本元数据服务返回错误：{error}")))?;
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_VERSION_JSON_BYTES as u64)
-    {
-        return Err(LauncherError::validation("版本元数据超过安全大小限制。"));
+    match fetch_version_details_from(&client, &parsed, &expected_sha1).await {
+        Ok(value) => Ok(value),
+        Err(primary_error) => {
+            if let Some(mirror) = bmclapi_mirror_url(&parsed) {
+                if let Ok(value) = fetch_version_details_from(&client, &mirror, &expected_sha1).await
+                {
+                    return Ok(value);
+                }
+            }
+            Err(primary_error)
+        }
     }
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|error| LauncherError::storage(error.to_string()))?;
-    if bytes.len() > MAX_VERSION_JSON_BYTES || !verify_sha1(&bytes, &expected_sha1) {
-        return Err(LauncherError::validation("版本元数据 SHA-1 校验失败。"));
-    }
-    serde_json::from_slice(&bytes)
-        .map_err(|error| LauncherError::storage(format!("版本元数据格式无效：{error}")))
 }
 
 #[tauri::command]
@@ -6752,23 +6861,17 @@ async fn fetch_version_manifest(include_snapshots: bool) -> Result<VersionManife
         .user_agent("SHLauncher/0.1")
         .build()
         .map_err(|error| LauncherError::storage(error.to_string()))?;
-    let response = client
-        .get(VERSION_MANIFEST_URL)
-        .send()
-        .await
-        .map_err(|error| LauncherError::storage(format!("获取官方版本清单失败：{error}")))?
-        .error_for_status()
-        .map_err(|error| LauncherError::storage(format!("官方版本服务返回错误：{error}")))?;
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_MANIFEST_BYTES as u64)
-    {
-        return Err(LauncherError::validation("版本清单超过安全大小限制。"));
-    }
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let bytes = match fetch_manifest_bytes(&client, VERSION_MANIFEST_URL).await {
+        Ok(bytes) => bytes,
+        Err(primary_error) => {
+            const BMCLAPI_MANIFEST: &str =
+                "https://bmclapi2.bangbang93.com/mc/game/version_manifest.json";
+            match fetch_manifest_bytes(&client, BMCLAPI_MANIFEST).await {
+                Ok(bytes) => bytes,
+                Err(_) => return Err(primary_error),
+            }
+        }
+    };
     let mut manifest = parse_version_manifest(&bytes)?;
     if !include_snapshots {
         manifest
@@ -6960,6 +7063,62 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bmclapi_mirror_maps_official_urls() {
+        let manifest =
+            reqwest::Url::parse("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
+                .unwrap();
+        assert_eq!(
+            bmclapi_mirror_url(&manifest).unwrap().as_str(),
+            "https://bmclapi2.bangbang93.com/mc/game/version_manifest.json"
+        );
+        let details =
+            reqwest::Url::parse("https://piston-meta.mojang.com/v1/packages/abc/1.21.1.json")
+                .unwrap();
+        assert_eq!(
+            bmclapi_mirror_url(&details).unwrap().as_str(),
+            "https://bmclapi2.bangbang93.com/version/1.21.1/json"
+        );
+        let client = reqwest::Url::parse(
+            "https://piston-data.mojang.com/v1/objects/abcdef0123/client.jar",
+        )
+        .unwrap();
+        assert_eq!(
+            bmclapi_mirror_url(&client).unwrap().as_str(),
+            "https://bmclapi2.bangbang93.com/v1/objects/abcdef0123/client.jar"
+        );
+        let asset =
+            reqwest::Url::parse("https://resources.download.minecraft.net/ab/abcdef1234").unwrap();
+        assert_eq!(
+            bmclapi_mirror_url(&asset).unwrap().as_str(),
+            "https://bmclapi2.bangbang93.com/assets/ab/abcdef1234"
+        );
+        let library =
+            reqwest::Url::parse("https://libraries.minecraft.net/com/example/lib.jar").unwrap();
+        assert_eq!(
+            bmclapi_mirror_url(&library).unwrap().as_str(),
+            "https://bmclapi2.bangbang93.com/maven/com/example/lib.jar"
+        );
+        let forge =
+            reqwest::Url::parse("https://maven.minecraftforge.net/net/minecraftforge/forge.jar")
+                .unwrap();
+        assert_eq!(
+            bmclapi_mirror_url(&forge).unwrap().as_str(),
+            "https://bmclapi2.bangbang93.com/maven/net/minecraftforge/forge.jar"
+        );
+        assert!(
+            bmclapi_mirror_url(&reqwest::Url::parse("https://api.modrinth.com/v2/x").unwrap())
+                .is_none()
+        );
+        assert!(
+            bmclapi_mirror_url(
+                &reqwest::Url::parse("https://bmclapi2.bangbang93.com/version/1.21.1/json")
+                    .unwrap()
+            )
+            .is_none()
+        );
+    }
 
     #[test]
     fn boot_mods_scan_is_quiet_for_missing_folders() {
