@@ -1789,6 +1789,86 @@ nav button.active svg { color:#3b8d40; }
   font-size: 12px;
 }
 
+/* ============ 底部全局进度条 ============ */
+.global-progress-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 80;
+  display: grid;
+  gap: 7px;
+  padding: 10px 18px 12px;
+  background: rgba(255, 255, 255, .96);
+  border-top: 1px solid #e2e8e3;
+  box-shadow: 0 -4px 18px rgba(20, 35, 50, .06);
+}
+
+.global-progress-copy {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.global-progress-message {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #3d4953;
+  font-size: 13px;
+}
+
+.global-progress-percent {
+  flex: 0 0 auto;
+  color: #2f7c35;
+  font-size: 13px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.global-progress-track {
+  position: relative;
+  height: 8px;
+  border-radius: 99px;
+  background: #e6ece7;
+  overflow: hidden;
+}
+
+.global-progress-fill {
+  position: relative;
+  height: 100%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, #4c9a4a, #6fae76, #a3d1a8);
+  box-shadow: 0 0 10px rgba(76, 154, 74, .4);
+  transition: width .35s ease;
+}
+
+.global-progress-fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 99px;
+  background: linear-gradient(
+    110deg,
+    transparent 20%,
+    rgba(255, 255, 255, .55) 50%,
+    transparent 80%
+  );
+  background-size: 220% 100%;
+  animation: splash-shimmer 1.6s linear infinite;
+}
+
+.global-progress-indeterminate {
+  width: 38% !important;
+  animation: global-progress-slide 1.3s ease-in-out infinite;
+}
+
+@keyframes global-progress-slide {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(340%); }
+}
+
 .home-update-error {
   border-color: #ecd9bd;
   background: #fdf9f1;

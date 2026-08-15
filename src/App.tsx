@@ -36,6 +36,7 @@ import { VersionHighlightsModal } from "./components/VersionHighlightsModal";
 import { ChangelogModal } from "./components/ChangelogModal";
 import { ErrorModal } from "./components/ErrorModal";
 import { IncompatibleModsModal } from "./components/IncompatibleModsModal";
+import { GlobalProgressBar } from "./components/GlobalProgressBar";
 import { checkForUpdate, updaterEnabled } from "./updater";
 import type { Update } from "./updater";
 import type {
@@ -271,6 +272,25 @@ export default function App() {
   const [microsoftLoginAvailable, setMicrosoftLoginAvailable] = useState(false);
   const [gameRunning, setGameRunning] = useState(false);
   const current = accounts.find((account) => account.id === selectedAccountId) ?? accounts[0];
+  const activeDownloadJobs = downloadJobs.filter(
+    (job) => job.status === "downloading",
+  );
+  const aggregateDownloadPercent = activeDownloadJobs.length
+    ? Math.round(
+        (activeDownloadJobs.reduce(
+          (sum, job) => sum + job.progressBytes,
+          0,
+        ) /
+          Math.max(
+            1,
+            activeDownloadJobs.reduce(
+              (sum, job) => sum + (job.totalBytes ?? job.progressBytes),
+              0,
+            ),
+          )) *
+          100,
+      )
+    : undefined;
 
   useEffect(() => {
     activeNavRef.current = activeNav;
@@ -2588,6 +2608,11 @@ export default function App() {
         )}
       </section>
       </main>
+      <GlobalProgressBar
+        visible={busy || activeDownloadJobs.length > 0}
+        message={message}
+        progress={aggregateDownloadPercent}
+      />
       {errorModal ? (
         <ErrorModal
           title={errorModal.title}
