@@ -2404,6 +2404,31 @@ async fn install_single_modrinth_mod(
         .join("modrinth")
         .join(format!("{}-{filename}", &sha1[..12]));
     download_verified_file(app, instance_id, &url, &sha1, Some(size), &cache).await?;
+    let info = inspect_mod_jar_path(&cache)?;
+    if let Some(mod_id) = info.mod_id.as_deref() {
+        let connection = open_database(app)?;
+        let mut statement = connection
+            .prepare("SELECT id,instance_id,kind,file_name,hash,metadata_json,enabled,source,installed_at FROM content_items WHERE instance_id=?1 AND kind='mod'")
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        let items = statement
+            .query_map([instance_id], content_item_from_row)
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        for item in items.flatten() {
+            let installed_mod_id = item
+                .metadata_json
+                .as_deref()
+                .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+                .and_then(|value| {
+                    value
+                        .get("modId")
+                        .and_then(|entry| entry.as_str())
+                        .map(str::to_string)
+                });
+            if installed_mod_id.is_some_and(|installed| installed.eq_ignore_ascii_case(mod_id)) {
+                return Ok(item);
+            }
+        }
+    }
     let mut item = install_mod(
         app.clone(),
         instance_id,
