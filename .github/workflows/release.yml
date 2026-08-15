@@ -53,5 +53,4 @@ jobs:
           releaseDraft: false
           prerelease: false
           updaterJsonPreferNsis: true
-          uploadUpdaterJson: true
-          uploadUpdaterSignatures: true
+          includeUpdaterJson: true
