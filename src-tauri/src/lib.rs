@@ -1976,6 +1976,24 @@ fn pick_best_modrinth_version(
 }
 
 /// 按“当前版本 + 当前加载器”优先逐级放宽匹配，尽量找到可用的 Modrinth 版本。
+const MOD_LOADER_FAMILIES: [&str; 4] = ["fabric", "quilt", "forge", "neoforge"];
+
+fn version_supports_mod_loader(version: &serde_json::Value) -> bool {
+    let Some(loaders) = version.get("loaders").and_then(|value| value.as_array()) else {
+        return true;
+    };
+    if loaders.is_empty() {
+        return true;
+    }
+    loaders.iter().any(|loader| {
+        loader.as_str().is_some_and(|name| {
+            MOD_LOADER_FAMILIES
+                .iter()
+                .any(|family| name.eq_ignore_ascii_case(family))
+        })
+    })
+}
+
 async fn modrinth_best_version(
     project_id: &str,
     game_version: Option<&str>,
@@ -1992,12 +2010,22 @@ async fn modrinth_best_version(
     attempts.push((None, None));
     for (version, loaders) in attempts {
         let versions = fetch_project_versions(project_id, version, loaders).await?;
-        if let Some(best) = pick_best_modrinth_version(&versions) {
+        // 放宽到“任意加载器”时，只保留真正的单机模组加载器版本，
+        // 避免误选 Spigot/Paper 等服务端插件版本。
+        let candidates: Vec<_> = if loaders.is_none() {
+            versions
+                .into_iter()
+                .filter(version_supports_mod_loader)
+                .collect()
+        } else {
+            versions
+        };
+        if let Some(best) = pick_best_modrinth_version(&candidates) {
             return Ok(best);
         }
     }
     Err(LauncherError::validation(format!(
-        "{project_id} 没有与当前实例兼容的版本。"
+        "{project_id} 没有与当前实例兼容的模组版本；若该模组仅支持 Spigot/Paper 等服务端插件平台，则无法在单机模组实例中自动安装。"
     )))
 }
 
@@ -2449,20 +2477,42 @@ async fn auto_install_missing_mod_dependencies(
             .map(|names| names.join("、"))
             .unwrap_or_default();
         let project_id = match resolve_modrinth_project_id(&missing_id).await {
-            Ok(project_id) => project_id,
-            Err(error) => {
-                failures.push(format!(
-                    "{missing_id}：{}{}",
-                    error.message,
-                    if dependent_mods.is_empty() {
-                        String::new()
-                    } else {
-                        format!("\n  需要它的模组：{dependent_mods}")
+            Ok(project_id) => Some(project_id),
+            Err(modrinth_error) => {
+                // Modrinth 找不到时，尝试从实例的 CurseForge 索引解析并直接安装
+                match resolve_curseforge_dependency(app, instance_id, &missing_id).await {
+                    Ok(item) => {
+                        if let Some(metadata_json) = item.metadata_json.as_deref() {
+                            if let Ok(metadata) =
+                                serde_json::from_str::<serde_json::Value>(metadata_json)
+                            {
+                                if let Some(mod_id) =
+                                    metadata.get("modId").and_then(|value| value.as_str())
+                                {
+                                    installed_ids.insert(mod_id.to_ascii_lowercase());
+                                }
+                            }
+                        }
+                        continue;
                     }
-                ));
-                continue;
+                    Err(curseforge_error) => {
+                        failures.push(format!(
+                            "{missing_id}：Modrinth 未找到（{}），CurseForge 也未匹配（{}）。{}{}",
+                            modrinth_error.message,
+                            curseforge_error.message,
+                            if dependent_mods.is_empty() {
+                                String::new()
+                            } else {
+                                format!("\n  需要它的模组：{dependent_mods}")
+                            },
+                            "\n  请确认模组来源，或手动安装该前置模组。"
+                        ));
+                        continue;
+                    }
+                }
             }
         };
+        let project_id = project_id.expect("已在上面解析");
         // 安装前先筛查加载器兼容性：不匹配就不安装，避免装完才报错。
         match modrinth_primary_file_with_loaders(
             &project_id,
@@ -3004,6 +3054,291 @@ async fn download_curseforge_file(
     download_verified_file(app, instance_id, &download_url, "", Some(size), target).await
 }
 
+fn parse_modlist_entry(entry_html: &str) -> Option<(String, String)> {
+    let slug_start = entry_html.find("/mc-mods/")? + "/mc-mods/".len();
+    let rest = &entry_html[slug_start..];
+    let slug_end = rest.find(['"', '<', '?', '#']).unwrap_or(rest.len());
+    let slug = rest[..slug_end].trim().to_string();
+    if slug.is_empty() {
+        return None;
+    }
+    let name_start = entry_html[slug_start..].find('>')? + slug_start + 1;
+    let name_rest = &entry_html[name_start..];
+    let name_end = name_rest.find('<').unwrap_or(name_rest.len());
+    let raw = name_rest[..name_end].trim();
+    let name = raw.split(" (by ").next().unwrap_or(raw).trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    Some((slug, name))
+}
+
+fn normalize_curseforge_key(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .map(|character| character.to_ascii_lowercase())
+        .collect()
+}
+
+fn curseforge_match_score(dep: &str, name: &str, slug: &str) -> i32 {
+    if dep.is_empty() {
+        return 0;
+    }
+    if name == dep || slug == dep {
+        return 100;
+    }
+    if name.starts_with(dep) || dep.starts_with(name) {
+        return 90;
+    }
+    if slug.starts_with(dep) || dep.starts_with(slug) {
+        return 80;
+    }
+    if name.contains(dep) || slug.contains(dep) {
+        return 70;
+    }
+    let common = dep
+        .chars()
+        .zip(name.chars())
+        .take_while(|(left, right)| left == right)
+        .count();
+    if common >= 8 {
+        return 85;
+    }
+    if common >= 5 {
+        return 75;
+    }
+    0
+}
+
+fn collect_curseforge_index_files(root_path: &str) -> Vec<serde_json::Value> {
+    let mut candidates = Vec::new();
+    let mut paths = vec![PathBuf::from(root_path).join(".curseforge-index.json")];
+    if let Ok(root) = launcher_data_directory() {
+        paths.push(root.join("cache").join("curseforge").join("global-index.json"));
+    }
+    for path in paths {
+        if !path.is_file() {
+            continue;
+        }
+        if let Ok(bytes) = fs::read(&path) {
+            if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                if let Some(files) = value.get("files").and_then(|entry| entry.as_array()) {
+                    candidates.extend(files.iter().cloned());
+                }
+            }
+        }
+    }
+    candidates
+}
+
+fn best_curseforge_match(files: &[serde_json::Value], dep: &str) -> Option<(i64, i64)> {
+    let normalized = normalize_curseforge_key(dep);
+    let mut best_score = 0i32;
+    let mut best: Option<(i64, i64)> = None;
+    for file in files {
+        let project_id = file.get("projectId").and_then(|v| v.as_i64()).unwrap_or(0);
+        let file_id = file.get("fileId").and_then(|v| v.as_i64()).unwrap_or(0);
+        if project_id <= 0 || file_id <= 0 {
+            continue;
+        }
+        let name = normalize_curseforge_key(
+            file.get("name").and_then(|v| v.as_str()).unwrap_or_default(),
+        );
+        let slug = normalize_curseforge_key(
+            file.get("slug").and_then(|v| v.as_str()).unwrap_or_default(),
+        );
+        let score = curseforge_match_score(&normalized, &name, &slug);
+        if score > best_score {
+            best_score = score;
+            best = Some((project_id, file_id));
+        }
+    }
+    best.filter(|_| best_score >= 60)
+}
+
+async fn install_curseforge_ids(
+    app: &AppHandle,
+    instance_id: i64,
+    project_id: i64,
+    file_id: i64,
+) -> Result<ContentItem, LauncherError> {
+    let connection = open_database(app)?;
+    let (root_path, loader_type, game_version): (String, String, String) = connection
+        .query_row(
+            "SELECT root_path, loader_type, game_version FROM instances WHERE id=?1",
+            [instance_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(|_| LauncherError::validation("目标实例不存在。"))?;
+    drop(connection);
+    let client = shared_download_client()?;
+    let (file_name, size) = curseforge_file_info(&client, project_id, file_id).await?;
+    let cache_dir = launcher_data_directory()?.join("cache").join("curseforge");
+    let cache_target = cache_dir
+        .join(format!("{project_id}-{file_id}"))
+        .join(&file_name);
+    download_curseforge_file(app, instance_id, project_id, file_id, size, &cache_target).await?;
+    let info = inspect_mod_jar_path(&cache_target)?;
+    if info.loader_type != "unknown" {
+        ensure_loader_compatible(&loader_type, &info.loader_type)?;
+    }
+    ensure_game_version_compatible(&game_version, &info)?;
+    let mods_dir = PathBuf::from(&root_path).join(".minecraft").join("mods");
+    fs::create_dir_all(&mods_dir).map_err(|error| LauncherError::storage(error.to_string()))?;
+    let output = mods_dir.join(&file_name);
+    let final_path = if output.exists() {
+        mods_dir.join(format!("{}-{}", unique_timestamp(), file_name))
+    } else {
+        output
+    };
+    fs::copy(&cache_target, &final_path)
+        .map_err(|error| LauncherError::storage(format!("写入模组文件夹失败：{error}")))?;
+    let metadata = serde_json::to_string(&info)
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let connection = open_database(app)?;
+    connection
+        .execute(
+            "INSERT OR IGNORE INTO content_items(instance_id,kind,file_name,hash,metadata_json,enabled,source,installed_at) VALUES(?1,'mod',?2,?3,?4,1,'curseforge',?5)",
+            params![
+                instance_id,
+                final_path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("mod.jar"),
+                info.sha256,
+                metadata,
+                chrono_like_timestamp()
+            ],
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    connection
+        .query_row(
+            "SELECT id,instance_id,kind,file_name,hash,metadata_json,enabled,source,installed_at FROM content_items WHERE instance_id=?1 AND kind='mod' AND hash=?2",
+            params![instance_id, info.sha256],
+            content_item_from_row,
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))
+}
+
+async fn resolve_curseforge_dependency(
+    app: &AppHandle,
+    instance_id: i64,
+    dep: &str,
+) -> Result<ContentItem, LauncherError> {
+    let connection = open_database(app)?;
+    let root_path: String = connection
+        .query_row(
+            "SELECT root_path FROM instances WHERE id=?1",
+            [instance_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| LauncherError::validation("目标实例不存在。"))?;
+    drop(connection);
+    let files = collect_curseforge_index_files(&root_path);
+    if files.is_empty() {
+        return Err(LauncherError::validation(
+            "没有可用的 CurseForge 索引；请先导入包含该模组的 CurseForge 整合包。",
+        ));
+    }
+    let (project_id, file_id) = best_curseforge_match(&files, dep)
+        .ok_or_else(|| LauncherError::validation("在 CurseForge 索引中未匹配到该项目。"))?;
+    install_curseforge_ids(app, instance_id, project_id, file_id).await
+}
+
+fn extract_curseforge_slug(url: &str) -> Option<String> {
+    let index = url.find("/mc-mods/")?;
+    let rest = &url[index + "/mc-mods/".len()..];
+    let slug: String = rest
+        .chars()
+        .take_while(|character| !matches!(character, '/' | '?' | '#'))
+        .collect();
+    (!slug.is_empty()).then_some(slug)
+}
+
+fn extract_curseforge_file_id(url: &str) -> Option<i64> {
+    let index = url.find("/files/")?;
+    let rest = &url[index + "/files/".len()..];
+    let digits: String = rest
+        .chars()
+        .take_while(|character| character.is_ascii_digit())
+        .collect();
+    digits.parse::<i64>().ok().filter(|value| *value > 0)
+}
+
+#[tauri::command]
+async fn install_curseforge_url(
+    app: AppHandle,
+    instance_id: i64,
+    url: String,
+) -> Result<ContentItem, LauncherError> {
+    let trimmed = url.trim();
+    if !trimmed.starts_with("https://www.curseforge.com/") {
+        return Err(LauncherError::validation(
+            "仅支持 www.curseforge.com 的项目或文件链接。",
+        ));
+    }
+    let connection = open_database(&app)?;
+    let root_path: String = connection
+        .query_row(
+            "SELECT root_path FROM instances WHERE id=?1",
+            [instance_id],
+            |row| row.get(0),
+        )
+        .map_err(|_| LauncherError::validation("目标实例不存在。"))?;
+    drop(connection);
+    let files = collect_curseforge_index_files(&root_path);
+    if files.is_empty() {
+        return Err(LauncherError::validation(
+            "没有可用的 CurseForge 索引；请先导入包含该模组的 CurseForge 整合包。",
+        ));
+    }
+    let slug = extract_curseforge_slug(trimmed).map(|value| normalize_curseforge_key(&value));
+    let url_file_id = extract_curseforge_file_id(trimmed);
+    let mut best: Option<(i64, i64)> = None;
+    let mut best_score = 0i32;
+    for file in &files {
+        let project_id = file.get("projectId").and_then(|v| v.as_i64()).unwrap_or(0);
+        let file_id = file.get("fileId").and_then(|v| v.as_i64()).unwrap_or(0);
+        if project_id <= 0 || file_id <= 0 {
+            continue;
+        }
+        if let Some(target_id) = url_file_id {
+            if file_id == target_id {
+                best = Some((project_id, file_id));
+                break;
+            }
+        }
+        let name = normalize_curseforge_key(
+            file.get("name").and_then(|v| v.as_str()).unwrap_or_default(),
+        );
+        let entry_slug = normalize_curseforge_key(
+            file.get("slug").and_then(|v| v.as_str()).unwrap_or_default(),
+        );
+        let score = if let Some(target) = &slug {
+            if *target == entry_slug || *target == name {
+                100
+            } else if entry_slug.starts_with(target) || name.starts_with(target) {
+                90
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        if score > best_score {
+            best_score = score;
+            best = Some((project_id, file_id));
+        }
+    }
+    let (project_id, file_id) = best.ok_or_else(|| {
+        LauncherError::validation(
+            "未在 CurseForge 索引中找到该链接对应的项目；请先导入包含它的整合包。",
+        )
+    })?;
+    install_curseforge_ids(&app, instance_id, project_id, file_id).await
+}
+
 #[tauri::command]
 async fn import_local_pack(
     app: AppHandle,
@@ -3025,7 +3360,7 @@ async fn import_local_pack(
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .map_err(|_| LauncherError::validation("目标实例不存在。"))?;
-    let game = PathBuf::from(root_path).join(".minecraft");
+    let game = PathBuf::from(&root_path).join(".minecraft");
     let file =
         fs::File::open(&source).map_err(|error| LauncherError::storage(error.to_string()))?;
     let mut archive =
@@ -3136,6 +3471,71 @@ async fn import_local_pack(
             .and_then(|entry| entry.as_array())
             .cloned()
             .unwrap_or_default();
+        // 生成 CurseForge 名称→项目索引，供启动时自动补齐前置模组使用
+        let index_path = PathBuf::from(&root_path).join(".curseforge-index.json");
+        let mut index_entries = Vec::new();
+        if let Some(modlist_bytes) = read_descriptor(&mut archive, "modlist.html")? {
+            let text = String::from_utf8_lossy(&modlist_bytes);
+            let items: Vec<&str> = text.split("<li").skip(1).collect();
+            for (entry_index, file) in files.iter().enumerate() {
+                let project_id = file.get("projectID").and_then(|v| v.as_i64()).unwrap_or(0);
+                let file_id = file.get("fileID").and_then(|v| v.as_i64()).unwrap_or(0);
+                let (slug, name) = items
+                    .get(entry_index)
+                    .and_then(|item| parse_modlist_entry(item))
+                    .unwrap_or_default();
+                index_entries.push(serde_json::json!({
+                    "projectId": project_id,
+                    "fileId": file_id,
+                    "slug": slug,
+                    "name": name,
+                }));
+            }
+        }
+        if !index_entries.is_empty() {
+            let _ = fs::write(
+                &index_path,
+                serde_json::to_vec(&serde_json::json!({ "files": index_entries }))
+                    .unwrap_or_default(),
+            );
+            // 合并进全局索引：手动创建的实例也能按名称自动匹配 CurseForge 前置
+            let global_path = launcher_data_directory()?
+                .join("cache")
+                .join("curseforge")
+                .join("global-index.json");
+            let mut known: Vec<serde_json::Value> = Vec::new();
+            if let Ok(bytes) = fs::read(&global_path) {
+                if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                    known = value
+                        .get("files")
+                        .and_then(|entry| entry.as_array())
+                        .cloned()
+                        .unwrap_or_default();
+                }
+            }
+            let mut seen = HashSet::new();
+            for entry in &known {
+                let project_id = entry.get("projectId").and_then(|v| v.as_i64()).unwrap_or(0);
+                let file_id = entry.get("fileId").and_then(|v| v.as_i64()).unwrap_or(0);
+                if project_id > 0 && file_id > 0 {
+                    seen.insert((project_id, file_id));
+                }
+            }
+            for entry in &index_entries {
+                let project_id = entry.get("projectId").and_then(|v| v.as_i64()).unwrap_or(0);
+                let file_id = entry.get("fileId").and_then(|v| v.as_i64()).unwrap_or(0);
+                if project_id > 0 && file_id > 0 && seen.insert((project_id, file_id)) {
+                    known.push(entry.clone());
+                }
+            }
+            if let Some(parent) = global_path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            let _ = fs::write(
+                &global_path,
+                serde_json::to_vec(&serde_json::json!({ "files": known })).unwrap_or_default(),
+            );
+        }
         let client = shared_download_client()?;
         let cache_dir = launcher_data_directory()?.join("cache").join("curseforge");
         let mods_dir = game.join("mods");
@@ -3962,6 +4362,59 @@ fn delete_world_permanently(
     })
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IncompatibleTarget {
+    instance_id: i64,
+    file_names: Vec<String>,
+}
+
+#[tauri::command]
+fn remove_incompatible_mods(
+    app: AppHandle,
+    targets: Vec<IncompatibleTarget>,
+) -> Result<usize, LauncherError> {
+    let connection = open_database(&app)?;
+    let mut removed = 0usize;
+    for target in targets {
+        if target.file_names.is_empty() {
+            continue;
+        }
+        let root: String = connection
+            .query_row(
+                "SELECT root_path FROM instances WHERE id=?1",
+                [target.instance_id],
+                |row| row.get(0),
+            )
+            .map_err(|_| LauncherError::validation("目标实例不存在。"))?;
+        let mods_dir = PathBuf::from(&root).join(".minecraft").join("mods");
+        let backup_dir = PathBuf::from(&root)
+            .join(".minecraft")
+            .join(".launcher-backup")
+            .join("mods");
+        fs::create_dir_all(&backup_dir)
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        for file_name in &target.file_names {
+            validate_instance_field(file_name, 240)?;
+            if Path::new(file_name).components().count() != 1 {
+                return Err(LauncherError::validation("模组文件名包含异常路径。"));
+            }
+            let source = mods_dir.join(file_name);
+            if source.is_file() {
+                let backup = backup_dir.join(format!("{}-{}", unique_timestamp(), file_name));
+                fs::rename(&source, &backup)
+                    .map_err(|error| LauncherError::storage(format!("移出不兼容模组失败：{error}")))?;
+                removed += 1;
+            }
+            let _ = connection.execute(
+                "DELETE FROM content_items WHERE instance_id=?1 AND kind='mod' AND file_name=?2",
+                params![target.instance_id, file_name],
+            );
+        }
+    }
+    Ok(removed)
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct CacheCleanResult {
@@ -4322,11 +4775,26 @@ struct BootInstanceCheck {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct BootIncompatibleMod {
+    file_name: String,
+    reason: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BootProblemMod {
+    file_name: String,
+    reason: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct BootModsSummary {
     instance_id: i64,
     mod_count: usize,
     missing_dependencies: Vec<String>,
-    incompatible_mods: Vec<String>,
+    incompatible_mods: Vec<BootIncompatibleMod>,
+    problem_mods: Vec<BootProblemMod>,
 }
 
 fn loaders_compatible(instance_loader: &str, mod_loader: &str) -> bool {
@@ -4392,18 +4860,42 @@ fn scan_boot_mods(
         .filter(|id| !provided.contains(&id.as_str()) && !installed_ids.contains(id))
         .collect::<BTreeSet<_>>();
     let mut incompatible_mods = Vec::new();
+    let mut problem_mods = Vec::new();
     for inspection in &inspections {
+        let mut reasons = Vec::new();
         if inspection.loader_type != "unknown"
             && !loaders_compatible(loader_type, &inspection.loader_type)
         {
-            incompatible_mods.push(format!(
-                "{}（需要 {}，当前实例为 {loader_type}）",
-                inspection.file_name, inspection.loader_type
+            let reason = format!("需要 {}，当前实例为 {loader_type}", inspection.loader_type);
+            incompatible_mods.push(BootIncompatibleMod {
+                file_name: inspection.file_name.clone(),
+                reason: reason.clone(),
+            });
+            reasons.push(reason);
+        } else if let Err(error) = ensure_game_version_compatible(game_version, inspection) {
+            incompatible_mods.push(BootIncompatibleMod {
+                file_name: inspection.file_name.clone(),
+                reason: error.message.clone(),
+            });
+            reasons.push(error.message.clone());
+        }
+        let missing_deps = inspection
+            .dependencies
+            .iter()
+            .map(|id| id.to_ascii_lowercase())
+            .filter(|id| !provided.contains(&id.as_str()) && !installed_ids.contains(id))
+            .collect::<Vec<_>>();
+        if !missing_deps.is_empty() {
+            reasons.push(format!(
+                "缺少前置模组：{}（启动时会尝试自动补齐）",
+                missing_deps.join("、")
             ));
-        } else if let Err(error) =
-            ensure_game_version_compatible(game_version, inspection)
-        {
-            incompatible_mods.push(format!("{}：{}", inspection.file_name, error.message));
+        }
+        if !reasons.is_empty() {
+            problem_mods.push(BootProblemMod {
+                file_name: inspection.file_name.clone(),
+                reason: reasons.join("；"),
+            });
         }
     }
     BootModsSummary {
@@ -4411,6 +4903,7 @@ fn scan_boot_mods(
         mod_count,
         missing_dependencies: missing.into_iter().collect(),
         incompatible_mods,
+        problem_mods,
     }
 }
 
@@ -7489,6 +7982,7 @@ pub fn run() {
             inspect_modpack,
             search_modrinth_projects,
             install_modrinth_mod,
+            install_curseforge_url,
             check_mod_updates,
             update_modrinth_mod,
             install_modrinth_modpack,
@@ -7506,6 +8000,7 @@ pub fn run() {
             duplicate_world,
             remove_world_to_backup,
             delete_world_permanently,
+            remove_incompatible_mods,
             clean_launcher_cache,
             list_removed_backups,
             restore_removed_backup,
@@ -7597,6 +8092,39 @@ mod tests {
         assert!(validated_world_delete_target(&saves, "..").is_err());
         assert!(validated_world_delete_target(&saves, "missing-world").is_ok());
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn curseforge_matcher_resolves_real_pack_dependencies() {
+        let cases = [
+            ("iceandfire", "Ice and Fire: Dragons", "ice-and-fire-dragons"),
+            ("ftblibrary", "FTB Library", "ftb-library"),
+            ("cupboard", "Cupboard", "cupboard"),
+            ("octolib", "OctoLib", "octolib"),
+            ("slashblade", "Slashblade", "slashblade"),
+            ("structure_gel", "Structure Gel", "structure-gel"),
+            ("tacz", "Tacz", "tacz"),
+            ("irons_spellbooks", "Iron's Spells 'n Spellbooks", "irons-spells-n-spellbooks"),
+            ("alexscaves", "Alex's Caves", "alexs-caves"),
+        ];
+        for (dep, name, slug) in cases {
+            let normalized_dep = normalize_curseforge_key(dep);
+            let normalized_name = normalize_curseforge_key(name);
+            let normalized_slug = normalize_curseforge_key(slug);
+            let score = curseforge_match_score(&normalized_dep, &normalized_name, &normalized_slug);
+            assert!(
+                score >= 60,
+                "依赖 {dep} 匹配分数过低：{score}（name={normalized_name}, slug={normalized_slug}）"
+            );
+        }
+    }
+
+    #[test]
+    fn curseforge_modlist_entry_parsing() {
+        let entry = r#"<li><a href="https://www.curseforge.com/minecraft/mc-mods/ice-and-fire-dragons">Ice and Fire: Dragons (by sbom_xela)</a></li>"#;
+        let (slug, name) = parse_modlist_entry(entry).unwrap();
+        assert_eq!(slug, "ice-and-fire-dragons");
+        assert_eq!(name, "Ice and Fire: Dragons");
     }
 
     #[test]

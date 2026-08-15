@@ -124,10 +124,12 @@ type ModsPageProps = {
   onOnlineQuery: (value: string) => void;
   onOnlineSearch: () => void;
   onOnlineInstall: (project: OnlineProject) => void;
+  onInstallCurseforgeUrl: (url: string) => void;
   onlineLoader?: string;
   onlineVersion?: string;
   onOnlineLoader?: (value: string) => void;
   onOnlineVersion?: (value: string) => void;
+  problemMods?: Record<string, string>;
   updates: ModUpdateInfo[];
   onCheckUpdates: () => void;
   onUpdate: (item: ContentItem) => void;
@@ -156,10 +158,12 @@ export function ModsPage({
   onOnlineQuery,
   onOnlineSearch,
   onOnlineInstall,
+  onInstallCurseforgeUrl,
   onlineLoader,
   onlineVersion,
   onOnlineLoader,
   onOnlineVersion,
+  problemMods,
   updates,
   onCheckUpdates,
   onUpdate,
@@ -180,6 +184,7 @@ export function ModsPage({
     selected.loaderType !== "vanilla",
   );
   const [modSearch, setModSearch] = useState("");
+  const [curseforgeUrl, setCurseforgeUrl] = useState("");
   const [modFilter, setModFilter] = useState<"all" | "enabled" | "disabled">(
     "all",
   );
@@ -305,6 +310,25 @@ export function ModsPage({
         onLoader={onOnlineLoader}
         versionValue={onlineVersion}
         onVersion={onOnlineVersion} />
+      <div className="curse-url-row">
+        <input
+          value={curseforgeUrl}
+          maxLength={300}
+          placeholder="或粘贴 CurseForge 项目/文件链接（需先导入过包含该模组的整合包）"
+          onChange={(event) => setCurseforgeUrl(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && curseforgeUrl.trim() && selected && selected.loaderType !== "vanilla") {
+              onInstallCurseforgeUrl(curseforgeUrl.trim());
+            }
+          }}
+        />
+        <button
+          disabled={busy || !curseforgeUrl.trim() || !selected || selected.loaderType === "vanilla"}
+          onClick={() => onInstallCurseforgeUrl(curseforgeUrl.trim())}
+        >
+          从网址安装
+        </button>
+      </div>
       <section className="installed-mods">
         <div className="section-heading">
           <div>
@@ -355,14 +379,20 @@ export function ModsPage({
                 /* keep filename fallback */
               }
               const update = updates.find((candidate) => candidate.contentId === item.id);
+              const problem = problemMods?.[item.fileName];
               return (
-                <div key={item.id}>
+                <div key={item.id} className={problem ? "mod-problem" : undefined}>
                   <div className="mod-state">{item.enabled ? "ON" : "OFF"}</div>
                   <div>
                     <strong>{metadata.name ?? item.fileName}</strong>
                     <small>
                       {metadata.version ?? "未知版本"} · {item.fileName}
                     </small>
+                    {problem ? (
+                      <em className="mod-problem-badge" title={problem}>
+                        有问题
+                      </em>
+                    ) : null}
                   </div>
                   <span className={item.enabled ? "enabled" : "disabled"}>
                     {update?.updateAvailable
@@ -382,6 +412,9 @@ export function ModsPage({
                   >
                     移除
                   </button>
+                  {problem ? (
+                    <small className="mod-problem-reason">{problem}</small>
+                  ) : null}
                 </div>
               );
             })}

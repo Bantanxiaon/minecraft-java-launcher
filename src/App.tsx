@@ -35,6 +35,7 @@ import { SplashScreen } from "./components/SplashScreen";
 import { VersionHighlightsModal } from "./components/VersionHighlightsModal";
 import { ChangelogModal } from "./components/ChangelogModal";
 import { ErrorModal } from "./components/ErrorModal";
+import { IncompatibleModsModal } from "./components/IncompatibleModsModal";
 import { checkForUpdate, updaterEnabled } from "./updater";
 import type { Update } from "./updater";
 import type {
@@ -198,6 +199,16 @@ export default function App() {
   const [updateChecking, setUpdateChecking] = useState(false);
   const [updateCheckError, setUpdateCheckError] = useState(false);
   const [bootProblems, setBootProblems] = useState<BootProblem[]>([]);
+  const [incompatibleGroups, setIncompatibleGroups] = useState<
+    Array<{
+      instanceId: number;
+      instanceName: string;
+      mods: Array<{ fileName: string; reason: string }>;
+    }>
+  >([]);
+  const [modProblemMaps, setModProblemMaps] = useState<
+    Record<number, Record<string, string>>
+  >({});
   const [showChangelog, setShowChangelog] = useState(false);
   const [showHighlights, setShowHighlights] = useState(false);
   const [errorModal, setErrorModal] = useState<{
@@ -439,11 +450,29 @@ export default function App() {
             severity: "error",
             text: `${summary.incompatibleMods.length} 个模组与当前加载器/游戏版本不兼容：${summary.incompatibleMods
               .slice(0, 4)
-              .join("；")}。请到模组页删除后重新检查。`,
+              .map((mod) => `${mod.fileName}（${mod.reason}）`)
+              .join("；")}。可一键删除不兼容模组。`,
           });
         }
       }
       setBootProblems(problems);
+      const groups = report.mods
+        .filter((summary) => summary.incompatibleMods.length)
+        .map((summary) => ({
+          instanceId: summary.instanceId,
+          instanceName: nameById.get(summary.instanceId) ?? `实例 ${summary.instanceId}`,
+          mods: summary.incompatibleMods,
+        }));
+      setIncompatibleGroups(groups);
+      const problemMaps: Record<number, Record<string, string>> = {};
+      for (const summary of report.mods) {
+        if (summary.problemMods.length) {
+          problemMaps[summary.instanceId] = Object.fromEntries(
+            summary.problemMods.map((mod) => [mod.fileName, mod.reason]),
+          );
+        }
+      }
+      setModProblemMaps(problemMaps);
     } else {
       for (const key of ["game", "instances", "mods", "java"] as BootStepKey[]) {
         applyStep(key, { state: "error", detail: "检查失败" });
@@ -1165,6 +1194,27 @@ export default function App() {
     }
   }
 
+  async function installCurseforgeUrl(url: string) {
+    if (!isTauri() || !modInstanceId) return;
+    setBusy(true);
+    setMessage("正在从 CurseForge 解析并安装…");
+    try {
+      const item = await invoke<ContentItem>("install_curseforge_url", {
+        instanceId: modInstanceId,
+        url,
+      });
+      setModItems((existing) => [
+        item,
+        ...existing.filter((candidate) => candidate.id !== item.id),
+      ]);
+      setMessage(`已从 CurseForge 安装：${item.fileName}`);
+    } catch (error) {
+      setMessage(errorText(error, "从 CurseForge 安装失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function deleteWorldPermanently(item: ContentItem) {
     if (
       !window.confirm(
@@ -1187,6 +1237,39 @@ export default function App() {
       setMessage(`存档已彻底删除：${deleted.path}`);
     } catch (error) {
       setMessage(errorText(error, "无法删除存档。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteIncompatibleMods() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const targets = incompatibleGroups.map((group) => ({
+        instanceId: group.instanceId,
+        fileNames: group.mods.map((mod) => mod.fileName),
+      }));
+      const removed = await invoke<number>("remove_incompatible_mods", {
+        targets,
+      });
+      setIncompatibleGroups([]);
+      setBootProblems((existing) =>
+        existing.filter((problem) => !problem.text.includes("不兼容")),
+      );
+      if (modInstanceId) {
+        setModItems(
+          await invoke<ContentItem[]>("list_content_items", {
+            instanceId: modInstanceId,
+            kind: "mod",
+          }),
+        );
+      }
+      setMessage(
+        `已删除 ${removed} 个不兼容模组（可在模组页备份区恢复）。`,
+      );
+    } catch (error) {
+      setMessage(errorText(error, "删除不兼容模组失败。"));
     } finally {
       setBusy(false);
     }
@@ -2357,10 +2440,12 @@ export default function App() {
             onOnlineQuery={setOnlineModQuery}
             onOnlineSearch={() => void searchOnline("mod")}
             onOnlineInstall={(project) => void installOnlineMod(project)}
+            onInstallCurseforgeUrl={(url) => void installCurseforgeUrl(url)}
             onlineLoader={onlineModLoader}
             onlineVersion={onlineModVersion}
             onOnlineLoader={setOnlineModLoader}
             onOnlineVersion={setOnlineModVersion}
+            problemMods={modProblemMaps[modInstanceId ?? -1] ?? {}}
             updates={modUpdates}
             onCheckUpdates={() => void checkModUpdates()}
             onUpdate={(item) => void updateMod(item)}
@@ -2476,6 +2561,13 @@ export default function App() {
           actionLabel={errorModal.actionLabel}
           onAction={errorModal.action}
           onClose={() => setErrorModal(null)}
+        />
+      ) : null}
+      {incompatibleGroups.length ? (
+        <IncompatibleModsModal
+          groups={incompatibleGroups}
+          onDelete={() => void deleteIncompatibleMods()}
+          onClose={() => setIncompatibleGroups([])}
         />
       ) : null}
     </div>
