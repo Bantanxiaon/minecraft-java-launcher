@@ -1688,6 +1688,66 @@ fn inspect_modpack_path(path: &Path) -> Result<ModpackInspection, LauncherError>
             warnings: Vec::new(),
         });
     }
+    if let Some(bytes) = read_descriptor(&mut archive, "mmc-pack.json")? {
+        let value: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|error| LauncherError::validation(format!("MultiMC mmc-pack.json 无效：{error}")))?;
+        let components = value
+            .get("components")
+            .and_then(|entry| entry.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let mut game_version = None;
+        let mut loader_type = None;
+        for component in &components {
+            let uid = component
+                .get("uid")
+                .and_then(|entry| entry.as_str())
+                .unwrap_or_default();
+            let version = component
+                .get("version")
+                .and_then(|entry| entry.as_str())
+                .map(str::to_string);
+            match uid {
+                "net.minecraft" => game_version = version,
+                "net.minecraftforge" => loader_type = Some("forge".to_string()),
+                "net.neoforged" => loader_type = Some("neoforge".to_string()),
+                "net.fabricmc.fabric-loader" => loader_type = Some("fabric".to_string()),
+                "org.quiltmc.quilt-loader" => loader_type = Some("quilt".to_string()),
+                _ => {}
+            }
+        }
+        let mut mmc_mods = 0usize;
+        let mut mmc_files = 0usize;
+        for index in 0..archive.len() {
+            let entry = archive
+                .by_index(index)
+                .map_err(|error| LauncherError::validation(error.to_string()))?;
+            if entry.is_dir() {
+                continue;
+            }
+            let normalized = entry.name().replace('\\', "/").to_ascii_lowercase();
+            if normalized.starts_with(".minecraft/") {
+                mmc_files += 1;
+                if normalized.starts_with(".minecraft/mods/") && normalized.ends_with(".jar") {
+                    mmc_mods += 1;
+                }
+            }
+        }
+        return Ok(ModpackInspection {
+            file_name,
+            format: "mmc".into(),
+            name: value
+                .get("name")
+                .and_then(|entry| entry.as_str())
+                .map(str::to_string),
+            version: None,
+            game_version,
+            loader_type,
+            mod_count: mmc_mods,
+            override_count: mmc_files,
+            warnings: vec!["MultiMC 整合包：导入后会创建对应实例，仍需安装基础游戏和加载器。".into()],
+        });
+    }
     if let Some(bytes) = read_descriptor(&mut archive, "manifest.json")? {
         let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
             LauncherError::validation(format!("CurseForge manifest 无效：{error}"))
@@ -3752,6 +3812,125 @@ async fn import_local_pack(
         downloaded_remote_files,
         unresolved_remote_files,
         skipped_mods,
+    })
+}
+
+#[tauri::command]
+async fn import_mmc_pack(
+    app: AppHandle,
+    source_path: String,
+) -> Result<ImportedModpack, LauncherError> {
+    let source = PathBuf::from(&source_path);
+    let inspection = inspect_modpack_path(&source)?;
+    if inspection.format != "mmc" {
+        return Err(LauncherError::validation("该整合包不是 MultiMC 格式。"));
+    }
+    let game_version = inspection
+        .game_version
+        .clone()
+        .ok_or_else(|| LauncherError::validation("MultiMC 整合包未声明 Minecraft 版本。"))?;
+    let loader_type = inspection
+        .loader_type
+        .clone()
+        .ok_or_else(|| LauncherError::validation("MultiMC 整合包未声明受支持的加载器。"))?;
+    validate_loader_type(&loader_type)?;
+    let instance = create_instance_profile(
+        app.clone(),
+        inspection
+            .name
+            .clone()
+            .unwrap_or_else(|| "MultiMC Pack".into()),
+        game_version.clone(),
+        loader_type.clone(),
+    )?;
+    let file =
+        fs::File::open(&source).map_err(|error| LauncherError::storage(error.to_string()))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|error| LauncherError::validation(error.to_string()))?;
+    let game = PathBuf::from(&instance.root_path).join(".minecraft");
+    let mut imported_files = 0usize;
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| LauncherError::validation(error.to_string()))?;
+        if entry.is_dir() {
+            continue;
+        }
+        if entry
+            .unix_mode()
+            .is_some_and(|mode| mode & 0o170000 == 0o120000)
+        {
+            return Err(LauncherError::validation("MultiMC 整合包包含不允许的符号链接。"));
+        }
+        let normalized = entry.name().replace('\\', "/");
+        let Some(relative) = normalized.strip_prefix(".minecraft/") else {
+            continue;
+        };
+        if relative.is_empty() {
+            continue;
+        }
+        let output = pack_target_path(&game, relative)?;
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| LauncherError::storage(error.to_string()))?;
+        }
+        let is_mod = relative.to_ascii_lowercase().starts_with("mods/")
+            && relative.to_ascii_lowercase().ends_with(".jar");
+        let temporary = if is_mod {
+            game.join("mods")
+                .join(format!(".incoming-{}.jar", unique_timestamp()))
+        } else {
+            output.with_extension(format!("part-{}", unique_timestamp()))
+        };
+        let mut temporary_file = fs::File::create(&temporary)
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        std::io::copy(&mut entry, &mut temporary_file)
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        drop(temporary_file);
+        if is_mod {
+            let info = inspect_mod_jar_path(&temporary)?;
+            if let Err(error) = ensure_loader_compatible(&loader_type, &info.loader_type)
+                .and_then(|_| ensure_game_version_compatible(&game_version, &info))
+            {
+                let _ = fs::remove_file(&temporary);
+                return Err(error);
+            }
+            if output.exists() {
+                move_pack_collision_to_backup(&game, &output)?;
+            }
+            fs::rename(&temporary, &output)
+                .map_err(|error| LauncherError::storage(error.to_string()))?;
+            let metadata = serde_json::to_string(&info)
+                .map_err(|error| LauncherError::storage(error.to_string()))?;
+            let connection = open_database(&app)?;
+            connection
+                .execute(
+                    "INSERT OR IGNORE INTO content_items(instance_id,kind,file_name,hash,metadata_json,enabled,source,installed_at) VALUES(?1,'mod',?2,?3,?4,1,'mmc',?5)",
+                    params![
+                        instance.id,
+                        output
+                            .file_name()
+                            .and_then(|value| value.to_str())
+                            .unwrap_or("mod.jar"),
+                        info.sha256,
+                        metadata,
+                        chrono_like_timestamp()
+                    ],
+                )
+                .map_err(|error| LauncherError::storage(error.to_string()))?;
+        } else {
+            if output.exists() {
+                move_pack_collision_to_backup(&game, &output)?;
+            }
+            fs::rename(&temporary, &output)
+                .map_err(|error| LauncherError::storage(error.to_string()))?;
+        }
+        imported_files += 1;
+    }
+    Ok(ImportedModpack {
+        instance,
+        downloaded_files: 0,
+        override_files: imported_files,
     })
 }
 
@@ -8111,6 +8290,7 @@ pub fn run() {
             install_modrinth_modpack,
             import_modrinth_pack,
             import_local_pack,
+            import_mmc_pack,
             list_content_items,
             install_mod,
             set_mod_enabled,

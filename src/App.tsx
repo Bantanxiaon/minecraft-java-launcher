@@ -1753,15 +1753,38 @@ export default function App() {
     setBusy(true);
     setMessage("");
     try {
-      if (packInspection.format === "modrinth") {
-        const imported = await invoke<ImportedModpack>("import_modrinth_pack", {
+      if (packInspection.format === "modrinth" || packInspection.format === "mmc") {
+        const command =
+          packInspection.format === "modrinth"
+            ? "import_modrinth_pack"
+            : "import_mmc_pack";
+        const imported = await invoke<ImportedModpack>(command, {
           sourcePath: packSourcePath,
         });
         setInstances((existing) => [imported.instance, ...existing]);
         setSelectedInstanceId(imported.instance.id);
         setModInstanceId(imported.instance.id);
+        setMessage("正在自动检查并补齐游戏文件…");
+        let readyInstance = imported.instance;
+        if (["missing", "base_missing"].includes(readyInstance.status)) {
+          readyInstance = await installClientFiles(readyInstance);
+        }
+        if (
+          readyInstance.loaderType !== "vanilla" &&
+          readyInstance.status !== "ready"
+        ) {
+          setMessage(
+            `正在自动安装兼容的 ${loaderLabel(readyInstance.loaderType)} 模组环境…`,
+          );
+          readyInstance = await installInstanceLoaderFiles(readyInstance);
+        }
+        setInstances((existing) =>
+          existing.map((item) =>
+            item.id === readyInstance.id ? readyInstance : item,
+          ),
+        );
         setMessage(
-          `整合包已导入一套独立游戏配置：下载 ${imported.downloadedFiles} 个文件，加入 ${imported.overrideFiles} 个整合包自带设置文件。下一步请安装基础游戏和模组运行环境。`,
+          `整合包已导入，游戏文件与 ${loaderLabel(readyInstance.loaderType)} 环境已自动安装，可以直接开始游戏。`,
         );
       } else {
         if (!modInstanceId) throw new Error("请先选择要导入到哪套游戏。");
