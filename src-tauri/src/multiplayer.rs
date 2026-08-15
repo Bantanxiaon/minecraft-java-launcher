@@ -125,10 +125,7 @@ async fn ensure_e4mc(app: &AppHandle, instance_id: i64) -> Result<(), LauncherEr
 }
 
 fn watch_game_log(log_path: String, instance_id: i64, app: AppHandle) {
-    let cancel = room_cancels()
-        .entry(instance_id)
-        .or_default()
-        .clone();
+    let cancel = room_cancels().entry(instance_id).or_default().clone();
     let _ = std::thread::Builder::new()
         .name(format!("sh-multiplayer-watch-{instance_id}"))
         .spawn(move || {

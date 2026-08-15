@@ -8904,10 +8904,7 @@ fn cancel_active_downloads() {
 
 #[tauri::command]
 fn cancel_download_job(job_id: i64) {
-    download_cancel_tokens()
-        .entry(job_id)
-        .or_default()
-        .cancel();
+    download_cancel_tokens().entry(job_id).or_default().cancel();
 }
 
 fn download_job_cancelled(job_id: i64) -> bool {
