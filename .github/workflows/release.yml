@@ -63,7 +63,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           set -euo pipefail
-          VERSION="$(node -p "require('./package.json').version")"
+          VERSION="${GITHUB_REF_NAME#v}"
           EXE_FILE="$(ls src-tauri/target/release/bundle/nsis/*.exe | head -n1)"
           git config user.name "SH Launcher Bot"
           git config user.email "actions@users.noreply.github.com"
@@ -84,7 +84,7 @@ jobs:
           RELEASE_ID: ${{ steps.tauri.outputs.releaseId }}
         run: |
           set -euo pipefail
-          VERSION="$(node -p "require('./package.json').version")"
+          VERSION="${GITHUB_REF_NAME#v}"
           SIG_FILE="$(ls src-tauri/target/release/bundle/nsis/*.sig | head -n1)"
           SIGNATURE="$(cat "$SIG_FILE")"
           # jsDelivr 国内 CDN 稳定分发（提交号固定，避免 CDN 缓存旧包）；签名校验保证内容安全
