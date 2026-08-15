@@ -1579,6 +1579,7 @@ fn validate_instance_mods(
         "quilt-loader",
         "forge",
         "neoforge",
+        "kotlinforforge",
     ];
     let missing = inspections
         .iter()
@@ -2680,6 +2681,7 @@ async fn auto_install_missing_mod_dependencies(
         "quilt-loader",
         "forge",
         "neoforge",
+        "kotlinforforge",
     ];
     let mut missing = BTreeSet::new();
     for inspection in &inspections {
@@ -4322,6 +4324,7 @@ fn install_mod(
         "quilt-loader",
         "forge",
         "neoforge",
+        "kotlinforforge",
     ];
     let missing = inspection
         .dependencies
@@ -5403,6 +5406,7 @@ fn scan_boot_mods(
         "quilt-loader",
         "forge",
         "neoforge",
+        "kotlinforforge",
     ];
     let missing = inspections
         .iter()
