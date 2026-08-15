@@ -1,4 +1,7 @@
 const HIGHLIGHTS_BY_VERSION: Record<string, string[]> = {
+  "0.6.1": [
+    "服务器延迟检测改为异步连接，检测期间界面不卡顿",
+  ],
   "0.6.0": [
     "新增“服务器”页：保存常用服务器、一键延迟检测、启动游戏时自动加入，完全不影响单机",
     "新增外置登录（authlib-injector）：支持 LittleSkin、自建皮肤站等外置登录服务器",

@@ -8,7 +8,6 @@ use std::{
     collections::{BTreeSet, HashMap, HashSet},
     fs,
     io::Read,
-    net::{TcpStream, ToSocketAddrs},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -840,9 +839,10 @@ fn touch_server_connection(app: AppHandle, server_id: i64) -> Result<(), Launche
 }
 
 #[tauri::command]
-fn ping_server(address: String, port: u16) -> Result<ServerPing, LauncherError> {
+async fn ping_server(address: String, port: u16) -> Result<ServerPing, LauncherError> {
     let address = validate_server_address(&address)?;
-    let Ok(mut addrs) = (address.as_str(), port).to_socket_addrs() else {
+    let started = Instant::now();
+    let Ok(mut addrs) = tokio::net::lookup_host((address.as_str(), port)).await else {
         return Ok(ServerPing {
             reachable: false,
             latency_ms: None,
@@ -856,17 +856,21 @@ fn ping_server(address: String, port: u16) -> Result<ServerPing, LauncherError> 
             error: Some("服务器地址没有可连接的目标。".into()),
         });
     };
-    let started = Instant::now();
-    match TcpStream::connect_timeout(&addr, Duration::from_secs(4)) {
-        Ok(_) => Ok(ServerPing {
+    match tokio::time::timeout(Duration::from_secs(4), tokio::net::TcpStream::connect(addr)).await {
+        Ok(Ok(_)) => Ok(ServerPing {
             reachable: true,
             latency_ms: Some(started.elapsed().as_millis()),
             error: None,
         }),
-        Err(error) => Ok(ServerPing {
+        Ok(Err(error)) => Ok(ServerPing {
             reachable: false,
             latency_ms: None,
             error: Some(format!("无法连接：{error}")),
+        }),
+        Err(_) => Ok(ServerPing {
+            reachable: false,
+            latency_ms: None,
+            error: Some("连接超时（4 秒）。".into()),
         }),
     }
 }
