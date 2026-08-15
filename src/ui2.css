@@ -1,0 +1,536 @@
+/* =========================================================
+   SH启动器 新界面主题（UI 2.0 · shadcn/ui 风格）
+   参考 GitHub 高星现代 UI 设计体系：白底、细边框、
+   柔和阴影、清爽留白、统一圆角与焦点环。
+   仅在“新界面”开启时注入；经典界面不受影响，可随时回退。
+   ========================================================= */
+
+:root {
+  --ui2-bg: #f8fafc;
+  --ui2-surface: #ffffff;
+  --ui2-surface-hover: #f4f6f9;
+  --ui2-border: #e2e8f0;
+  --ui2-border-strong: #cbd5e1;
+  --ui2-text: #0f172a;
+  --ui2-muted: #64748b;
+  --ui2-faint: #94a3b8;
+  --ui2-accent: #16a34a;
+  --ui2-accent-hover: #15803d;
+  --ui2-accent-soft: #f0fdf4;
+  --ui2-accent-ring: rgba(22, 163, 74, .18);
+  --ui2-danger: #dc2626;
+  --ui2-danger-soft: #fef2f2;
+  --ui2-warn: #d97706;
+  --ui2-warn-soft: #fffbeb;
+  --ui2-radius-sm: 8px;
+  --ui2-radius: 10px;
+  --ui2-radius-lg: 14px;
+  --ui2-shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 1px 3px rgba(15, 23, 42, .06);
+  --ui2-shadow-lg: 0 10px 40px rgba(15, 23, 42, .12);
+  --ui2-font: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+}
+
+html[data-ui-theme="modern"] body,
+html[data-ui-theme="modern"] .app-frame {
+  background: var(--ui2-bg);
+  color: var(--ui2-text);
+  font-family: var(--ui2-font);
+}
+
+/* ---------- 侧栏 ---------- */
+html[data-ui-theme="modern"] aside {
+  background: var(--ui2-surface);
+  border-right: 1px solid var(--ui2-border);
+  padding: 20px 14px;
+  gap: 12px;
+}
+
+html[data-ui-theme="modern"] .brand {
+  padding: 4px 8px 16px;
+  border-bottom: 1px solid var(--ui2-border);
+  margin-bottom: 8px;
+}
+
+html[data-ui-theme="modern"] .brand-copy strong {
+  color: var(--ui2-text);
+  font-size: 15px;
+  letter-spacing: .01em;
+}
+
+html[data-ui-theme="modern"] .brand-copy small {
+  color: var(--ui2-muted);
+  font-size: 11px;
+}
+
+html[data-ui-theme="modern"] .changelog-sidebar-button {
+  border: 1px solid var(--ui2-border);
+  background: var(--ui2-surface);
+  color: var(--ui2-muted);
+  border-radius: var(--ui2-radius-sm);
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+html[data-ui-theme="modern"] nav {
+  gap: 2px;
+}
+
+html[data-ui-theme="modern"] nav button {
+  border-radius: var(--ui2-radius-sm);
+  color: var(--ui2-muted);
+  padding: 9px 10px;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background .12s ease, color .12s ease;
+}
+
+html[data-ui-theme="modern"] nav button:hover {
+  background: var(--ui2-surface-hover);
+  color: var(--ui2-text);
+}
+
+html[data-ui-theme="modern"] nav button.active {
+  background: var(--ui2-accent-soft);
+  color: var(--ui2-accent);
+  font-weight: 600;
+}
+
+html[data-ui-theme="modern"] .account {
+  border: 1px solid var(--ui2-border);
+  border-radius: var(--ui2-radius);
+  background: var(--ui2-surface);
+  padding: 10px 12px;
+}
+
+html[data-ui-theme="modern"] .account strong {
+  color: var(--ui2-text);
+  font-size: 13px;
+}
+
+html[data-ui-theme="modern"] .account small {
+  color: var(--ui2-muted);
+  font-size: 11px;
+}
+
+/* ---------- 内容区与页头 ---------- */
+html[data-ui-theme="modern"] .content {
+  padding: 26px 30px 48px;
+}
+
+html[data-ui-theme="modern"] .content > header {
+  margin-bottom: 20px;
+  align-items: center;
+}
+
+html[data-ui-theme="modern"] .content > header h1 {
+  color: var(--ui2-text);
+  font-size: 21px;
+  font-weight: 650;
+  letter-spacing: -.01em;
+}
+
+html[data-ui-theme="modern"] .content > header p {
+  color: var(--ui2-muted);
+  font-size: 12.5px;
+}
+
+html[data-ui-theme="modern"] .ready-label,
+html[data-ui-theme="modern"] .paused-label {
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+}
+
+html[data-ui-theme="modern"] .ready-label {
+  background: var(--ui2-accent-soft);
+  color: var(--ui2-accent);
+}
+
+html[data-ui-theme="modern"] .paused-label {
+  background: var(--ui2-warn-soft);
+  color: var(--ui2-warn);
+}
+
+/* ---------- 按钮 ---------- */
+html[data-ui-theme="modern"] button {
+  border-radius: var(--ui2-radius-sm);
+  font-size: 13px;
+  transition: background .12s ease, border-color .12s ease, color .12s ease, box-shadow .12s ease;
+}
+
+html[data-ui-theme="modern"] button.primary,
+html[data-ui-theme="modern"] .hero-actions .play {
+  border: 1px solid var(--ui2-accent);
+  background: var(--ui2-accent);
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(22, 163, 74, .24);
+}
+
+html[data-ui-theme="modern"] button.primary:hover:not(:disabled),
+html[data-ui-theme="modern"] .hero-actions .play:hover:not(:disabled) {
+  background: var(--ui2-accent-hover);
+  border-color: var(--ui2-accent-hover);
+}
+
+html[data-ui-theme="modern"] button.quiet {
+  border: 1px solid var(--ui2-border);
+  background: var(--ui2-surface);
+  color: var(--ui2-muted);
+}
+
+html[data-ui-theme="modern"] button.danger {
+  border: 1px solid #fecaca;
+  background: var(--ui2-surface);
+  color: var(--ui2-danger);
+}
+
+html[data-ui-theme="modern"] button:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+/* ---------- 卡片 ---------- */
+html[data-ui-theme="modern"] .hero,
+html[data-ui-theme="modern"] .activity section,
+html[data-ui-theme="modern"] .distribution-note,
+html[data-ui-theme="modern"] .boot-problems-card,
+html[data-ui-theme="modern"] .server-row,
+html[data-ui-theme="modern"] .server-form,
+html[data-ui-theme="modern"] .pack-archive-row,
+html[data-ui-theme="modern"] .download-detail-row,
+html[data-ui-theme="modern"] .settings-panel,
+html[data-ui-theme="modern"] .mod-result,
+html[data-ui-theme="modern"] .pack-preview,
+html[data-ui-theme="modern"] .pack-export-card,
+html[data-ui-theme="modern"] .online-catalog,
+html[data-ui-theme="modern"] .pack-dropzone {
+  background: var(--ui2-surface);
+  border: 1px solid var(--ui2-border);
+  border-radius: var(--ui2-radius-lg);
+  box-shadow: var(--ui2-shadow);
+}
+
+html[data-ui-theme="modern"] .hero {
+  padding: 24px;
+  gap: 18px;
+}
+
+html[data-ui-theme="modern"] .hero-copy h2 {
+  color: var(--ui2-text);
+  font-size: 20px;
+}
+
+html[data-ui-theme="modern"] .hero-status-list > div,
+html[data-ui-theme="modern"] .side-card-title h3,
+html[data-ui-theme="modern"] .section-heading h2,
+html[data-ui-theme="modern"] .instances h2 {
+  color: var(--ui2-text);
+}
+
+html[data-ui-theme="modern"] .notice {
+  color: var(--ui2-muted);
+  font-size: 12px;
+}
+
+/* ---------- 主页清理（隐藏无功能占位控件，经典界面不受影响） ---------- */
+html[data-ui-theme="modern"] .side-actions button,
+html[data-ui-theme="modern"] .recent-card .link-button,
+html[data-ui-theme="modern"] .content > header > button.quiet {
+  display: none;
+}
+
+html[data-ui-theme="modern"] .recent-card {
+  display: none;
+}
+
+html[data-ui-theme="modern"] .activity {
+  align-items: stretch;
+}
+
+/* ---------- 行与列表 ---------- */
+html[data-ui-theme="modern"] .rows > div,
+html[data-ui-theme="modern"] .mod-rows > div,
+html[data-ui-theme="modern"] .server-list .server-row,
+html[data-ui-theme="modern"] .settings-account-row > button:first-child {
+  background: var(--ui2-surface);
+  border: 1px solid var(--ui2-border);
+  border-radius: var(--ui2-radius);
+}
+
+html[data-ui-theme="modern"] .rows > div {
+  padding: 14px 16px;
+  gap: 12px;
+}
+
+html[data-ui-theme="modern"] .rows > div strong,
+html[data-ui-theme="modern"] .mod-rows strong,
+html[data-ui-theme="modern"] .server-row-main strong {
+  color: var(--ui2-text);
+}
+
+html[data-ui-theme="modern"] .rows > div small,
+html[data-ui-theme="modern"] .mod-rows small,
+html[data-ui-theme="modern"] .server-row-main small {
+  color: var(--ui2-muted);
+}
+
+/* ---------- 表单 ---------- */
+html[data-ui-theme="modern"] input,
+html[data-ui-theme="modern"] select,
+html[data-ui-theme="modern"] textarea {
+  border: 1px solid var(--ui2-border-strong);
+  border-radius: var(--ui2-radius-sm);
+  background: var(--ui2-surface);
+  color: var(--ui2-text);
+  font-size: 13px;
+  min-height: 36px;
+  transition: border-color .12s ease, box-shadow .12s ease;
+}
+
+html[data-ui-theme="modern"] input:focus,
+html[data-ui-theme="modern"] select:focus,
+html[data-ui-theme="modern"] textarea:focus {
+  border-color: var(--ui2-accent);
+  box-shadow: 0 0 0 3px var(--ui2-accent-ring);
+  outline: none;
+}
+
+/* ---------- 弹窗 ---------- */
+html[data-ui-theme="modern"] .error-modal-backdrop,
+html[data-ui-theme="modern"] .update-modal-backdrop {
+  backdrop-filter: blur(4px);
+  background: rgba(15, 23, 42, .28);
+}
+
+html[data-ui-theme="modern"] .changelog-modal,
+html[data-ui-theme="modern"] .update-modal,
+html[data-ui-theme="modern"] .download-detail-modal,
+html[data-ui-theme="modern"] .error-modal-backdrop > div {
+  border-radius: var(--ui2-radius-lg);
+  border: 1px solid var(--ui2-border);
+  box-shadow: var(--ui2-shadow-lg);
+}
+
+html[data-ui-theme="modern"] .error-modal-body {
+  border-color: #fecaca;
+  background: var(--ui2-danger-soft);
+}
+
+/* ---------- 底部全局进度条 ---------- */
+html[data-ui-theme="modern"] .global-progress-bar {
+  background: rgba(255, 255, 255, .98);
+  border-top: 1px solid var(--ui2-border);
+  box-shadow: 0 -4px 20px rgba(15, 23, 42, .06);
+}
+
+html[data-ui-theme="modern"] .global-progress-message {
+  color: var(--ui2-text);
+  font-size: 12.5px;
+}
+
+html[data-ui-theme="modern"] .global-progress-percent {
+  color: var(--ui2-accent);
+}
+
+html[data-ui-theme="modern"] .global-progress-track {
+  background: #e2e8f0;
+}
+
+html[data-ui-theme="modern"] .global-progress-fill {
+  background: linear-gradient(90deg, var(--ui2-accent), #4ade80);
+}
+
+/* ---------- 服务器页 ---------- */
+html[data-ui-theme="modern"] .server-toolbar label {
+  color: var(--ui2-muted);
+  font-size: 12px;
+}
+
+html[data-ui-theme="modern"] .ping-badge.ok {
+  background: var(--ui2-accent-soft);
+  color: var(--ui2-accent);
+}
+
+html[data-ui-theme="modern"] .ping-badge.fail {
+  background: var(--ui2-danger-soft);
+  color: var(--ui2-danger);
+}
+
+/* ---------- 整合包库 ---------- */
+html[data-ui-theme="modern"] .pack-archive-row > span.enabled {
+  background: var(--ui2-accent-soft);
+  color: var(--ui2-accent);
+}
+
+html[data-ui-theme="modern"] .pack-archive-row > span.disabled {
+  background: var(--ui2-danger-soft);
+  color: var(--ui2-danger);
+}
+
+/* ---------- 下载详情 ---------- */
+html[data-ui-theme="modern"] .download-detail-head strong {
+  color: var(--ui2-text);
+}
+
+html[data-ui-theme="modern"] .download-detail-meta {
+  color: var(--ui2-muted);
+}
+
+/* ---------- 状态标签 ---------- */
+html[data-ui-theme="modern"] .enabled {
+  color: var(--ui2-accent);
+}
+
+html[data-ui-theme="modern"] .disabled {
+  color: var(--ui2-faint);
+}
+
+/* ---------- 搜索卡片 ---------- */
+html[data-ui-theme="modern"] .catalog-grid article {
+  border: 1px solid var(--ui2-border);
+  border-radius: var(--ui2-radius);
+  background: var(--ui2-surface);
+  transition: box-shadow .12s ease, border-color .12s ease;
+}
+
+html[data-ui-theme="modern"] .catalog-grid article:hover {
+  border-color: var(--ui2-border-strong);
+  box-shadow: var(--ui2-shadow);
+}
+
+html[data-ui-theme="modern"] .catalog-source {
+  font-style: normal;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--ui2-accent-soft);
+  color: var(--ui2-accent);
+}
+
+html[data-ui-theme="modern"] .catalog-original {
+  color: var(--ui2-faint);
+  font-size: 11px;
+}
+
+/* =========================================================
+   动画：轻量、纯 CSS，全部可被“减少动态效果”关闭
+   ========================================================= */
+
+@keyframes ui2-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ui2-pop {
+  from {
+    opacity: 0;
+    transform: scale(.96) translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes ui2-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+html[data-ui-theme="modern"] .content > * {
+  animation: ui2-fade-up .28s ease both;
+}
+
+html[data-ui-theme="modern"] .content > *:nth-child(2) {
+  animation-delay: .04s;
+}
+
+html[data-ui-theme="modern"] .content > *:nth-child(3) {
+  animation-delay: .08s;
+}
+
+html[data-ui-theme="modern"] .content > *:nth-child(4) {
+  animation-delay: .12s;
+}
+
+html[data-ui-theme="modern"] .error-modal-backdrop,
+html[data-ui-theme="modern"] .update-modal-backdrop {
+  animation: ui2-fade-in .18s ease both;
+}
+
+html[data-ui-theme="modern"] .changelog-modal,
+html[data-ui-theme="modern"] .update-modal,
+html[data-ui-theme="modern"] .download-detail-modal,
+html[data-ui-theme="modern"] .error-modal-backdrop > div {
+  animation: ui2-pop .24s cubic-bezier(.16, 1, .3, 1) both;
+}
+
+html[data-ui-theme="modern"] button:active:not(:disabled) {
+  transform: scale(.97);
+}
+
+html[data-ui-theme="modern"] .hero,
+html[data-ui-theme="modern"] .activity section,
+html[data-ui-theme="modern"] .rows > div,
+html[data-ui-theme="modern"] .mod-rows > div,
+html[data-ui-theme="modern"] .server-row,
+html[data-ui-theme="modern"] .pack-archive-row,
+html[data-ui-theme="modern"] .catalog-grid article {
+  transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+}
+
+html[data-ui-theme="modern"] .rows > div:hover,
+html[data-ui-theme="modern"] .mod-rows > div:hover,
+html[data-ui-theme="modern"] .server-row:hover,
+html[data-ui-theme="modern"] .pack-archive-row:hover,
+html[data-ui-theme="modern"] .catalog-grid article:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--ui2-shadow);
+}
+
+html[data-ui-theme="modern"] .hero:hover,
+html[data-ui-theme="modern"] .activity section:hover {
+  box-shadow: var(--ui2-shadow);
+}
+
+html[data-ui-theme="modern"] body,
+html[data-ui-theme="modern"] .app-frame,
+html[data-ui-theme="modern"] aside,
+html[data-ui-theme="modern"] .content {
+  transition: background .25s ease, border-color .25s ease;
+}
+
+html[data-ui-theme="modern"] nav button {
+  position: relative;
+}
+
+html[data-ui-theme="modern"] nav button.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 22%;
+  bottom: 22%;
+  width: 3px;
+  border-radius: 99px;
+  background: var(--ui2-accent);
+  animation: ui2-fade-in .18s ease both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-ui-theme="modern"] *,
+  html[data-ui-theme="modern"] *::before,
+  html[data-ui-theme="modern"] *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}

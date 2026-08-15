@@ -158,6 +158,27 @@ export function SettingsPage({
             </button>
           )}
         </div>
+        <div className="microsoft-login-card">
+          <div>
+            <strong>界面主题</strong>
+            <small>
+              新界面更清爽统一；经典界面保留旧外观，可随时回退，两种主题功能完全一致。
+            </small>
+          </div>
+          <select
+            aria-label="界面主题"
+            value={settings.uiTheme}
+            onChange={(event) =>
+              onChange({
+                ...settings,
+                uiTheme: event.target.value as "modern" | "classic",
+              })
+            }
+          >
+            <option value="modern">新界面（推荐）</option>
+            <option value="classic">经典界面</option>
+          </select>
+        </div>
         <div className="environment-check" role="region" aria-label="运行环境检查">
           <div>
             <strong>运行环境检查</strong>

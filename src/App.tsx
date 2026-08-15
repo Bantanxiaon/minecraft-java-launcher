@@ -26,6 +26,7 @@ import type {
   GameLog,
   OnlineProject,
   ServerEntry,
+  ModpackArchive,
 } from "./types";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { ServersPage } from "./pages/ServersPage";
@@ -38,6 +39,7 @@ import { ChangelogModal } from "./components/ChangelogModal";
 import { ErrorModal } from "./components/ErrorModal";
 import { IncompatibleModsModal } from "./components/IncompatibleModsModal";
 import { GlobalProgressBar } from "./components/GlobalProgressBar";
+import { DownloadDetailsModal } from "./components/DownloadDetailsModal";
 import { checkForUpdate, updaterEnabled } from "./updater";
 import type { Update } from "./updater";
 import type {
@@ -88,6 +90,7 @@ import {
 } from "lucide-react";
 import "./App.css";
 import "./overrides.css";
+import ui2Css from "./ui2.css?inline";
 
 function deriveProgress(steps: BootStep[]) {
   if (!steps.length) return 0;
@@ -106,6 +109,63 @@ function formatBytes(value: number): string {
   if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
   if (value >= 1024) return `${Math.round(value / 1024)} KB`;
   return `${value} B`;
+}
+
+function javaMajorForGameVersion(gameVersion?: string): number | undefined {
+  if (!gameVersion) return undefined;
+  const parts = gameVersion.split(".").map((part) => Number(part));
+  if (parts.some((part) => !Number.isFinite(part))) return undefined;
+  if (parts[0] >= 2) return 21;
+  if (parts[0] !== 1) return undefined;
+  if ((parts[1] ?? 0) <= 16) return 8;
+  if ((parts[1] ?? 0) === 17) return 17;
+  if ((parts[1] ?? 0) === 18 || (parts[1] ?? 0) === 19) return 17;
+  if ((parts[1] ?? 0) === 20) return (parts[2] ?? 0) >= 5 ? 21 : 17;
+  return 21;
+}
+
+const CHINESE_SEARCH_ALIASES: Record<string, string[]> = {
+  暮色森林: ["twilight forest"],
+  匠魂: ["tinkers construct"],
+  机械动力: ["create"],
+  血魔法: ["blood magic"],
+  植物魔法: ["botania"],
+  神秘时代: ["thaumcraft"],
+  星系: ["galacticraft"],
+  应用能源: ["applied energistics"],
+  沉浸工程: ["immersive engineering"],
+  农夫乐事: ["farmer's delight"],
+  饰品: ["curios"],
+  枪械: ["tacz", "gun"],
+  拔刀剑: ["slash blade"],
+  冰与火: ["ice and fire"],
+  暮色: ["twilight forest"],
+  幸运方块: ["lucky block"],
+  高清修复: ["optifine"],
+  光影: ["shaders", "iris"],
+  小地图: ["minimap", "journeymap", "xaero"],
+  背包: ["backpack"],
+  存储: ["storage", "refined storage"],
+  食物: ["food", "farmer's delight"],
+  科技: ["technology", "mekanism", "create"],
+  冒险: ["adventure"],
+  魔法: ["magic", "botania", "blood magic"],
+  整合包: ["modpack"],
+};
+
+function expandSearchQueries(query: string): string[] {
+  const trimmed = query.trim();
+  if (!trimmed) return [""];
+  const queries = [trimmed];
+  for (const [chinese, english] of Object.entries(CHINESE_SEARCH_ALIASES)) {
+    if (trimmed.includes(chinese)) {
+      for (const alias of english) {
+        if (!queries.includes(alias)) queries.push(alias);
+      }
+      break;
+    }
+  }
+  return queries.slice(0, 2);
 }
 
 type BootProblem = {
@@ -177,6 +237,7 @@ export default function App() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<number>();
   const [servers, setServers] = useState<ServerEntry[]>([]);
+  const [modpackArchives, setModpackArchives] = useState<ModpackArchive[]>([]);
   const [instances, setInstances] = useState<Instance[]>([]);
   const [selectedInstanceId, setSelectedInstanceId] = useState<number>();
   const [versions, setVersions] = useState<VersionSummary[]>([]);
@@ -184,7 +245,9 @@ export default function App() {
   const [selectedJavaPath, setSelectedJavaPath] = useState<string>();
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [message, setMessage] = useState("");
+  const [showDownloadDetails, setShowDownloadDetails] = useState(false);
   const [booting, setBooting] = useState(true);
   const [splashFinishing, setSplashFinishing] = useState(false);
   const [bootProgress, setBootProgress] = useState(0);
@@ -258,6 +321,7 @@ export default function App() {
     defaultMemoryMb: 4096,
     microsoftClientId: "",
     backupWorldsBeforeLaunch: false,
+    uiTheme: "modern",
   });
   const [archiveItems, setArchiveItems] = useState<ContentItem[]>([]);
   const [worldItems, setWorldItems] = useState<ContentItem[]>([]);
@@ -297,6 +361,21 @@ export default function App() {
   useEffect(() => {
     activeNavRef.current = activeNav;
   }, [activeNav]);
+
+  useEffect(() => {
+    document.documentElement.dataset.uiTheme = settings.uiTheme;
+    const existing = document.getElementById("ui2-theme");
+    if (settings.uiTheme === "modern") {
+      if (!existing) {
+        const style = document.createElement("style");
+        style.id = "ui2-theme";
+        style.textContent = ui2Css;
+        document.head.appendChild(style);
+      }
+    } else if (existing) {
+      existing.remove();
+    }
+  }, [settings.uiTheme]);
 
   const applyStep = (key: BootStepKey, patch: Partial<BootStep>) => {
     setBootSteps((current) =>
@@ -365,6 +444,7 @@ export default function App() {
       loginResult,
       healthResult,
       serversResult,
+      archivesResult,
     ] = await Promise.allSettled([
       invoke<Account[]>("list_accounts"),
       invoke<Instance[]>("list_instances"),
@@ -373,6 +453,7 @@ export default function App() {
       invoke<boolean>("microsoft_login_available"),
       invoke<BootHealthReport>("boot_health_check"),
       invoke<ServerEntry[]>("list_servers"),
+      invoke<ModpackArchive[]>("list_modpack_archives"),
     ]);
 
     if (accountsResult.status === "fulfilled") {
@@ -417,6 +498,12 @@ export default function App() {
       setServers(serversResult.value);
     } else {
       setMessage(errorText(serversResult.reason, "无法读取服务器列表。"));
+    }
+
+    if (archivesResult.status === "fulfilled") {
+      setModpackArchives(archivesResult.value);
+    } else {
+      setMessage(errorText(archivesResult.reason, "无法读取已下载整合包列表。"));
     }
 
     if (healthResult.status === "fulfilled") {
@@ -661,25 +748,20 @@ export default function App() {
   }, [activeNav, modInstanceId]);
 
   useEffect(() => {
-    if (activeNav === "下载" && isTauri()) void refreshDiagnostics();
-  }, [activeNav]);
-
-  useEffect(() => {
-    if (activeNav !== "下载" || !isTauri()) return;
+    if (!isTauri()) return;
     const timer = window.setInterval(() => {
       invoke<DownloadJob[]>("list_download_jobs")
         .then(setDownloadJobs)
         .catch(() => {});
-    }, 2000);
+    }, 3000);
     return () => window.clearInterval(timer);
-  }, [activeNav]);
+  }, []);
 
   useEffect(() => {
     if (!isTauri()) return;
     let dispose: (() => void) | undefined;
     let cancelled = false;
     void listen<DownloadProgress>("download-progress", (event) => {
-      if (!["主页", "下载"].includes(activeNavRef.current)) return;
       const {
         instanceId,
         downloadedBytes,
@@ -1020,7 +1102,7 @@ export default function App() {
 
   async function installManagedJava(major: number) {
     if (!isTauri()) return;
-    setBusy(true);
+    setDownloading(true);
     setMessage(`正在下载并校验官方 OpenJDK ${major}…`);
     try {
       const runtime = await invoke<JavaRuntime>("install_managed_java", {
@@ -1037,7 +1119,7 @@ export default function App() {
     } catch (error) {
       setMessage(errorText(error, "Java 安装失败。"));
     } finally {
-      setBusy(false);
+      setDownloading(false);
     }
   }
 
@@ -1075,21 +1157,59 @@ export default function App() {
       return;
     }
     setBusy(true);
-    setMessage("正在连接模组下载平台 Modrinth…");
+    setMessage("正在同时搜索 Modrinth 与 CurseForge…");
     try {
-      const projects = await invoke<OnlineProject[]>("search_modrinth_projects", {
-        query: projectType === "mod" ? onlineModQuery : onlinePackQuery,
-        projectType,
-        ...(projectType === "mod" && target
-          ? {
-              gameVersion: onlineModVersion.trim() || target.gameVersion,
-              loader: onlineModLoader || target.loaderType,
-            }
-          : {}),
-      });
-      if (projectType === "mod") setOnlineModProjects(projects);
-      else setOnlinePackProjects(projects);
-      setMessage(projects.length ? `找到 ${projects.length} 个兼容项目。` : "没有找到兼容项目，请换个关键词。");
+      const query =
+        projectType === "mod" ? onlineModQuery : onlinePackQuery;
+      const queries = expandSearchQueries(query);
+      const gameVersion =
+        projectType === "mod" && target
+          ? onlineModVersion.trim() || target.gameVersion
+          : undefined;
+      const loader =
+        projectType === "mod" && target
+          ? onlineModLoader || target.loaderType
+          : undefined;
+      const batches = await Promise.all(
+        queries.map((singleQuery) =>
+          Promise.allSettled([
+            invoke<OnlineProject[]>("search_modrinth_projects", {
+              query: singleQuery,
+              projectType,
+              ...(gameVersion ? { gameVersion } : {}),
+              ...(loader ? { loader } : {}),
+            }),
+            invoke<OnlineProject[]>("search_curseforge_projects", {
+              query: singleQuery,
+              projectType,
+              ...(gameVersion ? { gameVersion } : {}),
+              ...(loader ? { loader } : {}),
+            }),
+          ]),
+        ),
+      );
+      const merged: OnlineProject[] = [];
+      const seen = new Set<string>();
+      for (const batch of batches) {
+        for (const result of batch) {
+          if (result.status !== "fulfilled") continue;
+          for (const project of result.value) {
+            const key = `${project.source}:${project.projectId}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            merged.push(project);
+          }
+        }
+      }
+      merged.sort((left, right) => right.downloads - left.downloads);
+      const limited = merged.slice(0, 40);
+      if (projectType === "mod") setOnlineModProjects(limited);
+      else setOnlinePackProjects(limited);
+      setMessage(
+        limited.length
+          ? `找到 ${limited.length} 个兼容项目（Modrinth + CurseForge）。`
+          : "没有找到兼容项目，请换个关键词或检查网络。",
+      );
     } catch (error) {
       setMessage(errorText(error, "在线搜索失败。"));
     } finally {
@@ -1099,38 +1219,84 @@ export default function App() {
 
   async function installOnlineMod(project: OnlineProject) {
     if (!isTauri() || !modInstanceId) return;
-    setBusy(true);
+    setDownloading(true);
     setMessage(`正在下载、校验并安装 ${project.title}…`);
     try {
-      const item = await invoke<ContentItem>("install_modrinth_mod", {
-        instanceId: modInstanceId,
-        projectId: project.projectId,
-      });
+      const target = instances.find((instance) => instance.id === modInstanceId);
+      const item =
+        project.source === "curseforge"
+          ? await invoke<ContentItem>("install_curseforge_project", {
+              instanceId: modInstanceId,
+              projectId: project.projectId,
+              gameVersion: target?.gameVersion ?? "",
+              loader: target?.loaderType ?? "forge",
+            })
+          : await invoke<ContentItem>("install_modrinth_mod", {
+              instanceId: modInstanceId,
+              projectId: project.projectId,
+            });
       setModItems((existing) => [item, ...existing.filter((value) => value.id !== item.id)]);
-      setMessage(`${project.title} 已下载完成，文件完整且适合当前模组环境。`);
+      setMessage(
+        `${project.title} 已从 ${project.source === "curseforge" ? "CurseForge" : "Modrinth"} 下载完成，文件完整且适合当前模组环境。`,
+      );
     } catch (error) {
       setMessage(errorText(error, "在线模组安装失败。"));
     } finally {
-      setBusy(false);
+      setDownloading(false);
     }
   }
 
   async function installOnlinePack(project: OnlineProject) {
     if (!isTauri()) return;
-    setBusy(true);
+    setDownloading(true);
     setMessage(`正在下载、校验并导入 ${project.title}…`);
     try {
-      const result = await invoke<ImportedModpack>("install_modrinth_modpack", {
-        projectId: project.projectId,
-      });
-      setInstances((existing) => [result.instance, ...existing.filter((value) => value.id !== result.instance.id)]);
-      setSelectedInstanceId(result.instance.id);
-      setModInstanceId(result.instance.id);
-      setMessage(`${project.title} 已创建为一套独立游戏配置，共下载 ${result.downloadedFiles} 个文件，并加入 ${result.overrideFiles} 个整合包自带设置文件。`);
+      if (project.source === "curseforge") {
+        const gameVersion = project.versions[0];
+        const loaderType = project.loaderType ?? "forge";
+        if (!gameVersion) {
+          throw new Error("CurseForge 未返回该整合包的游戏版本，无法创建独立实例。");
+        }
+        const instance = await invoke<Instance>("create_instance_profile", {
+          name: project.title,
+          gameVersion,
+          loaderType,
+        });
+        const packPath = await invoke<string>("download_curseforge_modpack", {
+          instanceId: instance.id,
+          projectId: project.projectId,
+          gameVersion,
+          loader: loaderType,
+        });
+        const inspection = await invoke<ModpackInspection>("inspect_modpack", {
+          path: packPath,
+        });
+        await invoke<ImportedLocalPack>("import_local_pack", {
+          instanceId: instance.id,
+          sourcePath: packPath,
+        });
+        const ready = await finishNewInstanceImport(instance, {
+          sourcePath: packPath,
+          inspection,
+        });
+        setMessage(
+          `整合包“${ready.name}”已从 CurseForge 下载并创建为独立实例（Minecraft ${ready.gameVersion} · ${loaderLabel(ready.loaderType)}），游戏与加载器已自动安装完成。`,
+        );
+      } else {
+        const result = await invoke<ImportedModpack>("install_modrinth_modpack", {
+          projectId: project.projectId,
+        });
+        const ready = await finishNewInstanceImport(result.instance, {
+          projectId: project.projectId,
+        });
+        setMessage(
+          `${project.title} 已创建为独立实例“${ready.name}”（Minecraft ${ready.gameVersion} · ${loaderLabel(ready.loaderType)}），共下载 ${result.downloadedFiles} 个文件，游戏与加载器已自动安装完成。`,
+        );
+      }
     } catch (error) {
       setMessage(errorText(error, "在线整合包安装失败。"));
     } finally {
-      setBusy(false);
+      setDownloading(false);
     }
   }
 
@@ -1325,7 +1491,7 @@ export default function App() {
 
   async function installCurseforgeUrl(url: string) {
     if (!isTauri() || !modInstanceId) return;
-    setBusy(true);
+    setDownloading(true);
     setMessage("正在从 CurseForge 解析并安装…");
     try {
       const item = await invoke<ContentItem>("install_curseforge_url", {
@@ -1340,7 +1506,7 @@ export default function App() {
     } catch (error) {
       setMessage(errorText(error, "从 CurseForge 安装失败。"));
     } finally {
-      setBusy(false);
+      setDownloading(false);
     }
   }
 
@@ -1647,6 +1813,113 @@ export default function App() {
     return updated;
   }
 
+  async function ensureJavaForGame(
+    gameVersion: string,
+  ): Promise<JavaRuntime | undefined> {
+    const required = javaMajorForGameVersion(gameVersion);
+    if (!required) return undefined;
+    const installed = javaRuntimes.find(
+      (runtime) => runtime.is64Bit && runtime.majorVersion === required,
+    );
+    if (installed) {
+      if (!selectedJavaPath) setSelectedJavaPath(installed.path);
+      return installed;
+    }
+    setMessage(`正在自动下载并安装此游戏版本需要的 Java ${required}…`);
+    const runtime = await invoke<JavaRuntime>("install_managed_java", {
+      major: required,
+    });
+    setJavaRuntimes((existing) =>
+      existing.some((item) => item.path === runtime.path)
+        ? existing
+        : [...existing, runtime],
+    );
+    setSelectedJavaPath(runtime.path);
+    return runtime;
+  }
+
+  async function recordModpackArchive(input: {
+    sourceKind: "local" | "modrinth";
+    filePath?: string | null;
+    projectId?: string | null;
+    fileName: string;
+    name?: string | null;
+    version?: string | null;
+    gameVersion?: string | null;
+    loaderType?: string | null;
+    format: string;
+    instanceId?: number | null;
+  }) {
+    try {
+      const archive = await invoke<ModpackArchive>("record_modpack_archive", {
+        sourceKind: input.sourceKind,
+        filePath: input.filePath ?? null,
+        projectId: input.projectId ?? null,
+        fileName: input.fileName,
+        name: input.name ?? null,
+        version: input.version ?? null,
+        gameVersion: input.gameVersion ?? null,
+        loaderType: input.loaderType ?? null,
+        format: input.format,
+        sizeBytes: null,
+        instanceId: input.instanceId ?? null,
+      });
+      setModpackArchives((existing) => [
+        archive,
+        ...existing.filter((candidate) => candidate.id !== archive.id),
+      ]);
+    } catch {
+      // 记录失败不影响已导入的实例
+    }
+  }
+
+  async function finishNewInstanceImport(
+    instance: Instance,
+    options: {
+      sourcePath?: string | null;
+      inspection?: ModpackInspection | null;
+      projectId?: string | null;
+    } = {},
+  ): Promise<Instance> {
+    setInstances((existing) => [
+      instance,
+      ...existing.filter((candidate) => candidate.id !== instance.id),
+    ]);
+    setSelectedInstanceId(instance.id);
+    setModInstanceId(instance.id);
+    const java = await ensureJavaForGame(instance.gameVersion);
+    let ready = instance;
+    if (["missing", "base_missing"].includes(ready.status)) {
+      setMessage("正在自动下载并校验游戏文件…");
+      ready = await installClientFiles(ready);
+    }
+    if (ready.loaderType !== "vanilla" && ready.status !== "ready") {
+      setMessage(
+        `正在自动安装兼容的 ${loaderLabel(ready.loaderType)} 模组环境…`,
+      );
+      ready = await installInstanceLoaderFiles(ready, java?.path);
+    }
+    setInstances((existing) =>
+      existing.map((candidate) =>
+        candidate.id === ready.id ? ready : candidate,
+      ),
+    );
+    await recordModpackArchive({
+      sourceKind: options.projectId ? "modrinth" : "local",
+      filePath: options.sourcePath ?? null,
+      projectId: options.projectId ?? null,
+      fileName: options.inspection?.fileName ?? ready.name,
+      name: options.inspection?.name ?? (options.projectId ? ready.name : null),
+      version: options.inspection?.version ?? null,
+      gameVersion: ready.gameVersion,
+      loaderType: ready.loaderType,
+      format:
+        options.inspection?.format ?? (options.projectId ? "modrinth" : "zip"),
+      instanceId: ready.id,
+    });
+    return ready;
+  }
+
   async function installClient(instance: Instance) {
     if (!isTauri()) return;
     setBusy(true);
@@ -1690,6 +1963,7 @@ export default function App() {
 
   async function installInstanceLoaderFiles(
     instance: Instance,
+    javaPathOverride?: string,
   ): Promise<Instance> {
     let available = loaderVersions[instance.id];
     if (!available?.length) {
@@ -1710,7 +1984,10 @@ export default function App() {
       ...existing,
       [instance.id]: loaderVersion,
     }));
-    if (["forge", "neoforge"].includes(instance.loaderType) && !selectedJava) {
+    const java = javaPathOverride
+      ? ({ path: javaPathOverride } as JavaRuntime)
+      : selectedJava;
+    if (["forge", "neoforge"].includes(instance.loaderType) && !java) {
       throw new Error("安装 Forge/NeoForge 前需要可用的 64 位 Java。");
     }
     const updated = await invoke<Instance>(
@@ -1720,7 +1997,7 @@ export default function App() {
       {
         instanceId: instance.id,
         loaderVersion,
-        ...(selectedJava ? { javaPath: selectedJava.path } : {}),
+        ...(java ? { javaPath: java.path } : {}),
       },
     );
     setInstances((existing) =>
@@ -1740,10 +2017,6 @@ export default function App() {
     const requestedInstance = targetInstance ?? selectedInstance;
     if (!requestedInstance) {
       setMessage("还没有游戏配置，请先新建一套游戏配置。");
-      return;
-    }
-    if (!selectedJava) {
-      setMessage("没有找到可用的 64 位 Java，请先到设置里点击“一键检查并安装”。");
       return;
     }
     setBusy(true);
@@ -1778,13 +2051,19 @@ export default function App() {
       if (readyInstance.status !== "ready") {
         throw new Error("这套游戏配置还没有准备完成。");
       }
+      const java = await ensureJavaForGame(readyInstance.gameVersion);
+      const javaPath = java?.path ?? selectedJava?.path;
+      if (!javaPath) {
+        setMessage("没有找到可用的 64 位 Java，请先到设置里点击“一键检查并安装”。");
+        return;
+      }
       setMessage("文件和 Java 已就绪，正在启动 Minecraft…");
       const result = await invoke<{ processId: number; logPath: string }>(
         "launch_instance",
         {
           instanceId: readyInstance.id,
           accountId: launchAccount.id,
-          javaPath: selectedJava.path,
+          javaPath,
           force,
           serverAddress: server?.address ?? null,
           serverPort: server?.port ?? null,
@@ -1924,83 +2203,191 @@ export default function App() {
     }
   }
 
-  async function importPack() {
+  async function importPack(gameVersion?: string, loaderType?: string) {
     if (!packSourcePath || !packInspection) return;
-    setBusy(true);
+    setDownloading(true);
     setMessage("");
     try {
-      if (
-        ["modrinth", "mmc", "hmcl", "mcbbs"].includes(packInspection.format)
-      ) {
-        const command = packInspection.format === "modrinth"
-          ? "import_modrinth_pack"
-          : packInspection.format === "mmc"
-            ? "import_mmc_pack"
-            : "import_override_pack";
-        const imported = await invoke<ImportedModpack>(command, {
-          sourcePath: packSourcePath,
-        });
-        setInstances((existing) => [imported.instance, ...existing]);
-        setSelectedInstanceId(imported.instance.id);
-        setModInstanceId(imported.instance.id);
-        setMessage("正在自动检查并补齐游戏文件…");
-        let readyInstance = imported.instance;
-        if (["missing", "base_missing"].includes(readyInstance.status)) {
-          readyInstance = await installClientFiles(readyInstance);
-        }
-        if (
-          readyInstance.loaderType !== "vanilla" &&
-          readyInstance.status !== "ready"
-        ) {
-          setMessage(
-            `正在自动安装兼容的 ${loaderLabel(readyInstance.loaderType)} 模组环境…`,
-          );
-          readyInstance = await installInstanceLoaderFiles(readyInstance);
-        }
-        setInstances((existing) =>
-          existing.map((item) =>
-            item.id === readyInstance.id ? readyInstance : item,
-          ),
-        );
-        setMessage(
-          `整合包已导入，游戏文件与 ${loaderLabel(readyInstance.loaderType)} 环境已自动安装，可以直接开始游戏。`,
-        );
-      } else {
-        if (!modInstanceId) throw new Error("请先选择要导入到哪套游戏。");
-        const imported = await invoke<ImportedLocalPack>("import_local_pack", {
-          instanceId: modInstanceId,
-          sourcePath: packSourcePath,
-        });
-        const notes: string[] = [];
-        if (imported.skippedMods.length) {
-          notes.push(
-            `${imported.skippedMods.length} 个模组因不兼容被跳过：${imported.skippedMods
-              .slice(0, 3)
-              .join("；")}`,
-          );
-        }
-        if (imported.unresolvedRemoteFiles) {
-          notes.push(
-            `${imported.unresolvedRemoteFiles} 个模组下载失败（网络或已下架），可在“下载与诊断”查看原因`,
-          );
-        }
-        if (imported.downloadedRemoteFiles) {
-          notes.unshift(
-            `已从 CurseForge 自动补齐 ${imported.downloadedRemoteFiles} 个模组`,
-          );
-        }
-        setMessage(
-          `已导入 ${imported.importedFiles} 个本地文件，其中 ${imported.importedMods} 个模组。${
-            notes.length ? notes.join("；") + "。" : ""
-          }下一步请安装基础游戏和模组运行环境。`,
-        );
-      }
+      const ready = await importPackAsNewInstance(
+        packSourcePath,
+        packInspection,
+        null,
+        gameVersion,
+        loaderType,
+      );
+      setMessage(
+        ready
+          ? `整合包已创建为独立实例“${ready.name}”，游戏版本 ${ready.gameVersion}、Java 与 ${loaderLabel(ready.loaderType)} 环境已自动配好，可以直接开始游戏。`
+          : "整合包内容已导入到所选游戏配置。",
+      );
     } catch (error) {
       setMessage(
         errorText(error, "整合包导入失败；已经下载的内容仍保留在单独目录中，可以稍后继续。"),
       );
     } finally {
-      setBusy(false);
+      setDownloading(false);
+    }
+  }
+
+  async function importPackAsNewInstance(
+    sourcePath: string,
+    inspection: ModpackInspection,
+    projectId: string | null,
+    genericGameVersion?: string,
+    genericLoaderType?: string,
+  ): Promise<Instance | null> {
+    if (["modrinth", "mmc", "hmcl", "mcbbs"].includes(inspection.format)) {
+      const command =
+        inspection.format === "modrinth"
+          ? "import_modrinth_pack"
+          : inspection.format === "mmc"
+            ? "import_mmc_pack"
+            : "import_override_pack";
+      const imported = await invoke<ImportedModpack>(command, { sourcePath });
+      return await finishNewInstanceImport(imported.instance, {
+        sourcePath,
+        inspection,
+        projectId,
+      });
+    }
+    if (inspection.format === "curseforge") {
+      const gameVersion = inspection.gameVersion;
+      const loaderType = inspection.loaderType;
+      if (!gameVersion || !loaderType) {
+        throw new Error(
+          "这个 CurseForge 整合包未声明游戏版本或加载器，无法自动创建独立实例；请手动选择现有实例导入。",
+        );
+      }
+      const instance = await invoke<Instance>("create_instance_profile", {
+        name:
+          inspection.name ??
+          inspection.fileName.replace(/\.(zip|mrpack)$/i, ""),
+        gameVersion,
+        loaderType,
+      });
+      const imported = await invoke<ImportedLocalPack>("import_local_pack", {
+        instanceId: instance.id,
+        sourcePath,
+      });
+      if (imported.unresolvedRemoteFiles) {
+        setMessage(
+          `${imported.unresolvedRemoteFiles} 个模组下载失败（网络或已下架），导入继续；可在“下载”页查看原因。`,
+        );
+      }
+      return await finishNewInstanceImport(instance, {
+        sourcePath,
+        inspection,
+        projectId,
+      });
+    }
+    if (inspection.format === "generic") {
+      if (!genericGameVersion || !genericLoaderType) {
+        throw new Error("通用整合包需要先填写游戏版本并选择加载器。");
+      }
+      const instance = await invoke<Instance>("create_instance_profile", {
+        name:
+          inspection.name ??
+          inspection.fileName.replace(/\.(zip|mrpack)$/i, ""),
+        gameVersion: genericGameVersion,
+        loaderType: genericLoaderType,
+      });
+      const imported = await invoke<ImportedLocalPack>("import_local_pack", {
+        instanceId: instance.id,
+        sourcePath,
+      });
+      const notes: string[] = [];
+      if (imported.skippedMods.length) {
+        notes.push(
+          `${imported.skippedMods.length} 个模组因不兼容被跳过：${imported.skippedMods
+            .slice(0, 3)
+            .join("；")}`,
+        );
+      }
+      if (imported.unresolvedRemoteFiles) {
+        notes.push(
+          `${imported.unresolvedRemoteFiles} 个模组下载失败（网络或已下架），可在“下载”页查看原因`,
+        );
+      }
+      if (imported.downloadedRemoteFiles) {
+        notes.unshift(
+          `已从 CurseForge 自动补齐 ${imported.downloadedRemoteFiles} 个模组`,
+        );
+      }
+      if (imported.unresolvedRemoteFiles) {
+        notes.unshift(
+          `${imported.unresolvedRemoteFiles} 个模组下载失败（网络或已下架），导入继续；可在“下载”页查看原因。`,
+        );
+      }
+      const ready = await finishNewInstanceImport(instance, {
+        sourcePath,
+        inspection,
+      });
+      setMessage(
+        `已导入 ${imported.importedFiles} 个本地文件，其中 ${imported.importedMods} 个模组。${
+          notes.length ? notes.join("；") + "。" : ""
+        }实例“${ready.name}”已自动配好游戏与加载器。`,
+      );
+      return ready;
+    }
+    throw new Error("不支持的整合包格式。");
+  }
+
+  async function importArchiveAsNewInstance(archive: ModpackArchive) {
+    setDownloading(true);
+    setMessage("");
+    try {
+      if (archive.projectId) {
+        const imported = await invoke<ImportedModpack>(
+          "install_modrinth_modpack",
+          { projectId: archive.projectId },
+        );
+        const ready = await finishNewInstanceImport(imported.instance, {
+          projectId: archive.projectId,
+        });
+        setMessage(
+          `整合包已重新导入为独立实例“${ready.name}”，游戏与加载器已自动配好。`,
+        );
+        return;
+      }
+      if (!archive.filePath) {
+        throw new Error("这条记录没有可用的整合包文件。");
+      }
+      const inspection = await invoke<ModpackInspection>("inspect_modpack", {
+        path: archive.filePath,
+      });
+      const ready = await importPackAsNewInstance(
+        archive.filePath,
+        inspection,
+        null,
+      );
+      if (ready) {
+        setMessage(
+          `整合包已导入为独立实例“${ready.name}”，游戏版本 ${ready.gameVersion}、Java 与加载器已自动配好。`,
+        );
+      }
+    } catch (error) {
+      setMessage(errorText(error, "从整合包库导入失败。"));
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  async function removeModpackArchive(archive: ModpackArchive) {
+    if (
+      !window.confirm(
+        `确定从整合包库移除“${archive.name ?? archive.fileName}”吗？不会影响已经创建的实例。`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await invoke("remove_modpack_archive", { archiveId: archive.id });
+      setModpackArchives((existing) =>
+        existing.filter((candidate) => candidate.id !== archive.id),
+      );
+      setMessage("已从整合包库移除。");
+    } catch (error) {
+      setMessage(errorText(error, "移除失败。"));
     }
   }
 
@@ -2204,7 +2591,7 @@ export default function App() {
   }
 
   async function updateMod(item: ContentItem) {
-    setBusy(true);
+    setDownloading(true);
     setMessage(`正在安全更新 ${item.fileName}…`);
     try {
       const updated = await invoke<ContentItem>("update_modrinth_mod", {
@@ -2218,14 +2605,14 @@ export default function App() {
     } catch (error) {
       setMessage(errorText(error, "模组更新失败，原文件没有被覆盖。"));
     } finally {
-      setBusy(false);
+      setDownloading(false);
     }
   }
 
   async function updateAllMods() {
     const pending = modUpdates.filter((item) => item.updateAvailable);
     if (!pending.length) return;
-    setBusy(true);
+    setDownloading(true);
     setMessage(`正在更新 ${pending.length} 个模组…`);
     try {
       const updatedItems: ContentItem[] = [];
@@ -2244,7 +2631,7 @@ export default function App() {
         setModItems(refreshed);
       }
     } finally {
-      setBusy(false);
+      setDownloading(false);
     }
   }
 
@@ -2307,7 +2694,15 @@ export default function App() {
           </div>
           <div>
             <strong>{profileName}</strong>
-            <small>{current ? "本地玩家名称" : "需要设置"}</small>
+            <small>
+              {current
+                ? current.accountType === "MICROSOFT"
+                  ? "Microsoft 正版账户"
+                  : current.accountType === "EXTERNAL"
+                    ? "外置登录账户"
+                    : "本地离线账户"
+                : "需要设置"}
+            </small>
           </div>
           {accounts.length > 1 ? (
             <select className="account-switcher" aria-label="切换账户" value={current?.id ?? ""} onChange={(event) => setSelectedAccountId(Number(event.target.value))}>
@@ -2705,6 +3100,11 @@ export default function App() {
             onOnlineSearch={() => void searchOnline("modpack")}
             onOnlineInstall={(project) => void installOnlinePack(project)}
             onExport={(instanceId, includeSaves) => void exportPack(instanceId, includeSaves)}
+            archives={modpackArchives}
+            javaRuntimes={javaRuntimes}
+            onImportArchive={(archive) => void importArchiveAsNewInstance(archive)}
+            onRemoveArchive={(archive) => void removeModpackArchive(archive)}
+            onInstallJava={(major) => void installManagedJava(major)}
           />
         ) : activeNav === "设置" ? (
           <SettingsPage
@@ -2790,10 +3190,17 @@ export default function App() {
       </section>
       </main>
       <GlobalProgressBar
-        visible={busy || activeDownloadJobs.length > 0}
+        visible={busy || downloading || activeDownloadJobs.length > 0}
         message={message}
         progress={aggregateDownloadPercent}
+        onClick={() => setShowDownloadDetails(true)}
       />
+      {showDownloadDetails ? (
+        <DownloadDetailsModal
+          jobs={downloadJobs}
+          onClose={() => setShowDownloadDetails(false)}
+        />
+      ) : null}
       {errorModal ? (
         <ErrorModal
           title={errorModal.title}

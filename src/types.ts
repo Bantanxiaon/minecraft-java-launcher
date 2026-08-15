@@ -19,6 +19,23 @@ export type ServerPing = {
   latencyMs?: number;
   error?: string;
 };
+export type ModpackArchive = {
+  id: number;
+  sourceKind: "local" | "modrinth";
+  filePath?: string;
+  projectId?: string;
+  fileName: string;
+  name?: string;
+  version?: string;
+  gameVersion?: string;
+  loaderType?: string;
+  format: string;
+  sizeBytes?: number;
+  instanceId?: number;
+  instanceName?: string;
+  instanceStatus?: string;
+  importedAt: string;
+};
 export type Instance = {
   id: number;
   name: string;
@@ -130,6 +147,7 @@ export type LauncherSettings = {
   defaultMemoryMb: number;
   microsoftClientId?: string;
   backupWorldsBeforeLaunch: boolean;
+  uiTheme: "modern" | "classic";
 };
 export type DownloadJob = {
   id: number;
@@ -166,6 +184,11 @@ export type GameLog = {
   modifiedAt: number;
 };
 export type OnlineProject = {
+  source: "modrinth" | "curseforge";
+  titleZh?: string;
+  descriptionZh?: string;
+  slug?: string;
+  loaderType?: string;
   projectId: string;
   title: string;
   description: string;

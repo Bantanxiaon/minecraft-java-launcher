@@ -1,6 +1,75 @@
 import { useMemo, useState } from "react";
-import type { BackupItem, ContentItem, Instance, ModInspection, ModpackInspection, ModUpdateInfo, OnlineProject } from "../types";
+import type {
+  BackupItem,
+  ContentItem,
+  Instance,
+  JavaRuntime,
+  ModInspection,
+  ModpackArchive,
+  ModpackInspection,
+  ModUpdateInfo,
+  OnlineProject,
+} from "../types";
 import { inspectionSupportsGame, loaderLabel } from "../ui";
+
+function archiveSizeText(size?: number): string {
+  if (!size) return "";
+  if (size >= 1024 ** 3) return `${(size / 1024 ** 3).toFixed(2)} GB`;
+  if (size >= 1024 ** 2) return `${(size / 1024 ** 2).toFixed(1)} MB`;
+  return `${Math.round(size / 1024)} KB`;
+}
+
+function javaMajorForGameVersion(gameVersion?: string): number | undefined {
+  if (!gameVersion) return undefined;
+  const parts = gameVersion.split(".").map((part) => Number(part));
+  if (parts.some((part) => !Number.isFinite(part))) return undefined;
+  if (parts[0] >= 2) return 21;
+  if (parts[0] !== 1) return undefined;
+  if ((parts[1] ?? 0) <= 16) return 8;
+  if ((parts[1] ?? 0) === 17) return 17;
+  if ((parts[1] ?? 0) === 18 || (parts[1] ?? 0) === 19) return 17;
+  if ((parts[1] ?? 0) === 20) return (parts[2] ?? 0) >= 5 ? 21 : 17;
+  return 21;
+}
+
+const CATEGORY_ZH: Record<string, string> = {
+  adventure: "冒险",
+  magic: "魔法",
+  technology: "科技",
+  storage: "存储",
+  worldgen: "地形生成",
+  world: "世界",
+  food: "食物",
+  combat: "战斗",
+  decoration: "装饰",
+  building: "建筑",
+  redstone: "红石",
+  farming: "农业",
+  library: "前置库",
+  utility: "实用",
+  performance: "性能优化",
+  optimization: "性能优化",
+  social: "社交",
+  server: "服务端",
+  equipment: "装备",
+  armor: "盔甲",
+  weapons: "武器",
+  tools: "工具",
+  biomes: "生物群系",
+  mobs: "生物",
+  bosses: "Boss",
+  dimensions: "维度",
+  exploration: "探索",
+  minigame: "小游戏",
+  map: "地图",
+  modpack: "整合包",
+  "mc-mods": "模组",
+  "modpacks": "整合包",
+};
+
+function categoryText(value: string): string {
+  return CATEGORY_ZH[value.toLowerCase()] ?? value;
+}
 
 function OnlineCatalog({
   title, query, onQuery, onSearch, projects, busy, disabled, onInstall,
@@ -25,7 +94,7 @@ function OnlineCatalog({
       <div className="section-heading">
         <div>
           <h2>{title}</h2>
-          <p>来自模组下载平台 Modrinth。启动器会自动筛掉不适合当前游戏版本和模组环境的内容，并检查下载文件是否完整。</p>
+          <p>同时搜索 Modrinth 与 CurseForge，结果自动翻译为中文；自动筛掉不适合当前游戏版本和模组环境的内容。</p>
         </div>
         <span>联网</span>
       </div>
@@ -66,13 +135,19 @@ function OnlineCatalog({
       ) : null}
       {disabled ? <p className="catalog-hint">请先选择一套已经启用 Fabric、Forge、NeoForge 或 Quilt 的游戏配置。</p> : null}
       {projects.length ? <div className="catalog-grid">
-        {projects.map((project) => <article key={project.projectId}>
+        {projects.map((project) => <article key={`${project.source}-${project.projectId}`}>
           <div className="catalog-mark">{project.title.slice(0, 1).toUpperCase()}</div>
           <div className="catalog-copy">
-            <strong>{project.title}</strong>
-            <small>作者 {project.author} · {project.downloads.toLocaleString("zh-CN")} 次下载</small>
-            <p>{project.description}</p>
-            <span>{project.categories.slice(0, 3).join(" · ") || "Minecraft"}</span>
+            <strong>{project.titleZh ?? project.title}</strong>
+            <small>
+              <em className="catalog-source">{project.source === "curseforge" ? "CurseForge" : "Modrinth"}</em>
+              {" "}作者 {project.author} · {project.downloads.toLocaleString("zh-CN")} 次下载
+            </small>
+            {project.titleZh && project.titleZh !== project.title ? (
+              <small className="catalog-original">原文：{project.title}</small>
+            ) : null}
+            <p>{project.descriptionZh ?? project.description}</p>
+            <span>{project.categories.slice(0, 3).map(categoryText).join(" · ") || "Minecraft"}</span>
           </div>
           <button disabled={busy} onClick={() => onInstall(project)}>下载并安装</button>
         </article>)}
@@ -456,21 +531,24 @@ export function ModpacksPage({
   onPick,
   onImport,
   instances,
-  targetId,
-  onTarget,
   onlineQuery,
   onlineProjects,
   onOnlineQuery,
   onOnlineSearch,
   onOnlineInstall,
   onExport,
+  archives,
+  javaRuntimes,
+  onImportArchive,
+  onRemoveArchive,
+  onInstallJava,
 }: {
   inspection?: ModpackInspection;
   busy: boolean;
   message: string;
   dragging: boolean;
   onPick: () => void;
-  onImport: () => void;
+  onImport: (gameVersion?: string, loaderType?: string) => void;
   instances: Instance[];
   targetId?: number;
   onTarget: (id: number) => void;
@@ -480,9 +558,16 @@ export function ModpacksPage({
   onOnlineSearch: () => void;
   onOnlineInstall: (project: OnlineProject) => void;
   onExport: (instanceId: number, includeSaves: boolean) => void;
+  archives: ModpackArchive[];
+  javaRuntimes: JavaRuntime[];
+  onImportArchive: (archive: ModpackArchive) => void;
+  onRemoveArchive: (archive: ModpackArchive) => void;
+  onInstallJava: (major: number) => void;
 }) {
   const [exportInstanceId, setExportInstanceId] = useState<number>();
   const [includeSaves, setIncludeSaves] = useState(false);
+  const [genericVersion, setGenericVersion] = useState("");
+  const [genericLoader, setGenericLoader] = useState("forge");
   return (
     <>
       <header>
@@ -518,6 +603,95 @@ export function ModpacksPage({
         <label><input type="checkbox" checked={includeSaves} onChange={(event) => setIncludeSaves(event.target.checked)} /> 同时包含存档（默认不包含）</label>
         <button className="primary" disabled={busy || !exportInstanceId} onClick={() => exportInstanceId && onExport(exportInstanceId, includeSaves)}>导出 ZIP</button>
       </section>
+      <section className="installed-mods">
+        <div className="section-heading">
+          <div>
+            <h2>已下载整合包</h2>
+            <p>
+              导入过的整合包都会记录在这里；每个整合包对应一套独立实例，游戏版本与 Java 自动匹配。
+            </p>
+          </div>
+          <div className="section-actions">
+            <span>{archives.length} 个</span>
+          </div>
+        </div>
+        {archives.length ? (
+          <div className="mod-rows">
+            {archives.map((archive) => {
+              const requiredJava = javaMajorForGameVersion(archive.gameVersion);
+              const javaInstalled = requiredJava
+                ? javaRuntimes.some(
+                    (runtime) =>
+                      runtime.is64Bit && runtime.majorVersion === requiredJava,
+                  )
+                : true;
+              return (
+                <div className="pack-archive-row" key={archive.id}>
+                  <div>
+                    <strong>{archive.name ?? archive.fileName}</strong>
+                    <small>
+                      {archive.format.toUpperCase()} ·{" "}
+                      {archive.gameVersion
+                        ? `Minecraft ${archive.gameVersion}`
+                        : "版本未知"}{" "}
+                      ·{" "}
+                      {archive.loaderType
+                        ? loaderLabel(archive.loaderType)
+                        : "加载器未知"}
+                      {archiveSizeText(archive.sizeBytes)
+                        ? ` · ${archiveSizeText(archive.sizeBytes)}`
+                        : ""}
+                    </small>
+                    {archive.version ? (
+                      <small>包版本：{archive.version}</small>
+                    ) : null}
+                    {archive.instanceName ? (
+                      <small>
+                        对应实例：{archive.instanceName}
+                        {archive.instanceStatus === "ready"
+                          ? "（已就绪）"
+                          : "（待安装）"}
+                      </small>
+                    ) : (
+                      <small>对应实例：尚未创建</small>
+                    )}
+                  </div>
+                  <span className={requiredJava && javaInstalled ? "enabled" : "disabled"}>
+                    {requiredJava
+                      ? javaInstalled
+                        ? `已装 Java ${requiredJava}`
+                        : `需要 Java ${requiredJava}`
+                      : "Java 自动匹配"}
+                  </span>
+                  {requiredJava && !javaInstalled ? (
+                    <button onClick={() => onInstallJava(requiredJava)}>
+                      安装 Java {requiredJava}
+                    </button>
+                  ) : null}
+                  <button
+                    className="primary"
+                    disabled={busy}
+                    onClick={() => onImportArchive(archive)}
+                  >
+                    导入为独立实例
+                  </button>
+                  <button
+                    className="danger"
+                    disabled={busy}
+                    onClick={() => onRemoveArchive(archive)}
+                  >
+                    移除记录
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="mod-message">
+            还没有导入过整合包；导入后这里会显示游戏版本、加载器、Java 要求和对应实例。
+          </p>
+        )}
+      </section>
       {inspection ? (
         <section className="pack-preview">
           <div>
@@ -552,32 +726,44 @@ export function ModpacksPage({
               {warning}
             </p>
           ))}
-          {inspection.format !== "modrinth" ? (
-            <select
-              className="pack-target"
-              value={targetId ?? ""}
-              onChange={(event) => onTarget(Number(event.target.value))}
+          {inspection.format === "generic" ? (
+            <div className="pack-generic-form">
+              <input
+                value={genericVersion}
+                onChange={(event) => setGenericVersion(event.target.value)}
+                placeholder="Minecraft 版本，如 1.20.1"
+              />
+              <select
+                value={genericLoader}
+                onChange={(event) => setGenericLoader(event.target.value)}
+                aria-label="模组运行环境"
+              >
+                {["vanilla", "forge", "fabric", "neoforge", "quilt"].map((loader) => (
+                  <option key={loader} value={loader}>
+                    {loaderLabel(loader)}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="primary pack-import"
+                disabled={busy || !genericVersion.trim()}
+                onClick={() => onImport(genericVersion.trim(), genericLoader)}
+              >
+                创建独立实例并导入
+              </button>
+              <small className="pack-warning">
+                这个压缩包没有标准清单，需要你确认版本和加载器；导入后会自动安装游戏、Java 与加载器。
+              </small>
+            </div>
+          ) : (
+            <button
+              className="primary pack-import"
+              disabled={busy}
+              onClick={() => onImport()}
             >
-              <option value="" disabled>
-                选择要导入到哪套现有游戏
-              </option>
-              {instances.map((instance) => (
-                <option value={instance.id} key={instance.id}>
-                  {instance.name} · {loaderLabel(instance.loaderType)}{" "}
-                  {instance.gameVersion}
-                </option>
-              ))}
-            </select>
-          ) : null}
-          <button
-            className="primary pack-import"
-            disabled={busy || (inspection.format !== "modrinth" && !targetId)}
-            onClick={onImport}
-          >
-            {inspection.format === "modrinth"
-              ? "创建新游戏配置并导入"
-              : "导入本地可用内容"}
-          </button>
+              创建独立实例并导入
+            </button>
+          )}
         </section>
       ) : null}
       {message ? (

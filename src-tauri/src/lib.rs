@@ -78,6 +78,12 @@ struct LauncherSettings {
     microsoft_client_id: Option<String>,
     #[serde(default)]
     backup_worlds_before_launch: bool,
+    #[serde(default = "default_ui_theme")]
+    ui_theme: String,
+}
+
+fn default_ui_theme() -> String {
+    "modern".into()
 }
 
 impl Default for LauncherSettings {
@@ -90,6 +96,7 @@ impl Default for LauncherSettings {
             default_memory_mb: 4096,
             microsoft_client_id: None,
             backup_worlds_before_launch: false,
+            ui_theme: default_ui_theme(),
         }
     }
 }
@@ -103,6 +110,9 @@ fn validate_settings(settings: &LauncherSettings) -> Result<(), LauncherError> {
     }
     if !matches!(settings.language.as_str(), "zh-CN" | "en-US") {
         return Err(LauncherError::validation("不支持的界面语言。"));
+    }
+    if !matches!(settings.ui_theme.as_str(), "modern" | "classic") {
+        return Err(LauncherError::validation("不支持的界面主题。"));
     }
     Ok(())
 }
@@ -157,6 +167,7 @@ fn run_migrations(connection: &mut Connection) -> rusqlite::Result<()> {
     CREATE TABLE IF NOT EXISTS migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS accounts (id INTEGER PRIMARY KEY, account_type TEXT NOT NULL CHECK(account_type IN ('OFFLINE','MICROSOFT','EXTERNAL')), display_name TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_used_at TEXT, safe_secret_ref TEXT, auth_server TEXT);
     CREATE TABLE IF NOT EXISTS servers (id INTEGER PRIMARY KEY, name TEXT NOT NULL, address TEXT NOT NULL, port INTEGER NOT NULL DEFAULT 25565, description TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, last_connected_at TEXT);
+    CREATE TABLE IF NOT EXISTS modpack_archives (id INTEGER PRIMARY KEY, source_kind TEXT NOT NULL, file_path TEXT, project_id TEXT, file_name TEXT NOT NULL, name TEXT, version TEXT, game_version TEXT, loader_type TEXT, format TEXT NOT NULL, size_bytes INTEGER, instance_id INTEGER, imported_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS instances (id INTEGER PRIMARY KEY, name TEXT NOT NULL, icon TEXT, root_path TEXT NOT NULL UNIQUE, game_version TEXT NOT NULL, loader_type TEXT NOT NULL, loader_version TEXT, java_profile TEXT, memory_mb INTEGER NOT NULL DEFAULT 4096, resolution TEXT, last_played TEXT, status TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS installation_states (id INTEGER PRIMARY KEY, instance_id INTEGER NOT NULL REFERENCES instances(id) ON DELETE CASCADE, component_kind TEXT NOT NULL, component_key TEXT NOT NULL, hash TEXT, size_bytes INTEGER, status TEXT NOT NULL, UNIQUE(instance_id, component_kind, component_key));
@@ -526,6 +537,7 @@ async fn login_external(
     if password.is_empty() {
         return Err(LauncherError::validation("请输入外置登录密码。"));
     }
+    let password = password.to_string();
     let client = shared_download_client()?;
     let response = client
         .post(format!("{api_root}/authserver/authenticate"))
@@ -584,12 +596,27 @@ async fn login_external(
     }
     ensure_authlib_injector().await?;
     let connection = open_database(&app)?;
+    let existing_type: Option<String> = connection
+        .query_row(
+            "SELECT account_type FROM accounts WHERE display_name=?1",
+            [&profile_name],
+            |row| row.get(0),
+        )
+        .ok();
+    if let Some(existing_type) = existing_type {
+        if existing_type != "EXTERNAL" {
+            return Err(LauncherError::validation(
+                "已有同名的正版或离线账户，请先移除该账户，或更换外置登录用户名。",
+            ));
+        }
+    }
     let created_at = chrono_like_timestamp();
     connection
         .execute(
             "INSERT INTO accounts (account_type, display_name, created_at, last_used_at, auth_server)
              VALUES ('EXTERNAL', ?1, ?2, ?2, ?3)
-             ON CONFLICT(display_name) DO UPDATE SET account_type='EXTERNAL', last_used_at=excluded.last_used_at, auth_server=excluded.auth_server",
+             ON CONFLICT(display_name) DO UPDATE SET account_type='EXTERNAL', last_used_at=excluded.last_used_at, auth_server=excluded.auth_server
+             WHERE accounts.account_type='EXTERNAL'",
             params![profile_name, created_at, api_root],
         )
         .map_err(|error| LauncherError::storage(error.to_string()))?;
@@ -827,22 +854,11 @@ fn remove_server(app: AppHandle, server_id: i64) -> Result<(), LauncherError> {
 }
 
 #[tauri::command]
-fn touch_server_connection(app: AppHandle, server_id: i64) -> Result<(), LauncherError> {
-    let connection = open_database(&app)?;
-    connection
-        .execute(
-            "UPDATE servers SET last_connected_at=?1 WHERE id=?2",
-            params![chrono_like_timestamp(), server_id],
-        )
-        .map_err(|error| LauncherError::storage(error.to_string()))?;
-    Ok(())
-}
-
-#[tauri::command]
 async fn ping_server(address: String, port: u16) -> Result<ServerPing, LauncherError> {
     let address = validate_server_address(&address)?;
     let started = Instant::now();
-    let Ok(mut addrs) = tokio::net::lookup_host((address.as_str(), port)).await else {
+    let lookup_address = address.trim_start_matches('[').trim_end_matches(']');
+    let Ok(mut addrs) = tokio::net::lookup_host((lookup_address, port)).await else {
         return Ok(ServerPing {
             reachable: false,
             latency_ms: None,
@@ -873,6 +889,196 @@ async fn ping_server(address: String, port: u16) -> Result<ServerPing, LauncherE
             error: Some("连接超时（4 秒）。".into()),
         }),
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModpackArchive {
+    id: i64,
+    source_kind: String,
+    file_path: Option<String>,
+    project_id: Option<String>,
+    file_name: String,
+    name: Option<String>,
+    version: Option<String>,
+    game_version: Option<String>,
+    loader_type: Option<String>,
+    format: String,
+    size_bytes: Option<i64>,
+    instance_id: Option<i64>,
+    instance_name: Option<String>,
+    instance_status: Option<String>,
+    imported_at: String,
+}
+
+fn read_modpack_archive_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ModpackArchive> {
+    Ok(ModpackArchive {
+        id: row.get(0)?,
+        source_kind: row.get(1)?,
+        file_path: row.get(2)?,
+        project_id: row.get(3)?,
+        file_name: row.get(4)?,
+        name: row.get(5)?,
+        version: row.get(6)?,
+        game_version: row.get(7)?,
+        loader_type: row.get(8)?,
+        format: row.get(9)?,
+        size_bytes: row.get(10)?,
+        instance_id: row.get(11)?,
+        instance_name: row.get(12)?,
+        instance_status: row.get(13)?,
+        imported_at: row.get(14)?,
+    })
+}
+
+#[tauri::command]
+fn list_modpack_archives(app: AppHandle) -> Result<Vec<ModpackArchive>, LauncherError> {
+    let connection = open_database(&app)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT a.id, a.source_kind, a.file_path, a.project_id, a.file_name, a.name,
+                    a.version, a.game_version, a.loader_type, a.format, a.size_bytes,
+                    a.instance_id, i.name AS instance_name, i.status AS instance_status,
+                    a.imported_at
+             FROM modpack_archives a
+             LEFT JOIN instances i ON i.id = a.instance_id
+             ORDER BY a.imported_at DESC, a.id DESC",
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let rows = statement
+        .query_map([], read_modpack_archive_row)
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| LauncherError::storage(error.to_string()))
+}
+
+#[tauri::command]
+fn record_modpack_archive(
+    app: AppHandle,
+    source_kind: String,
+    file_path: Option<String>,
+    project_id: Option<String>,
+    file_name: String,
+    name: Option<String>,
+    version: Option<String>,
+    game_version: Option<String>,
+    loader_type: Option<String>,
+    format: String,
+    size_bytes: Option<i64>,
+    instance_id: Option<i64>,
+) -> Result<ModpackArchive, LauncherError> {
+    let file_name = file_name.trim();
+    if file_name.is_empty()
+        || file_name.chars().count() > 300
+        || file_name.chars().any(|character| character.is_control())
+    {
+        return Err(LauncherError::validation("整合包文件名无效。"));
+    }
+    let source_kind = match source_kind.as_str() {
+        "local" | "modrinth" => source_kind,
+        _ => return Err(LauncherError::validation("整合包来源类型无效。")),
+    };
+    let format = if format.trim().is_empty() {
+        "zip".to_string()
+    } else {
+        format.trim().to_string()
+    };
+    let connection = open_database(&app)?;
+    let existing: Option<i64> = if project_id.as_deref().is_some_and(|value| !value.is_empty()) {
+        connection
+            .query_row(
+                "SELECT id FROM modpack_archives WHERE project_id=?1 AND instance_id IS ?2",
+                params![project_id, instance_id],
+                |row| row.get(0),
+            )
+            .ok()
+    } else if let Some(path) = file_path.as_deref() {
+        connection
+            .query_row(
+                "SELECT id FROM modpack_archives WHERE file_path=?1 AND instance_id IS ?2",
+                params![path, instance_id],
+                |row| row.get(0),
+            )
+            .ok()
+    } else {
+        None
+    };
+    let imported_at = chrono_like_timestamp();
+    let archive_id = if let Some(existing_id) = existing {
+        connection
+            .execute(
+                "UPDATE modpack_archives
+                 SET source_kind=?1, file_path=?2, project_id=?3, file_name=?4, name=?5,
+                     version=?6, game_version=?7, loader_type=?8, format=?9, size_bytes=?10,
+                     instance_id=?11, imported_at=?12
+                 WHERE id=?13",
+                params![
+                    source_kind,
+                    file_path,
+                    project_id,
+                    file_name,
+                    name,
+                    version,
+                    game_version,
+                    loader_type,
+                    format,
+                    size_bytes,
+                    instance_id,
+                    imported_at,
+                    existing_id
+                ],
+            )
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        existing_id
+    } else {
+        connection
+            .execute(
+                "INSERT INTO modpack_archives (source_kind, file_path, project_id, file_name, name, version, game_version, loader_type, format, size_bytes, instance_id, imported_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                params![
+                    source_kind,
+                    file_path,
+                    project_id,
+                    file_name,
+                    name,
+                    version,
+                    game_version,
+                    loader_type,
+                    format,
+                    size_bytes,
+                    instance_id,
+                    imported_at
+                ],
+            )
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        connection.last_insert_rowid()
+    };
+    let mut statement = connection
+        .prepare(
+            "SELECT a.id, a.source_kind, a.file_path, a.project_id, a.file_name, a.name,
+                    a.version, a.game_version, a.loader_type, a.format, a.size_bytes,
+                    a.instance_id, i.name AS instance_name, i.status AS instance_status,
+                    a.imported_at
+             FROM modpack_archives a
+             LEFT JOIN instances i ON i.id = a.instance_id
+             WHERE a.id=?1",
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    statement
+        .query_row([archive_id], read_modpack_archive_row)
+        .map_err(|error| LauncherError::storage(error.to_string()))
+}
+
+#[tauri::command]
+fn remove_modpack_archive(app: AppHandle, archive_id: i64) -> Result<(), LauncherError> {
+    let connection = open_database(&app)?;
+    connection
+        .execute(
+            "DELETE FROM modpack_archives WHERE id=?1",
+            [archive_id],
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    Ok(())
 }
 
 fn validate_profile_name(value: &str) -> Result<(), LauncherError> {
@@ -2486,6 +2692,11 @@ struct ImportedLocalPack {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OnlineProject {
+    source: String,
+    title_zh: Option<String>,
+    description_zh: Option<String>,
+    slug: Option<String>,
+    loader_type: Option<String>,
     project_id: String,
     title: String,
     description: String,
@@ -2572,10 +2783,15 @@ async fn search_modrinth_projects(
         .get("hits")
         .and_then(|value| value.as_array())
         .ok_or_else(|| LauncherError::storage("Modrinth 搜索结果缺少 hits。"))?;
-    Ok(hits
+    let mut projects = hits
         .iter()
         .filter_map(|hit| {
             Some(OnlineProject {
+                source: "modrinth".into(),
+                title_zh: None,
+                description_zh: None,
+                slug: None,
+                loader_type: None,
                 project_id: hit.get("project_id")?.as_str()?.to_string(),
                 title: hit.get("title")?.as_str()?.to_string(),
                 description: hit.get("description")?.as_str()?.to_string(),
@@ -2612,7 +2828,433 @@ async fn search_modrinth_projects(
                     .unwrap_or_default(),
             })
         })
-        .collect())
+        .collect::<Vec<_>>();
+    localize_online_projects(&mut projects).await;
+    Ok(projects)
+}
+
+const CHINESE_DICTIONARY: &[(&str, &str)] = &[
+    ("just enough items", "JEI 物品管理"),
+    ("applied energistics", "应用能源 (Applied Energistics)"),
+    ("immersive engineering", "沉浸工程 (Immersive Engineering)"),
+    ("tinkers construct", "匠魂 (Tinkers Construct)"),
+    ("twilight forest", "暮色森林 (Twilight Forest)"),
+    ("industrial foregoing", "工业先锋 (Industrial Foregoing)"),
+    ("draconic evolution", "龙之研究 (Draconic Evolution)"),
+    ("refined storage", "精致存储 (Refined Storage)"),
+    ("thermal expansion", "热力膨胀 (Thermal Expansion)"),
+    ("alex's caves", "亚历克斯的洞穴 (Alex's Caves)"),
+    ("alex's mobs", "亚历克斯的怪物 (Alex's Mobs)"),
+    ("farmer's delight", "农夫乐事 (Farmer's Delight)"),
+    ("minecolonies", "我的殖民地 (MineColonies)"),
+    ("sophisticated backpacks", "精致背包 (Sophisticated Backpacks)"),
+    ("iron's spells 'n spellbooks", "铁咒书 (Iron's Spells 'n Spellbooks)"),
+    ("storage drawers", "存储抽屉 (Storage Drawers)"),
+    ("mr crayfish's gun mod", "枪械工艺 (MrCrayfish's Gun Mod)"),
+    ("create above and beyond", "机械动力：以上与以外"),
+    ("enchantment descriptions", "附魔描述 (Enchantment Descriptions)"),
+    ("legendary tooltips", "传说品质提示 (Legendary Tooltips)"),
+    ("simple voice chat", "简单语音聊天 (Simple Voice Chat)"),
+    ("journeymap", "旅行地图 (JourneyMap)"),
+    ("traveler's backpack", "旅者背包 (Traveler's Backpack)"),
+    ("xaero's world map", "Xaero 大地图"),
+    ("xaero's minimap", "Xaero 小地图"),
+    ("inventory sorter", "背包整理 (Inventory Sorter)"),
+    ("mouse tweaks", "鼠标手势 (Mouse Tweaks)"),
+    ("dungeons enhanced", "增强地牢 (Dungeons Enhanced)"),
+    ("deeper and darker", "更深更暗 (Deeper and Darker)"),
+    ("born in chaos", "混沌重生 (Born in Chaos)"),
+    ("vault hunters", "宝库猎人 (Vault Hunters)"),
+    ("better minecraft", "Better MC"),
+    ("all the mods", "All the Mods (ATM)"),
+    ("skyfactory", "空岛工厂 (SkyFactory)"),
+    ("stoneblock", "石头世界 (StoneBlock)"),
+    ("enigmatica", "谜团 (Enigmatica)"),
+    ("dawncraft", "黎明工艺 (DawnCraft)"),
+    ("lucky block", "幸运方块 (Lucky Block)"),
+    ("gravestone", "墓碑 (Gravestone)"),
+    ("death chest", "死亡箱子 (Death Chest)"),
+    ("iron chests", "铁箱子 (Iron Chests)"),
+    ("ice and fire", "冰与火之歌 (Ice and Fire)"),
+    ("blood magic", "血魔法 (Blood Magic)"),
+    ("thaumcraft", "神秘时代 (Thaumcraft)"),
+    ("galacticraft", "星系 (Galacticraft)"),
+    ("mekanism", "通用机械 (Mekanism)"),
+    ("botania", "植物魔法 (Botania)"),
+    ("patchouli", "帕秋莉手册 (Patchouli)"),
+    ("waystones", "路石 (Waystones)"),
+    ("epic fight", "史诗战斗 (Epic Fight)"),
+    ("better combat", "更好的战斗 (Better Combat)"),
+    ("litematica", "投影 (Litematica)"),
+    ("worldedit", "创世神 (WorldEdit)"),
+    ("replay mod", "回放模组 (Replay Mod)"),
+    ("architectury api", "Architectury API"),
+    ("kotlin for forge", "Kotlin for Forge"),
+    ("ferritecore", "FerriteCore 内存优化"),
+    ("modernfix", "ModernFix 性能优化"),
+    ("entity culling", "实体剔除 (Entity Culling)"),
+    ("connectivity", "Connectivity 联机优化"),
+    ("gecko lib", "GeckoLib 动画库"),
+    ("item borders", "物品边框 (Item Borders)"),
+    ("curios", "饰品栏 (Curios)"),
+    ("optifine", "高清修复 (OptiFine)"),
+    ("oculus", "眼窗光影 (Oculus)"),
+    ("iris shaders", "鸢尾花光影 (Iris)"),
+    ("embeddium", "Embeddium"),
+    ("rubidium", "铷 (Rubidium)"),
+    ("phosphor", "磷 (Phosphor)"),
+    ("lithium", "锂 (Lithium)"),
+    ("sodium", "钠 (Sodium)"),
+    ("apple skin", "苹果皮 (Apple Skin)"),
+    ("fabric api", "Fabric API"),
+    ("clumps", "Clumps 经验球合并"),
+    ("spark", "Spark 性能监测"),
+    ("balm", "Balm 前置库"),
+    ("the graveyard", "墓地 (The Graveyard)"),
+    ("mowzie's mobs", "Mowzie 的怪物"),
+    ("corpse", "死亡尸体 (Corpse)"),
+    ("backpack", "背包 (Backpack)"),
+    ("shaders", "光影 (Shaders)"),
+    ("resource pack", "资源包"),
+    ("texture pack", "材质包"),
+    ("modpack", "整合包"),
+    ("jei", "JEI 物品管理"),
+    ("rei", "REI 物品管理"),
+    ("emi", "EMI 物品管理"),
+    ("tacz", "现代战争枪械 (TaCZ)"),
+    ("create", "机械动力 (Create)"),
+    ("essential", "Essential 联机模组"),
+];
+
+fn translation_cache() -> &'static Mutex<HashMap<String, String>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn load_translation_cache() {
+    let Ok(directory) = launcher_data_directory() else {
+        return;
+    };
+    let path = directory.join("cache").join("translations.json");
+    let Ok(bytes) = fs::read(&path) else {
+        return;
+    };
+    if bytes.len() > 2 * 1024 * 1024 {
+        return;
+    }
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return;
+    };
+    let Ok(mut cache) = translation_cache().lock() else {
+        return;
+    };
+    if let Some(object) = value.as_object() {
+        for (key, translated) in object {
+            if let Some(translated) = translated.as_str() {
+                cache.insert(key.clone(), translated.to_string());
+            }
+        }
+    }
+}
+
+fn save_translation_cache() {
+    let Ok(cache) = translation_cache().lock() else {
+        return;
+    };
+    if cache.len() > 5000 {
+        return;
+    }
+    let Ok(directory) = launcher_data_directory() else {
+        return;
+    };
+    let path = directory.join("cache").join("translations.json");
+    let _ = fs::create_dir_all(path.parent().unwrap_or(&directory));
+    if let Ok(bytes) = serde_json::to_vec(&*cache) {
+        if bytes.len() <= 2 * 1024 * 1024 {
+            let _ = fs::write(path, bytes);
+        }
+    }
+}
+
+fn contains_cjk(text: &str) -> bool {
+    text.chars()
+        .any(|character| ('\u{4e00}'..='\u{9fff}').contains(&character))
+}
+
+fn dictionary_title(title: &str) -> Option<String> {
+    let lower = title.to_lowercase();
+    let mut entries = CHINESE_DICTIONARY.to_vec();
+    entries.sort_by_key(|(keyword, _)| std::cmp::Reverse(keyword.len()));
+    entries
+        .into_iter()
+        .find(|(keyword, _)| lower.contains(keyword))
+        .map(|(_, translated)| translated.to_string())
+}
+
+async fn translate_text_mymemory(text: &str) -> Option<String> {
+    let mut url = reqwest::Url::parse("https://api.mymemory.translated.net/get").ok()?;
+    url.query_pairs_mut()
+        .append_pair("q", text)
+        .append_pair("langpair", "en|zh-CN");
+    let client = shared_download_client().ok()?;
+    let result = tokio::time::timeout(Duration::from_secs(8), async {
+        let response = client.get(url).send().await.ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        let value: serde_json::Value = response.json().await.ok()?;
+        let translated = value
+            .pointer("/responseData/translatedText")
+            .and_then(|value| value.as_str())?
+            .trim()
+            .to_string();
+        (!translated.is_empty()).then_some(translated)
+    })
+    .await
+    .ok()
+    .flatten()?;
+    Some(result)
+}
+
+async fn localize_online_projects(projects: &mut Vec<OnlineProject>) {
+    static LOADED: AtomicBool = AtomicBool::new(false);
+    if !LOADED.swap(true, Ordering::SeqCst) {
+        load_translation_cache();
+    }
+    let mut pending = Vec::new();
+    {
+        let Ok(cache) = translation_cache().lock() else {
+            return;
+        };
+        for project in projects.iter_mut() {
+            if !contains_cjk(&project.title) {
+                project.title_zh = dictionary_title(&project.title)
+                    .or_else(|| cache.get(&project.title).cloned());
+                if project.title_zh.is_none() && !project.title.is_empty() {
+                    pending.push(project.title.clone());
+                }
+            }
+            if !contains_cjk(&project.description) {
+                project.description_zh = cache.get(&project.description).cloned();
+                if project.description_zh.is_none()
+                    && !project.description.is_empty()
+                    && project.description.chars().count() <= 300
+                {
+                    pending.push(project.description.clone());
+                }
+            }
+        }
+    }
+    if pending.is_empty() {
+        return;
+    }
+    let mut unique = Vec::new();
+    let mut seen = HashSet::new();
+    for text in pending {
+        if seen.insert(text.clone()) && unique.len() < 60 {
+            unique.push(text);
+        }
+    }
+    let results = futures_util::stream::iter(unique.into_iter().map(|text| async move {
+        (text.clone(), translate_text_mymemory(&text).await)
+    }))
+    .buffer_unordered(4)
+    .collect::<Vec<_>>()
+    .await;
+    if let Ok(mut cache) = translation_cache().lock() {
+        let mut changed = false;
+        for (text, translated) in results {
+            if let Some(translated) = translated {
+                if cache.insert(text, translated).is_none() {
+                    changed = true;
+                }
+            }
+        }
+        drop(cache);
+        if changed {
+            save_translation_cache();
+        }
+    }
+    if let Ok(cache) = translation_cache().lock() {
+        for project in projects.iter_mut() {
+            if project.title_zh.is_none() && !contains_cjk(&project.title) {
+                project.title_zh = cache.get(&project.title).cloned();
+            }
+            if project.description_zh.is_none() && !contains_cjk(&project.description) {
+                project.description_zh = cache.get(&project.description).cloned();
+            }
+        }
+    }
+}
+
+#[tauri::command]
+async fn search_curseforge_projects(
+    query: String,
+    project_type: String,
+    game_version: Option<String>,
+    loader: Option<String>,
+) -> Result<Vec<OnlineProject>, LauncherError> {
+    if query.chars().count() > 80 || !matches!(project_type.as_str(), "mod" | "modpack") {
+        return Err(LauncherError::validation("搜索条件无效。"));
+    }
+    if let Some(version) = game_version
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        validate_instance_field(version, 64)?;
+    }
+    let mut url = reqwest::Url::parse("https://api.curse.tools/v1/cf/mods/search")
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    if url.host_str() != Some("api.curse.tools") {
+        return Err(LauncherError::validation("CurseForge 搜索地址不受信任。"));
+    }
+    {
+        let mut query_pairs = url.query_pairs_mut();
+        query_pairs
+            .append_pair("gameId", "432")
+            .append_pair("searchFilter", query.trim())
+            .append_pair(
+                "classId",
+                if project_type == "modpack" { "4471" } else { "6" },
+            )
+            .append_pair("pageSize", "20")
+            .append_pair("sortField", "2")
+            .append_pair("sortOrder", "desc");
+        if let Some(version) = game_version
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            query_pairs.append_pair("gameVersion", version);
+        }
+        if project_type == "mod" {
+            let loader_type = loader.as_deref().unwrap_or("").trim();
+            if !loader_type.is_empty() && loader_type != "vanilla" {
+                validate_loader_type(loader_type)?;
+                let loader_id = match loader_type {
+                    "forge" => "1",
+                    "fabric" => "4",
+                    "quilt" => "5",
+                    "neoforge" => "6",
+                    _ => "0",
+                };
+                query_pairs.append_pair("modLoaderType", loader_id);
+            }
+        }
+    }
+    let response = send_download_request(&shared_download_client()?, &url, None)
+        .await?
+        .error_for_status()
+        .map_err(|error| {
+            LauncherError::storage(format!("CurseForge 搜索返回错误：{error}"))
+        })?;
+    if response
+        .content_length()
+        .is_some_and(|size| size > 4 * 1024 * 1024)
+    {
+        return Err(LauncherError::validation(
+            "CurseForge 搜索响应超过安全限制。",
+        ));
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    if bytes.len() > 4 * 1024 * 1024 {
+        return Err(LauncherError::validation(
+            "CurseForge 搜索响应超过安全限制。",
+        ));
+    }
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|error| LauncherError::storage(format!("CurseForge 搜索数据无效：{error}")))?;
+    let items = value
+        .get("data")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| LauncherError::storage("CurseForge 搜索结果缺少 data。"))?;
+    let mut projects = items
+        .iter()
+        .filter_map(|item| {
+            let project_id = item.get("id")?.as_u64()?.to_string();
+            let title = item.get("name")?.as_str()?.to_string();
+            let description = item
+                .get("summary")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let author = item
+                .get("authors")
+                .and_then(|value| value.as_array())
+                .and_then(|authors| authors.first())
+                .and_then(|author| author.get("name"))
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let downloads = item
+                .get("downloadCount")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0);
+            let icon_url = item
+                .get("logo")
+                .and_then(|value| value.get("url"))
+                .or_else(|| {
+                    item.get("logo")
+                        .and_then(|value| value.get("thumbnailUrl"))
+                })
+                .and_then(|value| value.as_str())
+                .map(str::to_string);
+            let mut versions = Vec::new();
+            let mut seen_versions = HashSet::new();
+            if let Some(indexes) = item.get("latestFilesIndexes").and_then(|value| value.as_array()) {
+                for index in indexes {
+                    if let Some(version) = index.get("gameVersion").and_then(|value| value.as_str()) {
+                        if seen_versions.insert(version.to_string()) && versions.len() < 8 {
+                            versions.push(version.to_string());
+                        }
+                    }
+                }
+            }
+            let categories = item
+                .get("categories")
+                .and_then(|value| value.as_array())
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|value| value.get("name").and_then(|v| v.as_str()).map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some(OnlineProject {
+                source: "curseforge".into(),
+                title_zh: None,
+                description_zh: None,
+                slug: item.get("slug").and_then(|value| value.as_str()).map(str::to_string),
+                loader_type: item
+                    .get("latestFilesIndexes")
+                    .and_then(|value| value.as_array())
+                    .and_then(|indexes| {
+                        indexes.iter().find_map(|index| {
+                            match index.get("modLoader").and_then(|value| value.as_i64()) {
+                                Some(1) => Some("forge".to_string()),
+                                Some(4) => Some("fabric".to_string()),
+                                Some(5) => Some("quilt".to_string()),
+                                Some(6) => Some("neoforge".to_string()),
+                                _ => None,
+                            }
+                        })
+                    }),
+                project_id,
+                title,
+                description,
+                author,
+                project_type: project_type.clone(),
+                downloads,
+                icon_url,
+                versions,
+                categories,
+            })
+        })
+        .collect::<Vec<_>>();
+    localize_online_projects(&mut projects).await;
+    Ok(projects)
 }
 
 async fn fetch_project_versions(
@@ -3700,19 +4342,37 @@ async fn import_modrinth_pack(
 }
 
 const CURSEFORGE_API_BASE: &str = "https://www.curseforge.com/api/v1";
+const CURSEFORGE_PROXY_BASE: &str = "https://api.curse.tools/v1/cf";
 
-async fn curseforge_file_info(
+fn parse_curseforge_file_info(value: &serde_json::Value) -> Result<(String, u64), LauncherError> {
+    let data = value
+        .get("data")
+        .ok_or_else(|| LauncherError::validation("CurseForge 文件信息缺少 data。"))?;
+    let file_name = data
+        .get("fileName")
+        .and_then(|entry| entry.as_str())
+        .ok_or_else(|| LauncherError::validation("CurseForge 文件缺少文件名。"))?;
+    validate_instance_field(file_name, 240)?;
+    let size = data
+        .get("fileLength")
+        .and_then(|entry| entry.as_u64())
+        .ok_or_else(|| LauncherError::validation("CurseForge 文件缺少大小。"))?;
+    if size > 2 * 1024 * 1024 * 1024 {
+        return Err(LauncherError::validation("CurseForge 文件超过安全大小限制。"));
+    }
+    Ok((file_name.to_string(), size))
+}
+
+async fn fetch_curseforge_file_info_json(
     client: &reqwest::Client,
+    base: &str,
     project_id: i64,
     file_id: i64,
-) -> Result<(String, u64), LauncherError> {
-    if project_id <= 0 || file_id <= 0 {
-        return Err(LauncherError::validation("CurseForge 项目或文件编号无效。"));
-    }
-    let url = format!("{CURSEFORGE_API_BASE}/mods/{project_id}/files/{file_id}");
+) -> Result<serde_json::Value, LauncherError> {
+    let url = format!("{base}/mods/{project_id}/files/{file_id}");
     let parsed = reqwest::Url::parse(&url)
         .map_err(|error| LauncherError::storage(error.to_string()))?;
-    if parsed.host_str() != Some("www.curseforge.com") {
+    if !matches!(parsed.host_str(), Some("www.curseforge.com") | Some("api.curse.tools")) {
         return Err(LauncherError::validation("CurseForge 信息地址不受信任。"));
     }
     let response = send_download_request(client, &parsed, None)
@@ -3732,24 +4392,28 @@ async fn curseforge_file_info(
     if bytes.len() > 2 * 1024 * 1024 {
         return Err(LauncherError::validation("CurseForge 文件信息超过安全限制。"));
     }
-    let value: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|error| LauncherError::storage(format!("CurseForge 文件信息无效：{error}")))?;
-    let data = value
-        .get("data")
-        .ok_or_else(|| LauncherError::validation("CurseForge 文件信息缺少 data。"))?;
-    let file_name = data
-        .get("fileName")
-        .and_then(|entry| entry.as_str())
-        .ok_or_else(|| LauncherError::validation("CurseForge 文件缺少文件名。"))?;
-    validate_instance_field(file_name, 240)?;
-    let size = data
-        .get("fileLength")
-        .and_then(|entry| entry.as_u64())
-        .ok_or_else(|| LauncherError::validation("CurseForge 文件缺少大小。"))?;
-    if size > 2 * 1024 * 1024 * 1024 {
-        return Err(LauncherError::validation("CurseForge 文件超过安全大小限制。"));
+    serde_json::from_slice(&bytes)
+        .map_err(|error| LauncherError::storage(format!("CurseForge 文件信息无效：{error}")))
+}
+
+async fn curseforge_file_info(
+    client: &reqwest::Client,
+    project_id: i64,
+    file_id: i64,
+) -> Result<(String, u64), LauncherError> {
+    if project_id <= 0 || file_id <= 0 {
+        return Err(LauncherError::validation("CurseForge 项目或文件编号无效。"));
     }
-    Ok((file_name.to_string(), size))
+    let mut last_error = None;
+    for base in [CURSEFORGE_API_BASE, CURSEFORGE_PROXY_BASE] {
+        match fetch_curseforge_file_info_json(client, base, project_id, file_id).await {
+            Ok(value) => return parse_curseforge_file_info(&value),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        LauncherError::validation("无法获取 CurseForge 文件信息。")
+    }))
 }
 
 async fn download_curseforge_file(
@@ -3760,10 +4424,30 @@ async fn download_curseforge_file(
     size: u64,
     target: &Path,
 ) -> Result<u64, LauncherError> {
-    let download_url = format!("{CURSEFORGE_API_BASE}/mods/{project_id}/files/{file_id}/download");
+    let client = shared_download_client()?;
+    let mut download_url = format!(
+        "{CURSEFORGE_API_BASE}/mods/{project_id}/files/{file_id}/download"
+    );
+    if let Ok(value) =
+        fetch_curseforge_file_info_json(&client, CURSEFORGE_PROXY_BASE, project_id, file_id).await
+    {
+        if let Some(url) = value
+            .pointer("/data/downloadUrl")
+            .and_then(|entry| entry.as_str())
+        {
+            if let Ok(parsed) = reqwest::Url::parse(url) {
+                if parsed.host_str() == Some("edge.forgecdn.net") {
+                    download_url = url.to_string();
+                }
+            }
+        }
+    }
     let parsed = reqwest::Url::parse(&download_url)
         .map_err(|error| LauncherError::storage(error.to_string()))?;
-    if parsed.host_str() != Some("www.curseforge.com") {
+    if !matches!(
+        parsed.host_str(),
+        Some("www.curseforge.com") | Some("edge.forgecdn.net")
+    ) {
         return Err(LauncherError::validation("CurseForge 下载地址不受信任。"));
     }
     // CurseForge 不提供 SHA-1，仅按大小校验；文件仍来自 HTTPS 官方 CDN。
@@ -3954,6 +4638,99 @@ fn curseforge_modloader_type(loader: &str) -> i32 {
     }
 }
 
+async fn fetch_curseforge_files_page(
+    client: &reqwest::Client,
+    base: &str,
+    project_id: i64,
+    version: Option<&str>,
+    loader_type: Option<i32>,
+) -> Result<Vec<serde_json::Value>, LauncherError> {
+    let mut url = reqwest::Url::parse(&format!("{base}/mods/{project_id}/files"))
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    {
+        let mut query = url.query_pairs_mut();
+        query.append_pair("pageSize", "50");
+        if let Some(value) = version {
+            query.append_pair("gameVersion", value);
+        }
+        if let Some(value) = loader_type {
+            query.append_pair("modLoaderType", &value.to_string());
+        }
+    }
+    if !matches!(url.host_str(), Some("www.curseforge.com") | Some("api.curse.tools")) {
+        return Err(LauncherError::validation("CurseForge 文件列表地址不受信任。"));
+    }
+    let response = send_download_request(client, &url, None)
+        .await?
+        .error_for_status()
+        .map_err(|error| LauncherError::storage(format!("CurseForge 文件列表错误：{error}")))?;
+    if response
+        .content_length()
+        .is_some_and(|length| length > 4 * 1024 * 1024)
+    {
+        return Err(LauncherError::validation("CurseForge 文件列表超过安全限制。"));
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    if bytes.len() > 4 * 1024 * 1024 {
+        return Err(LauncherError::validation("CurseForge 文件列表超过安全限制。"));
+    }
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|error| LauncherError::storage(format!("CurseForge 文件列表无效：{error}")))?;
+    Ok(value
+        .get("data")
+        .and_then(|entry| entry.as_array())
+        .cloned()
+        .unwrap_or_default())
+}
+
+fn select_best_curseforge_file(
+    files: &[serde_json::Value],
+    game_version: &str,
+    loader: &str,
+    version_filter: Option<&str>,
+    loader_filter: Option<i32>,
+) -> Option<(i64, String, u64)> {
+    let game_version_lc = game_version.to_ascii_lowercase();
+    let loader_lc = loader.to_ascii_lowercase();
+    let mut candidates = Vec::new();
+    for file in files {
+        let versions: Vec<String> = file
+            .get("gameVersions")
+            .and_then(|entry| entry.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(|v| v.to_ascii_lowercase()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        if version_filter.is_some() && !versions.iter().any(|v| *v == game_version_lc) {
+            continue;
+        }
+        if loader_filter.is_some() && !versions.iter().any(|v| *v == loader_lc) {
+            continue;
+        }
+        candidates.push(file.clone());
+    }
+    let best = candidates.iter().max_by_key(|file| {
+        let release = file.get("releaseType").and_then(|v| v.as_i64()).unwrap_or(3);
+        let rank = if release == 1 { 2 } else if release == 2 { 1 } else { 0 };
+        let id = file.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+        (rank, id)
+    })?;
+    let file_id = best.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+    let file_name = best
+        .get("fileName")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let size = best.get("fileLength").and_then(|v| v.as_u64()).unwrap_or(0);
+    (file_id > 0 && !file_name.is_empty() && size > 0).then_some((file_id, file_name, size))
+}
+
 async fn curseforge_best_file(
     client: &reqwest::Client,
     project_id: i64,
@@ -3967,89 +4744,25 @@ async fn curseforge_best_file(
         (None, Some(mod_loader_type)),
         (None, None),
     ];
+    let mut last_error = None;
     for (version, loader_type) in attempts {
-        let mut url = reqwest::Url::parse(&format!(
-            "{CURSEFORGE_API_BASE}/mods/{project_id}/files"
-        ))
-        .map_err(|error| LauncherError::storage(error.to_string()))?;
-        {
-            let mut query = url.query_pairs_mut();
-            query.append_pair("pageSize", "50");
-            if let Some(value) = version {
-                query.append_pair("gameVersion", value);
-            }
-            if let Some(value) = loader_type {
-                query.append_pair("modLoaderType", &value.to_string());
-            }
-        }
-        let response = send_download_request(client, &url, None)
-            .await?
-            .error_for_status()
-            .map_err(|error| LauncherError::storage(format!("CurseForge 文件列表错误：{error}")))?;
-        if response
-            .content_length()
-            .is_some_and(|length| length > 4 * 1024 * 1024)
-        {
-            return Err(LauncherError::validation("CurseForge 文件列表超过安全限制。"));
-        }
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|error| LauncherError::storage(error.to_string()))?;
-        if bytes.len() > 4 * 1024 * 1024 {
-            return Err(LauncherError::validation("CurseForge 文件列表超过安全限制。"));
-        }
-        let value: serde_json::Value = serde_json::from_slice(&bytes)
-            .map_err(|error| LauncherError::storage(format!("CurseForge 文件列表无效：{error}")))?;
-        let files = value
-            .get("data")
-            .and_then(|entry| entry.as_array())
-            .cloned()
-            .unwrap_or_default();
-        let game_version_lc = game_version.to_ascii_lowercase();
-        let loader_lc = loader.to_ascii_lowercase();
-        let mut candidates = Vec::new();
-        for file in &files {
-            let versions: Vec<String> = file
-                .get("gameVersions")
-                .and_then(|entry| entry.as_array())
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(|item| item.as_str().map(|v| v.to_ascii_lowercase()))
-                        .collect()
-                })
-                .unwrap_or_default();
-            if version.is_some() && !versions.iter().any(|v| *v == game_version_lc) {
-                continue;
-            }
-            if loader_type.is_some() && !versions.iter().any(|v| *v == loader_lc) {
-                continue;
-            }
-            candidates.push(file.clone());
-        }
-        let best = candidates.iter().max_by_key(|file| {
-            let release = file.get("releaseType").and_then(|v| v.as_i64()).unwrap_or(3);
-            let rank = if release == 1 { 2 } else if release == 2 { 1 } else { 0 };
-            let id = file.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
-            (rank, id)
-        });
-        if let Some(file) = best {
-            let file_id = file.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
-            let file_name = file
-                .get("fileName")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
-            let size = file.get("fileLength").and_then(|v| v.as_u64()).unwrap_or(0);
-            if file_id > 0 && !file_name.is_empty() && size > 0 {
-                return Ok((file_id, file_name, size));
+        for base in [CURSEFORGE_API_BASE, CURSEFORGE_PROXY_BASE] {
+            match fetch_curseforge_files_page(client, base, project_id, version, loader_type).await
+            {
+                Ok(files) => {
+                    if let Some(candidate) =
+                        select_best_curseforge_file(&files, game_version, loader, version, loader_type)
+                    {
+                        return Ok(candidate);
+                    }
+                }
+                Err(error) => last_error = Some(error),
             }
         }
     }
-    Err(LauncherError::validation(
-        "CurseForge 没有找到与该实例兼容的文件。",
-    ))
+    Err(last_error.unwrap_or_else(|| {
+        LauncherError::validation("CurseForge 没有找到与该实例兼容的文件。")
+    }))
 }
 
 async fn resolve_curseforge_dependency(
@@ -4174,6 +4887,72 @@ async fn install_curseforge_url(
         )
     })?;
     install_curseforge_ids(&app, instance_id, project_id, file_id).await
+}
+
+#[tauri::command]
+async fn install_curseforge_project(
+    app: AppHandle,
+    instance_id: i64,
+    project_id: String,
+    game_version: String,
+    loader: String,
+) -> Result<ContentItem, LauncherError> {
+    let project_id = project_id.trim();
+    if project_id.is_empty()
+        || project_id.len() > 16
+        || !project_id.chars().all(|character| character.is_ascii_digit())
+    {
+        return Err(LauncherError::validation("CurseForge 项目标识无效。"));
+    }
+    validate_instance_field(&game_version, 64)?;
+    validate_loader_type(&loader)?;
+    let project_id: i64 = project_id
+        .parse()
+        .map_err(|_| LauncherError::validation("CurseForge 项目标识无效。"))?;
+    let client = shared_download_client()?;
+    let (file_id, _, _) =
+        curseforge_best_file(&client, project_id, &game_version, &loader).await?;
+    install_curseforge_ids(&app, instance_id, project_id, file_id).await
+}
+
+#[tauri::command]
+async fn download_curseforge_modpack(
+    app: AppHandle,
+    instance_id: i64,
+    project_id: String,
+    game_version: String,
+    loader: String,
+) -> Result<String, LauncherError> {
+    let project_id = project_id.trim();
+    if project_id.is_empty()
+        || project_id.len() > 16
+        || !project_id.chars().all(|character| character.is_ascii_digit())
+    {
+        return Err(LauncherError::validation("CurseForge 项目标识无效。"));
+    }
+    validate_instance_field(&game_version, 64)?;
+    let loader = if loader.trim().is_empty() {
+        "forge".to_string()
+    } else {
+        loader.trim().to_string()
+    };
+    validate_loader_type(&loader)?;
+    let project_id: i64 = project_id
+        .parse()
+        .map_err(|_| LauncherError::validation("CurseForge 项目标识无效。"))?;
+    let client = shared_download_client()?;
+    let (file_id, file_name, size) =
+        curseforge_best_file(&client, project_id, &game_version, &loader).await?;
+    validate_instance_field(&file_name, 240)?;
+    let cache_dir = launcher_data_directory()?
+        .join("cache")
+        .join("curseforge")
+        .join("modpacks");
+    let target = cache_dir
+        .join(format!("{project_id}-{file_id}"))
+        .join(&file_name);
+    download_curseforge_file(&app, instance_id, project_id, file_id, size, &target).await?;
+    Ok(target.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -8810,6 +9589,13 @@ fn build_vanilla_launch_arguments(
     Ok(arguments)
 }
 
+fn append_server_join_arguments(arguments: &mut Vec<String>, address: &str, port: u16) {
+    arguments.push("--server".into());
+    arguments.push(address.to_string());
+    arguments.push("--port".into());
+    arguments.push(port.to_string());
+}
+
 #[tauri::command]
 async fn launch_instance(
     app: AppHandle,
@@ -9029,10 +9815,7 @@ async fn launch_instance(
         arguments.insert(0, javaagent);
     }
     if let Some(address) = &server_address {
-        arguments.push("--server".into());
-        arguments.push(address.clone());
-        arguments.push("--port".into());
-        arguments.push(server_port.unwrap_or(25565).to_string());
+        append_server_join_arguments(&mut arguments, address, server_port.unwrap_or(25565));
     }
     if get_settings(app.clone())?.backup_worlds_before_launch {
         let _ = backup_instance_worlds(instance_id, &game)?;
@@ -9333,8 +10116,10 @@ pub fn run() {
             add_server,
             update_server,
             remove_server,
-            touch_server_connection,
             ping_server,
+            list_modpack_archives,
+            record_modpack_archive,
+            remove_modpack_archive,
             list_instances,
             boot_health_check,
             create_vanilla_instance,
@@ -9361,8 +10146,11 @@ pub fn run() {
             inspect_mod_jar,
             inspect_modpack,
             search_modrinth_projects,
+            search_curseforge_projects,
             install_modrinth_mod,
             install_curseforge_url,
+            install_curseforge_project,
+            download_curseforge_modpack,
             check_mod_updates,
             update_modrinth_mod,
             install_modrinth_modpack,
@@ -9577,6 +10365,14 @@ mod tests {
             )
             .unwrap();
         assert_eq!(server_count, 1);
+        let archive_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='modpack_archives'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(archive_count, 1);
         connection
             .execute(
                 "INSERT INTO accounts (account_type, display_name, created_at) VALUES ('EXTERNAL', 'Alex', '1')",
@@ -10094,5 +10890,60 @@ side="BOTH"
         assert!(normalize_authlib_api_root("http://127.0.0.1/api").is_ok());
         assert!(normalize_authlib_api_root("http://example.com/api").is_err());
         assert!(normalize_authlib_api_root("ftp://example.com").is_err());
+    }
+
+    #[test]
+    fn server_join_arguments_are_appended_in_order() {
+        let mut arguments = vec!["-Xmx4096M".to_string()];
+        append_server_join_arguments(&mut arguments, "play.example.com", 25565);
+        assert_eq!(
+            arguments,
+            vec![
+                "-Xmx4096M",
+                "--server",
+                "play.example.com",
+                "--port",
+                "25565"
+            ]
+        );
+    }
+
+    #[test]
+    fn ping_server_reports_local_reachable_and_refused() {
+        tauri::async_runtime::block_on(async {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let reachable = ping_server("127.0.0.1".into(), port).await.unwrap();
+            assert!(reachable.reachable, "本机监听端口应可连接");
+            drop(listener);
+            let refused = ping_server("127.0.0.1".into(), port).await.unwrap();
+            assert!(!refused.reachable, "已关闭端口应连接失败");
+        });
+    }
+
+    #[test]
+    #[ignore = "联网下载 authlib-injector 真实组件"]
+    fn authlib_injector_download_live() {
+        tauri::async_runtime::block_on(async {
+            let path = ensure_authlib_injector().await.expect("应能下载并校验");
+            let metadata = std::fs::metadata(&path).expect("文件应存在");
+            assert!(metadata.len() >= AUTHLIB_INJECTOR_MIN_BYTES);
+        });
+    }
+
+    #[test]
+    #[ignore = "联网测试 CurseForge 搜索代理"]
+    fn curseforge_search_proxy_live() {
+        tauri::async_runtime::block_on(async {
+            let projects =
+                search_curseforge_projects("create".into(), "mod".into(), None, None)
+                    .await
+                    .expect("应能通过代理搜索 CurseForge");
+            assert!(!projects.is_empty(), "应返回搜索结果");
+            assert!(
+                projects.iter().all(|project| project.source == "curseforge"),
+                "来源应标记为 curseforge"
+            );
+        });
     }
 }

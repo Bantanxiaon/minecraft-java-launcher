@@ -54,6 +54,7 @@ export function ServersPage({
   const [port, setPort] = useState(String(DEFAULT_PORT));
   const [description, setDescription] = useState("");
   const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState("");
   const [pings, setPings] = useState<Record<number, PingState>>({});
   const [joinInstanceId, setJoinInstanceId] = useState<number | undefined>(
     selectedInstanceId,
@@ -78,6 +79,7 @@ export function ServersPage({
     setAddress("");
     setPort(String(DEFAULT_PORT));
     setDescription("");
+    setFormError("");
     setFormOpen(true);
   }
 
@@ -87,6 +89,7 @@ export function ServersPage({
     setAddress(server.address);
     setPort(String(server.port));
     setDescription(server.description);
+    setFormError("");
     setFormOpen(true);
   }
 
@@ -94,12 +97,10 @@ export function ServersPage({
     const parsedPort = Number(port);
     if (!name.trim() || !address.trim()) return;
     if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
-      setPings((existing) => ({
-        ...existing,
-        form: { checking: false, result: { reachable: false, error: "端口须为 1–65535。" } },
-      }));
+      setFormError("端口须为 1–65535。");
       return;
     }
+    setFormError("");
     setSaving(true);
     try {
       if (editing) {
@@ -238,6 +239,7 @@ export function ServersPage({
               取消
             </button>
           </div>
+          {formError ? <p className="pack-warning">{formError}</p> : null}
         </section>
       ) : null}
 

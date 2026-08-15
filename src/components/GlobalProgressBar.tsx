@@ -2,16 +2,25 @@ type GlobalProgressBarProps = {
   visible: boolean;
   message: string;
   progress?: number;
+  onClick?: () => void;
 };
 
 export function GlobalProgressBar({
   visible,
   message,
   progress,
+  onClick,
 }: GlobalProgressBarProps) {
   if (!visible) return null;
   return (
-    <div className="global-progress-bar" role="status" aria-live="polite">
+    <button
+      className="global-progress-bar"
+      type="button"
+      role="status"
+      aria-live="polite"
+      title="点击查看下载详情"
+      onClick={onClick}
+    >
       <div className="global-progress-copy">
         <span className="global-progress-message">{message || "正在处理…"}</span>
         {progress !== undefined ? (
@@ -34,6 +43,6 @@ export function GlobalProgressBar({
           }
         />
       </div>
-    </div>
+    </button>
   );
 }

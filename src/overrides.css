@@ -2229,6 +2229,193 @@ nav button.active svg { color:#3b8d40; }
   color: #fff;
 }
 
+/* 全局进度条按钮化 */
+button.global-progress-bar {
+  border: none;
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+
+button.global-progress-bar:hover {
+  background: rgba(250, 252, 250, .98);
+}
+
+/* 下载详情弹窗列表 */
+.download-detail-list {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.download-detail-row {
+  display: grid;
+  gap: 8px;
+  padding: 13px 14px;
+  border: 1px solid #e4e8ea;
+  border-radius: 12px;
+  background: #fafcfa;
+}
+
+.download-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.download-detail-head strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #24313b;
+  font-size: 13.5px;
+}
+
+.job-status {
+  flex: 0 0 auto;
+  font-style: normal;
+  font-size: 11.5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #eef3f6;
+  color: #5f6b77;
+}
+
+.job-status.downloading {
+  background: #e8f3ea;
+  color: #2f7c35;
+}
+
+.job-status.verified {
+  background: #e8f3ea;
+  color: #2f7c35;
+}
+
+.job-status.failed {
+  background: #fbeae8;
+  color: #b04a42;
+}
+
+.download-detail-row .download-detail-progress {
+  margin-bottom: 4px;
+  height: 8px;
+  border-radius: 99px;
+  background: #e6ece7;
+  overflow: hidden;
+}
+
+.download-detail-row .global-progress-fill {
+  height: 100%;
+}
+
+.download-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 12px;
+  color: #5f6b77;
+  font-variant-numeric: tabular-nums;
+}
+
+.download-detail-empty {
+  margin: 0 0 16px;
+  color: #7b8592;
+  font-size: 13px;
+}
+
+.download-detail-row .download-detail-error {
+  margin: 2px 0 0;
+  padding: 8px 10px;
+}
+
+.download-detail-row .download-detail-error p {
+  margin: 0;
+}
+
+.download-detail-close {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  border: none;
+  background: transparent;
+  color: #7b8592;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* 整合包库列表 */
+.pack-archive-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid #e4e8ea;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.pack-archive-row > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 220px;
+  flex: 1 1 280px;
+}
+
+.pack-archive-row strong {
+  color: #24313b;
+  font-size: 13.5px;
+}
+
+.pack-archive-row small {
+  color: #7b8592;
+  font-size: 12px;
+}
+
+.pack-archive-row > span {
+  font-size: 12px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: #eef3f6;
+  color: #5f6b77;
+}
+
+.pack-archive-row > span.enabled {
+  background: #eaf6ec;
+  color: #2f7c35;
+}
+
+.pack-archive-row > span.disabled {
+  background: #fdf2f1;
+  color: #b04a42;
+}
+
+.pack-archive-row button {
+  border: 1px solid #dfe4e8;
+  border-radius: 8px;
+  background: #fff;
+  color: #44505c;
+  padding: 7px 11px;
+  font-size: 12.5px;
+}
+
+.pack-archive-row button.primary {
+  border-color: #4c9a4a;
+  background: #4c9a4a;
+  color: #fff;
+}
+
+.pack-archive-row button.danger {
+  border-color: #ead7d7;
+  color: #a34d4d;
+}
+
 @media (max-width: 900px) {
   .download-detail-grid {
     grid-template-columns: 1fr;
