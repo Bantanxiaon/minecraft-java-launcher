@@ -31,6 +31,15 @@ import { ServersPage } from "./pages/ServersPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { InstanceLibraryPage } from "./pages/InstanceLibraryPage";
 import { HomeUpdateCard } from "./components/HomeUpdateCard";
+import { SplashScreen } from "./components/SplashScreen";
+import { checkForUpdate, updaterEnabled } from "./updater";
+import type { Update } from "./updater";
+import type {
+  BootHealthReport,
+  BootStep,
+  BootStepKey,
+} from "./types/splash";
+import packageJson from "../package.json";
 import {
   ArchiveContentPage,
   ComingSoonPage,
@@ -71,6 +80,20 @@ import {
 } from "lucide-react";
 import "./App.css";
 import "./overrides.css";
+
+const APP_VERSION = packageJson.version;
+
+function deriveProgress(steps: BootStep[]) {
+  if (!steps.length) return 0;
+  const weight = 100 / steps.length;
+  return steps.reduce((total, step) => {
+    if (step.state === "done" || step.state === "warn" || step.state === "error") {
+      return total + weight;
+    }
+    if (step.state === "running") return total + weight * 0.55;
+    return total;
+  }, 0);
+}
 
 function DesktopTitleBar() {
   const runWindowAction = async (
@@ -142,6 +165,23 @@ export default function App() {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [booting, setBooting] = useState(true);
+  const [splashFinishing, setSplashFinishing] = useState(false);
+  const [bootProgress, setBootProgress] = useState(0);
+  const [bootSteps, setBootSteps] = useState<BootStep[]>([
+    { key: "game", label: "游戏文件检查", detail: "", state: "pending" },
+    { key: "instances", label: "游戏库检查", detail: "", state: "pending" },
+    { key: "mods", label: "模组与整合包检查", detail: "", state: "pending" },
+    { key: "java", label: "Java 环境检测", detail: "", state: "pending" },
+    { key: "settings", label: "账户与设置", detail: "", state: "pending" },
+    { key: "update", label: "启动器更新检查", detail: "", state: "pending" },
+  ]);
+  const [bootUpdate, setBootUpdate] = useState<Update | null | undefined>(
+    undefined,
+  );
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateCheckError, setUpdateCheckError] = useState(false);
+  const bootCancelledRef = useRef(false);
   const [activeNav, setActiveNav] = useState("主页");
   const activeNavRef = useRef(activeNav);
   const [showInstanceForm, setShowInstanceForm] = useState(false);
@@ -196,35 +236,191 @@ export default function App() {
     activeNavRef.current = activeNav;
   }, [activeNav]);
 
+  const applyStep = (key: BootStepKey, patch: Partial<BootStep>) => {
+    setBootSteps((current) =>
+      current.map((step) => (step.key === key ? { ...step, ...patch } : step)),
+    );
+  };
+
   useEffect(() => {
-    if (!isTauri()) return;
-    Promise.all([
+    setBootProgress(deriveProgress(bootSteps));
+  }, [bootSteps]);
+
+  useEffect(() => {
+    if (!isTauri()) {
+      setBooting(false);
+      return;
+    }
+    let cancelled = false;
+    const wait = (ms: number) =>
+      new Promise<void>((resolve) => setTimeout(resolve, ms));
+    void (async () => {
+      const startedAt = Date.now();
+      const MIN_SPLASH_MS = 1700;
+      try {
+        await runBootChecks();
+      } finally {
+        const remaining = Math.max(0, MIN_SPLASH_MS - (Date.now() - startedAt));
+        await wait(remaining);
+        if (cancelled) return;
+        setSplashFinishing(true);
+        await wait(480);
+        if (cancelled) return;
+        setBooting(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      bootCancelledRef.current = true;
+    };
+    // 启动检查只执行一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function runBootChecks() {
+    for (const key of ["game", "instances", "mods", "java", "settings"] as BootStepKey[]) {
+      applyStep(key, { state: "running", detail: "检查中…" });
+    }
+    applyStep("update", { state: "running", detail: "连接更新服务…" });
+
+    const [
+      accountsResult,
+      instancesResult,
+      javaResult,
+      settingsResult,
+      loginResult,
+      healthResult,
+    ] = await Promise.allSettled([
       invoke<Account[]>("list_accounts"),
       invoke<Instance[]>("list_instances"),
       invoke<JavaRuntime[]>("detect_java_runtimes"),
       invoke<LauncherSettings>("get_settings"),
       invoke<boolean>("microsoft_login_available"),
-    ])
-      .then(([savedAccounts, savedInstances, detectedJava, savedSettings, loginAvailable]) => {
-        setAccounts(savedAccounts);
-        setSelectedAccountId(savedAccounts[0]?.id);
-        setInstances(savedInstances);
-        setJavaRuntimes(detectedJava);
-        setSelectedJavaPath(
-          detectedJava.find((runtime) => runtime.is64Bit)?.path,
-        );
-        setSettings(savedSettings);
-        setMicrosoftLoginAvailable(loginAvailable);
-        setModInstanceId(savedInstances[0]?.id);
-        setSelectedInstanceId(
-          savedInstances.find((instance) => instance.status === "ready")?.id ??
-            savedInstances[0]?.id,
-        );
-      })
-      .catch((error: unknown) =>
-        setMessage(errorText(error, "无法读取本地数据。")),
+      invoke<BootHealthReport>("boot_health_check"),
+    ]);
+
+    if (accountsResult.status === "fulfilled") {
+      const savedAccounts = accountsResult.value;
+      setAccounts(savedAccounts);
+      setSelectedAccountId(savedAccounts[0]?.id);
+    } else {
+      setMessage(errorText(accountsResult.reason, "无法读取账户。"));
+    }
+
+    if (instancesResult.status === "fulfilled") {
+      const savedInstances = instancesResult.value;
+      setInstances(savedInstances);
+      setModInstanceId(savedInstances[0]?.id);
+      setSelectedInstanceId(
+        savedInstances.find((instance) => instance.status === "ready")?.id ??
+          savedInstances[0]?.id,
       );
-  }, []);
+    } else {
+      setMessage(errorText(instancesResult.reason, "无法读取游戏库。"));
+    }
+
+    if (javaResult.status === "fulfilled") {
+      const detectedJava = javaResult.value;
+      setJavaRuntimes(detectedJava);
+      setSelectedJavaPath(
+        detectedJava.find((runtime) => runtime.is64Bit)?.path,
+      );
+    }
+
+    if (settingsResult.status === "fulfilled") {
+      setSettings(settingsResult.value);
+    } else {
+      setMessage(errorText(settingsResult.reason, "无法读取设置。"));
+    }
+
+    if (loginResult.status === "fulfilled") {
+      setMicrosoftLoginAvailable(loginResult.value);
+    }
+
+    if (healthResult.status === "fulfilled") {
+      const report = healthResult.value;
+      const totalCount = report.instances.length;
+      const readyCount = report.instances.filter(
+        (instance) => instance.status === "ready",
+      ).length;
+      applyStep("game", {
+        state: "done",
+        detail: `${totalCount} 个配置 · ${readyCount} 个就绪`,
+      });
+      applyStep("instances", {
+        state: "done",
+        detail: `${totalCount} 个实例已载入`,
+      });
+      const modCount = report.mods.reduce(
+        (sum, item) => sum + item.modCount,
+        0,
+      );
+      const missingCount = report.mods.reduce(
+        (sum, item) => sum + item.missingDependencies.length,
+        0,
+      );
+      applyStep("mods", {
+        state: missingCount > 0 ? "warn" : "done",
+        detail:
+          missingCount > 0
+            ? `共 ${modCount} 个模组 · ${missingCount} 个缺失前置`
+            : `共 ${modCount} 个模组 · 前置完整`,
+      });
+      applyStep("java", {
+        state: report.java.has64Bit ? "done" : "warn",
+        detail: report.java.has64Bit
+          ? `已找到 64 位 Java${report.java.recommendedMajor ? ` ${report.java.recommendedMajor}` : ""}`
+          : "未找到 64 位 Java，可在设置安装",
+      });
+    } else {
+      for (const key of ["game", "instances", "mods", "java"] as BootStepKey[]) {
+        applyStep(key, { state: "error", detail: "检查失败" });
+      }
+      if (healthResult.status === "rejected") {
+        setMessage(errorText(healthResult.reason, "无法读取本地数据。"));
+      }
+    }
+
+    applyStep("settings", {
+      state:
+        accountsResult.status === "fulfilled" &&
+        settingsResult.status === "fulfilled"
+          ? "done"
+          : "warn",
+      detail: `${
+        accountsResult.status === "fulfilled"
+          ? `${accountsResult.value.length} 个账户`
+          : "账户读取失败"
+      } · 设置${
+        settingsResult.status === "fulfilled" ? "已载入" : "读取失败"
+      }`,
+    });
+
+    if (!isTauri() || !updaterEnabled) {
+      applyStep("update", { state: "done", detail: "当前版本已是最新" });
+      return;
+    }
+    setUpdateChecking(true);
+    try {
+      const found = await checkForUpdate(12_000);
+      if (bootCancelledRef.current) return;
+      setBootUpdate(found ?? null);
+      applyStep("update", {
+        state: "done",
+        detail: found ? `发现新版本 v${found.version}` : "已是最新版本",
+      });
+    } catch {
+      if (bootCancelledRef.current) return;
+      setUpdateCheckError(true);
+      setBootUpdate(null);
+      applyStep("update", {
+        state: "warn",
+        detail: "暂时无法连接更新服务",
+      });
+    } finally {
+      setUpdateChecking(false);
+    }
+  }
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -1601,6 +1797,14 @@ export default function App() {
   return (
     <div className="app-frame">
       <DesktopTitleBar />
+      {booting ? (
+        <SplashScreen
+          steps={bootSteps}
+          progress={bootProgress}
+          version={APP_VERSION}
+          finishing={splashFinishing}
+        />
+      ) : null}
       <main className="shell">
       <aside>
         <div className="brand">
@@ -1659,7 +1863,11 @@ export default function App() {
                 并检查文件是否完整；请使用你合法取得的游戏许可。
               </span>
             </section>
-            <HomeUpdateCard />
+            <HomeUpdateCard
+              update={bootUpdate}
+              checking={updateChecking}
+              checkError={updateCheckError}
+            />
             <div className="layout">
               <section className="hero">
                 <div className="instance-icon"><img src={grassBlock} alt="" /></div>

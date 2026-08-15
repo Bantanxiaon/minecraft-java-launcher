@@ -1,11 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { isTauri } from "@tauri-apps/api/core";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { check, type Update } from "@tauri-apps/plugin-updater";
+import type { Update } from "@tauri-apps/plugin-updater";
 import { Download, Sparkles, X } from "lucide-react";
-
-const updaterEnabled = import.meta.env.VITE_SH_UPDATES_ENABLED === "true";
-const LAST_UPDATE_KEY = "sh-launcher-last-update";
+import { LAST_UPDATE_KEY } from "../updater";
 
 type LastUpdate = {
   version: string;
@@ -13,13 +10,20 @@ type LastUpdate = {
   at: string;
 };
 
-export function HomeUpdateCard() {
+type HomeUpdateCardProps = {
+  update?: Update | null;
+  checking?: boolean;
+  checkError?: boolean;
+};
+
+export function HomeUpdateCard({
+  update,
+  checking = false,
+  checkError = false,
+}: HomeUpdateCardProps) {
   const pendingUpdate = useRef<Update | null>(null);
-  const [update, setUpdate] = useState<Update>();
-  const [checking, setChecking] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [progress, setProgress] = useState<number>();
-  const [status, setStatus] = useState<string>();
   const [lastUpdate, setLastUpdate] = useState<LastUpdate>();
   const [showChangelog, setShowChangelog] = useState(false);
 
@@ -36,32 +40,23 @@ export function HomeUpdateCard() {
     } catch {
       localStorage.removeItem(LAST_UPDATE_KEY);
     }
-    if (!isTauri() || !updaterEnabled) return;
-    let cancelled = false;
-    setChecking(true);
-    void check({ timeout: 20_000 })
-      .then((found) => {
-        if (cancelled) return;
-        setUpdate(found ?? undefined);
-        setStatus(found ? "发现新版本" : "当前已是最新版本");
-      })
-      .catch(() => {
-        if (!cancelled) setStatus("暂时无法连接更新服务");
-      })
-      .finally(() => {
-        if (!cancelled) setChecking(false);
-      });
     return () => {
-      cancelled = true;
       void pendingUpdate.current?.close();
     };
   }, []);
+
+  const statusText = checking
+    ? "正在检查更新…"
+    : checkError
+      ? "暂时无法连接更新服务"
+      : update
+        ? "发现新版本"
+        : "当前已是最新版本";
 
   async function installUpdate() {
     const target = update ?? pendingUpdate.current;
     if (!target || installing) return;
     setInstalling(true);
-    setStatus("正在下载并验证更新…");
     let downloaded = 0;
     let total: number | undefined;
     try {
@@ -71,7 +66,10 @@ export function HomeUpdateCard() {
           setProgress(total ? 0 : undefined);
         } else if (event.event === "Progress") {
           downloaded += event.data.chunkLength;
-          if (total) setProgress(Math.min(100, Math.round(downloaded * 100 / total)));
+          if (total)
+            setProgress(
+              Math.min(100, Math.round((downloaded * 100) / total)),
+            );
         } else {
           setProgress(100);
         }
@@ -84,10 +82,8 @@ export function HomeUpdateCard() {
           at: new Date().toISOString(),
         } satisfies LastUpdate),
       );
-      setStatus("更新已安装，正在重新打开启动器…");
       await relaunch();
     } catch {
-      setStatus("更新没有安装成功，旧版本仍可正常使用。");
       setInstalling(false);
     }
   }
@@ -101,7 +97,12 @@ export function HomeUpdateCard() {
   return (
     <>
       {showChangelog && lastUpdate ? (
-        <div className="update-modal-backdrop" role="dialog" aria-modal="true" aria-label="更新完成">
+        <div
+          className="update-modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="更新完成"
+        >
           <div className="update-modal">
             <button
               className="update-modal-close"
@@ -124,7 +125,11 @@ export function HomeUpdateCard() {
                     .map((line, index) => <p key={index}>{line}</p>)
                 : <p>本次更新已安装，可以正常使用。</p>}
             </div>
-            <button className="primary" type="button" onClick={dismissChangelog}>
+            <button
+              className="primary"
+              type="button"
+              onClick={dismissChangelog}
+            >
               开始使用
             </button>
           </div>
@@ -138,9 +143,19 @@ export function HomeUpdateCard() {
           </div>
           <div className="home-update-copy">
             <strong>发现新版本 SH启动器 {update.version}</strong>
-            <small>{status === "发现新版本" ? "点击立即更新，游戏和存档不会受影响。" : status}</small>
+            <small>
+              {statusText === "发现新版本"
+                ? "点击立即更新，游戏和存档不会受影响。"
+                : statusText}
+            </small>
             {update.body ? (
-              <p className="home-update-notes">{update.body.split(/\r?\n/).filter(Boolean).slice(0, 3).join(" · ")}</p>
+              <p className="home-update-notes">
+                {update.body
+                  .split(/\r?\n/)
+                  .filter(Boolean)
+                  .slice(0, 3)
+                  .join(" · ")}
+              </p>
             ) : null}
           </div>
           <button

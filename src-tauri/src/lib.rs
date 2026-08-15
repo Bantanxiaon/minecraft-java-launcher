@@ -3851,6 +3851,144 @@ fn list_instances(app: AppHandle) -> Result<Vec<Instance>, LauncherError> {
     Ok(instances)
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BootJavaCheck {
+    detected_count: usize,
+    has_64_bit: bool,
+    recommended_major: Option<u32>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BootInstanceCheck {
+    id: i64,
+    name: String,
+    game_version: String,
+    loader_type: String,
+    status: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BootModsSummary {
+    instance_id: i64,
+    mod_count: usize,
+    missing_dependencies: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BootHealthReport {
+    java: BootJavaCheck,
+    instances: Vec<BootInstanceCheck>,
+    mods: Vec<BootModsSummary>,
+}
+
+fn scan_boot_mods(
+    instance_id: i64,
+    root_path: &str,
+    loader_type: &str,
+) -> BootModsSummary {
+    let mut inspections = Vec::new();
+    if loader_type != "vanilla" {
+        let mods = PathBuf::from(root_path).join(".minecraft").join("mods");
+        if let Ok(entries) = fs::read_dir(&mods) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|value| value.eq_ignore_ascii_case("jar"))
+                {
+                    if let Ok(inspection) = inspect_mod_jar_path(&path) {
+                        inspections.push(inspection);
+                    }
+                }
+            }
+        }
+    }
+    let mod_count = inspections.len();
+    let installed_ids = inspections
+        .iter()
+        .filter_map(|inspection| inspection.mod_id.as_deref())
+        .map(|id| id.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+    let provided = [
+        "minecraft",
+        "java",
+        "fabricloader",
+        "fabric-loader",
+        "quilt_loader",
+        "quilt-loader",
+        "forge",
+        "neoforge",
+    ];
+    let missing = inspections
+        .iter()
+        .flat_map(|inspection| inspection.dependencies.iter())
+        .map(|id| id.to_ascii_lowercase())
+        .filter(|id| !provided.contains(&id.as_str()) && !installed_ids.contains(id))
+        .collect::<BTreeSet<_>>();
+    BootModsSummary {
+        instance_id,
+        mod_count,
+        missing_dependencies: missing.into_iter().collect(),
+    }
+}
+
+#[tauri::command]
+fn boot_health_check(app: AppHandle) -> Result<BootHealthReport, LauncherError> {
+    let connection = open_database(&app)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT id, name, root_path, game_version, loader_type, status FROM instances ORDER BY id DESC",
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let mut instances = Vec::new();
+    let mut mods = Vec::new();
+    for row in rows {
+        let (id, name, root_path, game_version, loader_type, status) = row
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        instances.push(BootInstanceCheck {
+            id,
+            name,
+            game_version: game_version.clone(),
+            loader_type: loader_type.clone(),
+            status,
+        });
+        mods.push(scan_boot_mods(id, &root_path, &loader_type));
+    }
+    let runtimes = detect_java_runtimes();
+    let has_64_bit = runtimes.iter().any(|runtime| runtime.is_64_bit);
+    let recommended_major = runtimes
+        .iter()
+        .filter(|runtime| runtime.is_64_bit)
+        .filter_map(|runtime| runtime.major_version)
+        .max();
+    Ok(BootHealthReport {
+        java: BootJavaCheck {
+            detected_count: runtimes.len(),
+            has_64_bit,
+            recommended_major,
+        },
+        instances,
+        mods,
+    })
+}
+
 #[tauri::command]
 fn create_vanilla_instance(
     app: AppHandle,
@@ -6718,6 +6856,7 @@ pub fn run() {
             microsoft_login_available,
             remove_account,
             list_instances,
+            boot_health_check,
             create_vanilla_instance,
             create_instance_profile,
             rename_instance,
@@ -6774,6 +6913,17 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn boot_mods_scan_is_quiet_for_missing_folders() {
+        let vanilla = scan_boot_mods(1, "C:/definitely/missing/instance", "vanilla");
+        assert_eq!(vanilla.mod_count, 0);
+        assert!(vanilla.missing_dependencies.is_empty());
+
+        let fabric = scan_boot_mods(2, "C:/definitely/missing/instance", "fabric");
+        assert_eq!(fabric.mod_count, 0);
+        assert!(fabric.missing_dependencies.is_empty());
+    }
 
     #[test]
     #[ignore = "calls the live Modrinth API"]
