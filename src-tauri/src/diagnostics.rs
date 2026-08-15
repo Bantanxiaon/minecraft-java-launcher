@@ -18,6 +18,7 @@ pub(crate) struct DownloadJobView {
     status: String,
     error: Option<String>,
     recovery_action: Option<String>,
+    expected_hash: Option<String>,
     created_at: String,
     started_at: Option<String>,
     updated_at: Option<String>,
@@ -166,7 +167,7 @@ pub(crate) fn read_game_log(
 #[tauri::command]
 pub(crate) fn list_download_jobs(app: AppHandle) -> Result<Vec<DownloadJobView>, LauncherError> {
     let connection = open_database(&app)?;
-    let mut statement = connection.prepare("SELECT id,source_url,target_path,progress_bytes,total_bytes,retry_count,status,error,recovery_action,created_at,started_at,updated_at,bytes_per_second,eta_seconds FROM download_jobs ORDER BY id DESC LIMIT 100").map_err(|error| LauncherError::storage(error.to_string()))?;
+    let mut statement = connection.prepare("SELECT id,source_url,target_path,progress_bytes,total_bytes,retry_count,status,error,recovery_action,expected_hash,created_at,started_at,updated_at,bytes_per_second,eta_seconds FROM download_jobs ORDER BY id DESC LIMIT 100").map_err(|error| LauncherError::storage(error.to_string()))?;
     let rows = statement
         .query_map([], |row| {
             Ok(DownloadJobView {
@@ -179,11 +180,12 @@ pub(crate) fn list_download_jobs(app: AppHandle) -> Result<Vec<DownloadJobView>,
                 status: row.get(6)?,
                 error: row.get(7)?,
                 recovery_action: row.get(8)?,
-                created_at: row.get(9)?,
-                started_at: row.get(10)?,
-                updated_at: row.get(11)?,
-                bytes_per_second: row.get(12)?,
-                eta_seconds: row.get(13)?,
+                expected_hash: row.get(9)?,
+                created_at: row.get(10)?,
+                started_at: row.get(11)?,
+                updated_at: row.get(12)?,
+                bytes_per_second: row.get(13)?,
+                eta_seconds: row.get(14)?,
             })
         })
         .map_err(|error| LauncherError::storage(error.to_string()))?;

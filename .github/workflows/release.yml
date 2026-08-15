@@ -32,7 +32,8 @@ jobs:
       - name: 写入当前 GitHub 仓库的免费更新地址
         run: node scripts/configure-updater.mjs
 
-      - name: 构建、签名并创建草稿发布
+      - name: 构建、签名并创建发布
+        id: tauri
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -53,5 +54,26 @@ jobs:
           releaseDraft: false
           prerelease: false
           updaterJsonPreferNsis: true
-          includeUpdaterJson: true
+          includeUpdaterJson: false
           args: --bundles nsis
+          assetNamePattern: SHLauncher-{version}-setup.{ext}
+
+      - name: 生成并上传 latest.json
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ steps.tauri.outputs.releaseId }}
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          SIG_FILE="$(ls src-tauri/target/release/bundle/nsis/*.sig | head -n1)"
+          SIGNATURE="$(cat "$SIG_FILE")"
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/SHLauncher-${VERSION}-setup.exe"
+          jq -n --arg version "$VERSION" --arg sig "$SIGNATURE" --arg url "$URL" \
+            '{version:$version, notes:"SH启动器 " + $version, pub_date:(now|todateiso8601), platforms:{"windows-x86_64":{signature:$sig, url:$url}}}' \
+            > latest.json
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data-binary @latest.json \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?name=latest.json"

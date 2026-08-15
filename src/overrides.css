@@ -718,6 +718,7 @@ button:disabled {
   background: #fff;
 }
 .job-list > div,
+.job-list .job-row,
 .crash-list > div {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -726,8 +727,27 @@ button:disabled {
   border-bottom: 1px solid #edf0f2;
 }
 .job-list > div:last-child,
+.job-list .job-row:last-child,
 .crash-list > div:last-child {
   border-bottom: 0;
+}
+.job-list .job-row {
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background .15s ease;
+}
+.job-list .job-row:hover {
+  background: #f4faf5;
+}
+.job-list .job-row:focus-visible {
+  outline: 2px solid #5e8f62;
+  outline-offset: -2px;
 }
 .job-list strong,
 .job-list small,
@@ -1477,4 +1497,114 @@ nav button.active svg { color:#3b8d40; }
   border-radius: 2px;
   background: #6fae76;
   box-shadow: 0 0 5px rgba(111, 174, 118, .55);
+}
+
+/* ============ 下载详情弹窗 ============ */
+.download-detail-modal {
+  width: min(680px, calc(100vw - 64px));
+  max-height: calc(100vh - 90px);
+  overflow-y: auto;
+  position: relative;
+  padding: 26px 28px 24px;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 24px 70px rgba(20, 35, 50, .25);
+  text-align: left;
+}
+
+.download-detail-modal h2 {
+  margin: 0 0 4px;
+  font-size: 22px;
+}
+
+.download-detail-subtitle {
+  margin: 0 0 14px;
+  color: #7b8592;
+  font-size: 12.5px;
+  word-break: break-all;
+}
+
+.download-detail-progress {
+  margin-bottom: 16px;
+  display: grid;
+  gap: 7px;
+}
+
+.download-detail-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #5f6b77;
+}
+
+.download-detail-progress-meta span:first-child {
+  font-weight: 650;
+  color: #2f7c35;
+  font-variant-numeric: tabular-nums;
+}
+
+.download-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 22px;
+  margin: 0 0 16px;
+}
+
+.download-detail-grid > div {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 8px;
+  padding: 9px 0;
+  border-bottom: 1px solid #eef1f3;
+  align-items: baseline;
+}
+
+.download-detail-grid dt {
+  color: #7b8592;
+  font-size: 12px;
+}
+
+.download-detail-grid dd {
+  margin: 0;
+  color: #27323d;
+  font-size: 12.5px;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+
+.download-detail-error {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid #f0d4d0;
+  border-radius: 12px;
+  background: #fdf5f4;
+}
+
+.download-detail-error strong {
+  display: block;
+  color: #a34343;
+  font-size: 13px;
+  margin-bottom: 5px;
+}
+
+.download-detail-error p {
+  margin: 0 0 5px;
+  color: #8a5a52;
+  font-size: 12.5px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.download-detail-error p:last-child {
+  margin-bottom: 0;
+}
+
+.download-detail-modal > button.primary {
+  min-width: 140px;
+}
+
+@media (max-width: 900px) {
+  .download-detail-grid {
+    grid-template-columns: 1fr;
+  }
 }

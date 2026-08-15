@@ -125,6 +125,7 @@ export type DownloadJob = {
   status: string;
   error?: string;
   recoveryAction?: string;
+  expectedHash?: string;
   createdAt: string;
   startedAt?: string;
   updatedAt?: string;
