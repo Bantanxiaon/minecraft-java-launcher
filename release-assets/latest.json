@@ -1,10 +1,10 @@
 {
-  "version": "0.5.11",
-  "notes": "SH启动器 0.5.11",
-  "pub_date": "2026-08-15T15:07:27Z",
+  "version": "0.5.12",
+  "notes": "SH启动器 0.5.12",
+  "pub_date": "2026-08-15T15:25:14Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRNlEzRFNJdU9Sa0NMSTBPZ3kvT1M3ZmE4ajVJN3d4dWRNUnVsM3ZDejhhOFVjYU5jUDRvdFovN2NGT0NkcHFPaHFUaDN2UkYzTXgxS1lDQmZwa2FYQVcwNGhQQ1hGTFFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2ODA2NDQzCWZpbGU6U0jlkK/liqjlmahfMC41LjExX3g2NC1zZXR1cC5leGUKeXZGaURkWnBSQUp5TjIxUW5iVTQyODg3cHc4U1NzZVc4bnRKRDNzamNua3dGS3FWVjg5R294MXVWdzVKc1JLVjJwTU41bE5QV21ZUEFhZ2N2eGw1QlE9PQo=",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRNlEzRFNJdU9Sa0l1NnZFcVA4eEgyTCtCNHlML2JrU1l6TEswRmlseHN4Zkl6Y1czdXhaeWhKNlN6RlFvams0WFU1ZjdoSXlxOTNKYjkxQzN6UThWcGxhRExiK0s0QVFZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2ODA3NTA5CWZpbGU6U0jlkK/liqjlmahfMC41LjEyX3g2NC1zZXR1cC5leGUKOXoxVzVpNy9KVjU1ejNCdlF6MHM2RTd1TlUvazc3ZHZlYllTeUlVQ1c4RGNOVkJqWWhVTkh3RHowdmYzZlBUUFRhNmY5UjlrbFlJYlZlZ01GOHdRQlE9PQo=",
       "url": "https://cdn.jsdelivr.net/gh/Bantanxiaon/minecraft-java-launcher@main/release-assets/SHLauncher-setup.zip"
     }
   }
