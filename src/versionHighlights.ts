@@ -1,4 +1,9 @@
 const HIGHLIGHTS_BY_VERSION: Record<string, string[]> = {
+  "0.5.9": [
+    "启动检查不再被无元数据的库文件（如 kotlinforforge-all）卡住，Forge 本来就会忽略它们",
+    "修复模组把版本要求写成 ${minecraft_version_range} 时误报不支持的问题",
+    "新增合成整合包自动化测试：5 种格式识别 + 依赖解析回归，防止此类问题再犯",
+  ],
   "0.5.8": [
     "前置自动补齐超时放宽：每个依赖 30 秒、整轮 60 秒，网络慢也能完成",
   ],

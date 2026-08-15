@@ -1181,7 +1181,12 @@ fn compare_game_versions(left: &[u64], right: &[u64]) -> std::cmp::Ordering {
 fn game_version_matches(requirement: &str, actual: &str) -> bool {
     use std::cmp::Ordering;
     let requirement = requirement.trim();
-    if requirement.is_empty() || matches!(requirement, "*" | "${minecraft_version}") {
+    if requirement.is_empty()
+        || matches!(
+            requirement,
+            "*" | "${minecraft_version}" | "${minecraft_version_range}"
+        )
+    {
         return true;
     }
     let Some(actual_numbers) = numeric_game_version(actual) else {
@@ -1539,6 +1544,10 @@ fn validate_instance_mods(
         }
         match inspect_mod_jar_path(&path) {
             Ok(inspection) => {
+                if inspection.loader_type == "unknown" {
+                    // 没有模组元数据的 jar（纯库文件等）Forge 会忽略，不参与启动校验
+                    continue;
+                }
                 if let Err(error) = ensure_loader_compatible(loader_type, &inspection.loader_type) {
                     problems.push(format!("{}：{}", inspection.file_name, error.message));
                 } else if let Err(error) = ensure_game_version_compatible(game_version, &inspection)
@@ -3244,16 +3253,15 @@ fn curseforge_match_score(dep: &str, name: &str, slug: &str, file_name: &str) ->
             return 85;
         }
     }
-    if name == dep || slug == dep {
+    if (!name.is_empty() && name == dep) || (!slug.is_empty() && slug == dep) {
         return 100;
     }
-    if name.starts_with(dep) || dep.starts_with(name) {
+    if (!name.is_empty() && (name.starts_with(dep) || dep.starts_with(name)))
+        || (!slug.is_empty() && (slug.starts_with(dep) || dep.starts_with(slug)))
+    {
         return 90;
     }
-    if slug.starts_with(dep) || dep.starts_with(slug) {
-        return 80;
-    }
-    if name.contains(dep) || slug.contains(dep) {
+    if (!name.is_empty() && name.contains(dep)) || (!slug.is_empty() && slug.contains(dep)) {
         return 70;
     }
     let common = dep
@@ -9226,5 +9234,133 @@ side="BOTH"
         assert!(locate_world_directory(&root).is_err());
         assert!(root.starts_with(PathBuf::from(env!("CARGO_MANIFEST_DIR"))));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    fn write_test_zip(path: &Path, entries: &[(&str, &[u8])]) {
+        let file = fs::File::create(path).unwrap();
+        let mut writer = zip::ZipWriter::new(file);
+        for (name, bytes) in entries {
+            writer
+                .start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(bytes).unwrap();
+        }
+        writer.finish().unwrap();
+    }
+
+    fn forge_jar_bytes(mod_id: &str, version: &str) -> Vec<u8> {
+        let toml = format!(
+            "modLoader=\"javafml\"\nloaderVersion=\"[47,)\"\n[[mods]]\nmodId=\"{mod_id}\"\nversion=\"{version}\"\ndisplayName=\"{mod_id}\"\n[[dependencies.{mod_id}]]\nmodId=\"minecraft\"\nmandatory=true\nversionRange=\"[1.20,1.21)\"\n"
+        );
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        let mut writer = zip::ZipWriter::new(&mut buffer);
+        writer
+            .start_file("META-INF/mods.toml", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(toml.as_bytes()).unwrap();
+        writer.finish().unwrap();
+        buffer.into_inner()
+    }
+
+    #[test]
+    fn synthetic_packs_are_detected_in_all_formats() {
+        let jar = forge_jar_bytes("example", "1.0.0");
+        let curseforge_entries: &[(&str, &[u8])] = &[
+            (
+                "manifest.json",
+                br#"{"minecraft":{"version":"1.20.1","modLoaders":[{"id":"forge-47.4.22"}]},"files":[{"projectID":586095,"fileID":7756316,"required":true}]}"#,
+            ),
+            ("overrides/mods/example.jar", &jar),
+        ];
+        let modrinth_entries: &[(&str, &[u8])] = &[
+            (
+                "modrinth.index.json",
+                br#"{"dependencies":{"minecraft":"1.20.1","forge":"47.4.22"},"files":[{"path":"mods/example.jar","hashes":{"sha1":"abc"},"fileSize":1,"downloads":[]}]}"#,
+            ),
+            ("mods/example.jar", &jar),
+        ];
+        let hmcl_entries: &[(&str, &[u8])] = &[
+            (
+                "modpack.json",
+                br#"{"name":"HMCL Test","gameVersion":"1.20.1","addons":[{"id":"forge","version":"47.4.22"}]}"#,
+            ),
+            ("minecraft/mods/example.jar", &jar),
+        ];
+        let mmc_entries: &[(&str, &[u8])] = &[
+            (
+                "mmc-pack.json",
+                br#"{"components":[{"uid":"net.minecraft","version":"1.20.1"},{"uid":"net.minecraftforge","version":"47.4.22"}]}"#,
+            ),
+            (".minecraft/mods/example.jar", &jar),
+        ];
+        let mcbbs_entries: &[(&str, &[u8])] = &[
+            (
+                "mcbbs.packmeta",
+                br#"{"minecraft":{"version":"1.20.1","modLoaders":[{"id":"forge-47.4.22"}]}}"#,
+            ),
+            ("overrides/mods/example.jar", &jar),
+        ];
+        let cases: Vec<(&str, &[(&str, &[u8])], &str)> = vec![
+            ("curseforge", curseforge_entries, "curseforge"),
+            ("modrinth", modrinth_entries, "modrinth"),
+            ("hmcl", hmcl_entries, "hmcl"),
+            ("mmc", mmc_entries, "mmc"),
+            ("mcbbs", mcbbs_entries, "mcbbs"),
+        ];
+        for (name, entries, expected_format) in cases {
+            let path = test_temp_path(name).with_extension("zip");
+            write_test_zip(&path, entries);
+            let inspection = inspect_modpack_path(&path).unwrap_or_else(|error| {
+                panic!("{name} 应能通过检查：{}", error.message)
+            });
+            assert_eq!(inspection.format, expected_format, "{name} 格式识别错误");
+            assert_eq!(inspection.game_version.as_deref(), Some("1.20.1"), "{name} 游戏版本错误");
+            assert_eq!(inspection.loader_type.as_deref(), Some("forge"), "{name} 加载器错误");
+            assert!(inspection.mod_count >= 1, "{name} 模组数量错误");
+            fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn curseforge_dependency_resolution_prefers_mod_id() {
+        let files = vec![
+            serde_json::json!({"projectId":1567856,"fileId":8211489,"fileName":"goety-apostle-fix-1.5.0.jar","modId":"goetyfix"}),
+            serde_json::json!({"projectId":586095,"fileId":7756316,"fileName":"goety-2.5.49.3.jar","modId":"goety"}),
+            serde_json::json!({"projectId":1236817,"fileId":7638178,"fileName":"GoetyRevelation-2.3.1.jar","modId":"goety_revelation"}),
+            serde_json::json!({"projectId":402818,"fileId":6118401,"fileName":"patchouli-1.20.1-81-FORGE.jar","modId":"patchouli"}),
+        ];
+        assert_eq!(
+            best_curseforge_match(&files, "goety"),
+            Some((586095, 7756316))
+        );
+        assert_eq!(
+            best_curseforge_match(&files, "goetyfix"),
+            Some((1567856, 8211489))
+        );
+        assert_eq!(
+            best_curseforge_match(&files, "goety_revelation"),
+            Some((1236817, 7638178))
+        );
+        assert_eq!(
+            best_curseforge_match(&files, "patchouli"),
+            Some((402818, 6118401))
+        );
+    }
+
+    #[test]
+    fn curseforge_dependency_resolution_uses_file_name_when_mod_id_missing() {
+        let files = vec![
+            serde_json::json!({"projectId":586095,"fileId":7756316,"fileName":"goety-2.5.49.3.jar","modId":""}),
+            serde_json::json!({"projectId":402818,"fileId":6118401,"fileName":"patchouli-1.20.1-81-FORGE.jar","modId":""}),
+        ];
+        assert_eq!(
+            best_curseforge_match(&files, "goety"),
+            Some((586095, 7756316))
+        );
+        assert_eq!(
+            best_curseforge_match(&files, "patchouli"),
+            Some((402818, 6118401))
+        );
+        assert_eq!(best_curseforge_match(&files, "iceandfire"), None);
     }
 }
