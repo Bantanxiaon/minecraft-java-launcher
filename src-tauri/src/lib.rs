@@ -2270,8 +2270,16 @@ async fn resolve_modrinth_project_id(input: &str) -> Result<String, LauncherErro
         for hit in hits {
             let slug = hit.get("slug").and_then(|value| value.as_str());
             let project_id = hit.get("project_id").and_then(|value| value.as_str());
+            let title = hit.get("title").and_then(|value| value.as_str());
+            let title_matches = title.is_some_and(|value| {
+                value.eq_ignore_ascii_case(input)
+                    || value
+                        .replace([' ', '_'], "-")
+                        .eq_ignore_ascii_case(candidate)
+            });
             if slug.is_some_and(|value| value.eq_ignore_ascii_case(candidate))
                 || project_id.is_some_and(|value| value.eq_ignore_ascii_case(input))
+                || title_matches
             {
                 if let Some(project_id) = project_id {
                     return Ok(project_id.to_string());
