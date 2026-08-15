@@ -594,6 +594,7 @@ export function WorldsPage({
   onDuplicate,
   onExport,
   onRemove,
+  onDeletePermanent,
   backups,
   onRestore,
   onOpenFolder,
@@ -611,6 +612,7 @@ export function WorldsPage({
   onDuplicate: (item: ContentItem) => void;
   onExport: (item: ContentItem) => void;
   onRemove: (item: ContentItem) => void;
+  onDeletePermanent: (item: ContentItem) => void;
   backups: BackupItem[];
   onRestore: (item: BackupItem) => void;
   onOpenFolder: () => void;
@@ -655,7 +657,7 @@ export function WorldsPage({
         <div className="section-heading">
           <div>
             <h2>已管理的存档</h2>
-            <p>移除的存档会先转移到这套游戏的备份区。</p>
+            <p>“移除”会转移到备份区；“彻底删除”不可恢复。</p>
           </div>
           <span>{items.length} 个</span>
         </div>
@@ -678,6 +680,14 @@ export function WorldsPage({
                   onClick={() => onRemove(item)}
                 >
                   移除
+                </button>
+                <button
+                  className="danger"
+                  disabled={busy}
+                  title="永久删除，不可恢复"
+                  onClick={() => onDeletePermanent(item)}
+                >
+                  彻底删除
                 </button>
               </div>
             ))}

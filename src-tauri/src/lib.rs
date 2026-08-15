@@ -3636,6 +3636,137 @@ fn remove_world_to_backup(
     })
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeletedContent {
+    id: i64,
+    path: String,
+}
+
+fn validated_world_delete_target(saves: &Path, file_name: &str) -> Result<PathBuf, LauncherError> {
+    validate_instance_field(file_name, 160)?;
+    if Path::new(file_name).components().count() != 1 {
+        return Err(LauncherError::validation("存档名称包含异常路径。"));
+    }
+    let saves = saves
+        .canonicalize()
+        .map_err(|_| LauncherError::validation("存档目录不存在。"))?;
+    let target = saves.join(file_name);
+    let canonical = target.canonicalize().unwrap_or_else(|_| target.clone());
+    if canonical == saves || !canonical.starts_with(&saves) {
+        return Err(LauncherError::validation(
+            "存档路径不在安全范围内，已拒绝删除。",
+        ));
+    }
+    Ok(canonical)
+}
+
+#[tauri::command]
+fn delete_world_permanently(
+    app: AppHandle,
+    content_id: i64,
+) -> Result<DeletedContent, LauncherError> {
+    let connection = open_database(&app)?;
+    let (file_name, root): (String, String) = connection
+        .query_row(
+            "SELECT c.file_name,i.root_path FROM content_items c JOIN instances i ON i.id=c.instance_id WHERE c.id=?1 AND c.kind='world'",
+            [content_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|_| LauncherError::validation("存档记录不存在。"))?;
+    let game = PathBuf::from(root).join(".minecraft");
+    let canonical = validated_world_delete_target(&game.join("saves"), &file_name)?;
+    if canonical.exists() {
+        fs::remove_dir_all(&canonical)
+            .map_err(|error| LauncherError::storage(format!("删除存档失败：{error}")))?;
+    }
+    connection
+        .execute("DELETE FROM content_items WHERE id=?1 AND kind='world'", [content_id])
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    Ok(DeletedContent {
+        id: content_id,
+        path: canonical.to_string_lossy().into_owned(),
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CacheCleanResult {
+    removed_files: u64,
+    freed_bytes: u64,
+}
+
+fn delete_cache_tree(
+    directory: &Path,
+    remove_all_files: bool,
+    removed_files: &mut u64,
+    freed_bytes: &mut u64,
+) -> Result<(), LauncherError> {
+    let mut pending = vec![directory.to_path_buf()];
+    while let Some(current) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&current) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                if path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|name| name.ends_with("-part"))
+                {
+                    let bytes = backup_entry_size(&path);
+                    fs::remove_dir_all(&path)
+                        .map_err(|error| LauncherError::storage(error.to_string()))?;
+                    *removed_files += 1;
+                    *freed_bytes += bytes;
+                } else {
+                    pending.push(path);
+                }
+            } else if kind.is_file() {
+                let Ok(metadata) = path.metadata() else {
+                    continue;
+                };
+                let is_part = path
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|value| value.eq_ignore_ascii_case("part"));
+                if remove_all_files || is_part {
+                    fs::remove_file(&path)
+                        .map_err(|error| LauncherError::storage(error.to_string()))?;
+                    *removed_files += 1;
+                    *freed_bytes += metadata.len();
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn clean_launcher_cache() -> Result<CacheCleanResult, LauncherError> {
+    let root = launcher_data_directory()?;
+    let mut removed_files = 0u64;
+    let mut freed_bytes = 0u64;
+    for target in [root.join("cache"), root.join("runtimes").join(".downloads")] {
+        if target.is_dir() {
+            delete_cache_tree(&target, true, &mut removed_files, &mut freed_bytes)?;
+        }
+    }
+    for base in [root.join("instances"), root.join("runtimes")] {
+        if base.is_dir() {
+            delete_cache_tree(&base, false, &mut removed_files, &mut freed_bytes)?;
+        }
+    }
+    Ok(CacheCleanResult {
+        removed_files,
+        freed_bytes,
+    })
+}
+
 #[tauri::command]
 fn backup_world(app: AppHandle, content_id: i64) -> Result<RemovedContent, LauncherError> {
     let connection = open_database(&app)?;
@@ -7045,6 +7176,8 @@ pub fn run() {
             backup_world,
             duplicate_world,
             remove_world_to_backup,
+            delete_world_permanently,
+            clean_launcher_cache,
             list_removed_backups,
             restore_removed_backup,
             exports::export_instance_modpack,
@@ -7118,6 +7251,23 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn world_delete_target_stays_inside_saves() {
+        let root = std::env::temp_dir().join(format!("sh-world-delete-{}", unique_timestamp()));
+        let saves = root.join("saves");
+        let world = saves.join("my-world");
+        fs::create_dir_all(&world).unwrap();
+        fs::write(world.join("level.dat"), b"level").unwrap();
+        assert_eq!(
+            validated_world_delete_target(&saves, "my-world").unwrap(),
+            world.canonicalize().unwrap()
+        );
+        assert!(validated_world_delete_target(&saves, "..\\escape").is_err());
+        assert!(validated_world_delete_target(&saves, "..").is_err());
+        assert!(validated_world_delete_target(&saves, "missing-world").is_ok());
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

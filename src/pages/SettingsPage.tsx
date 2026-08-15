@@ -20,6 +20,7 @@ type SettingsPageProps = {
   selectedAccountId?: number;
   onSelectAccount: (id: number) => void;
   onRemoveAccount: (account: Account) => void;
+  onCleanCache: () => void;
 };
 
 export function SettingsPage({
@@ -41,6 +42,7 @@ export function SettingsPage({
   selectedAccountId,
   onSelectAccount,
   onRemoveAccount,
+  onCleanCache,
 }: SettingsPageProps) {
   return (
     <>
@@ -96,6 +98,21 @@ export function SettingsPage({
           </button>
         </div>
         <UpdaterCard />
+        <div className="cache-clean-card">
+          <div>
+            <strong>存储与缓存</strong>
+            <small>
+              清理下载缓存和临时文件，释放磁盘空间；不会删除游戏、模组、整合包或存档。
+            </small>
+          </div>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onCleanCache}
+          >
+            清理缓存
+          </button>
+        </div>
         <label>
           <span>
             数据目录<small>按要求固定使用 D 盘</small>

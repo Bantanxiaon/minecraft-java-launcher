@@ -606,6 +606,32 @@ button:disabled {
   padding: 20px 24px;
   background: #fff;
 }
+.cache-clean-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 20px 24px;
+  background: #fff;
+}
+.cache-clean-card > div {
+  display: grid;
+  gap: 5px;
+}
+.cache-clean-card small {
+  color: #7b8590;
+}
+.cache-clean-card button {
+  flex: 0 0 auto;
+  border: 1px solid #e2c9c5;
+  border-radius: 9px;
+  background: #fff;
+  color: #a34343;
+  padding: 10px 16px;
+}
+.cache-clean-card button:hover {
+  background: #fdf3f2;
+}
 .updater-card { display:flex; align-items:center; justify-content:space-between; gap:18px; padding:16px; border:1px solid rgba(20,35,50,.09); border-radius:12px; background:#f9fafb; }
 .updater-card > div { display:flex; flex-direction:column; gap:4px; min-width:0; }
 .updater-card small { color:#75808c; }

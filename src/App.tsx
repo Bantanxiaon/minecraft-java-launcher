@@ -94,6 +94,13 @@ function deriveProgress(steps: BootStep[]) {
   }, 0);
 }
 
+function formatBytes(value: number): string {
+  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(2)} GB`;
+  if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
+  if (value >= 1024) return `${Math.round(value / 1024)} KB`;
+  return `${value} B`;
+}
+
 function DesktopTitleBar() {
   const runWindowAction = async (
     action: "minimize" | "maximize" | "close",
@@ -1076,6 +1083,56 @@ export default function App() {
       setMessage(`存档已移至可恢复备份：${removed.backupPath}`);
     } catch (error) {
       setMessage(errorText(error, "无法移除存档。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteWorldPermanently(item: ContentItem) {
+    if (
+      !window.confirm(
+        `确定彻底删除存档“${item.fileName}”吗？此操作不可恢复。`,
+      )
+    )
+      return;
+    if (!window.confirm("再次确认：将永久删除该存档文件夹和记录，无法恢复。"))
+      return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const deleted = await invoke<{ id: number; path: string }>(
+        "delete_world_permanently",
+        { contentId: item.id },
+      );
+      setWorldItems((existing) =>
+        existing.filter((candidate) => candidate.id !== item.id),
+      );
+      setMessage(`存档已彻底删除：${deleted.path}`);
+    } catch (error) {
+      setMessage(errorText(error, "无法删除存档。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cleanLauncherCache() {
+    if (
+      !window.confirm(
+        "确定清理下载缓存和临时文件吗？不会删除任何游戏、模组、整合包或存档；缓存会在下次需要时重新下载。",
+      )
+    )
+      return;
+    setBusy(true);
+    setMessage("正在清理缓存…");
+    try {
+      const result = await invoke<{ removedFiles: number; freedBytes: number }>(
+        "clean_launcher_cache",
+      );
+      setMessage(
+        `缓存清理完成：移除 ${result.removedFiles} 个缓存/临时文件，释放约 ${formatBytes(result.freedBytes)}。`,
+      );
+    } catch (error) {
+      setMessage(errorText(error, "缓存清理失败。"));
     } finally {
       setBusy(false);
     }
@@ -2189,6 +2246,7 @@ export default function App() {
             selectedAccountId={current?.id}
             onSelectAccount={setSelectedAccountId}
             onRemoveAccount={(account) => void removeAccount(account)}
+            onCleanCache={() => void cleanLauncherCache()}
           />
         ) : activeNav === "下载" ? (
           <DiagnosticsPage
@@ -2240,6 +2298,7 @@ export default function App() {
             onDuplicate={(item) => void duplicateWorld(item)}
             onExport={(item) => void exportWorld(item)}
             onRemove={(item) => void removeWorld(item)}
+            onDeletePermanent={(item) => void deleteWorldPermanently(item)}
             backups={removedBackups}
             onRestore={(item) => void restoreBackup(item)}
             onOpenFolder={() => void openInstanceDirectory(modInstanceId, "saves")}
