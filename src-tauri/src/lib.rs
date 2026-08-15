@@ -1762,6 +1762,7 @@ struct ImportedLocalPack {
     imported_files: usize,
     imported_mods: usize,
     unresolved_remote_files: usize,
+    skipped_mods: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -2968,6 +2969,7 @@ fn import_local_pack(
     ];
     let mut imported_files = 0usize;
     let mut imported_mods = 0usize;
+    let mut skipped_mods = Vec::new();
     for index in 0..archive.len() {
         let mut entry = archive
             .by_index(index)
@@ -3028,7 +3030,9 @@ fn import_local_pack(
             Ok(info) => info,
             Err(error) => {
                 let _ = fs::remove_file(&temporary);
-                return Err(error);
+                let jar_name = relative.rsplit('/').next().unwrap_or("未知模组");
+                skipped_mods.push(format!("{jar_name}：{}", error.message));
+                continue;
             }
         };
         if output.exists() {
@@ -3054,6 +3058,7 @@ fn import_local_pack(
         imported_files,
         imported_mods,
         unresolved_remote_files,
+        skipped_mods,
     })
 }
 
@@ -7715,6 +7720,35 @@ side="BOTH"
         assert_eq!(inspection.format, "modrinth");
         assert_eq!(inspection.loader_type.as_deref(), Some("fabric"));
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    #[ignore = "需要用户提供的真实整合包路径"]
+    fn inspects_real_curseforge_pack() {
+        let path =
+            std::env::var("LAUNCHER_TEST_MODPACK").expect("LAUNCHER_TEST_MODPACK is required");
+        let started = std::time::Instant::now();
+        let inspection = inspect_modpack_path(Path::new(&path))
+            .expect("真实整合包应能通过检查");
+        println!(
+            "format={} name={:?} version={:?} mc={:?} loader={:?} mods={} overrides={} elapsed_ms={}",
+            inspection.format,
+            inspection.name,
+            inspection.version,
+            inspection.game_version,
+            inspection.loader_type,
+            inspection.mod_count,
+            inspection.override_count,
+            started.elapsed().as_millis()
+        );
+        assert_eq!(inspection.format, "curseforge");
+        assert_eq!(inspection.loader_type.as_deref(), Some("forge"));
+        assert_eq!(inspection.game_version.as_deref(), Some("1.20.1"));
+        assert!(inspection.mod_count >= 200, "模组数量异常");
+        assert!(
+            started.elapsed().as_secs() < 60,
+            "整合包检查耗时过长，影响流畅性"
+        );
     }
     #[test]
     fn validates_resource_and_shader_archive_structure() {

@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.4.4"
+version = "0.4.5"
 description = "SH启动器 - Windows Minecraft Java Edition instance and content launcher"
 authors = ["SH启动器 contributors"]
 license = "MIT"

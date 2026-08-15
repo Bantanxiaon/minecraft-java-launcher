@@ -103,6 +103,7 @@ export type ImportedLocalPack = {
   importedFiles: number;
   importedMods: number;
   unresolvedRemoteFiles: number;
+  skippedMods: string[];
 };
 export type ExportResult = { path: string; files: number; bytes: number };
 export type LauncherError = { message?: string };

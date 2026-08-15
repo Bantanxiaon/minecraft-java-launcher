@@ -1670,11 +1670,23 @@ export default function App() {
           instanceId: modInstanceId,
           sourcePath: packSourcePath,
         });
-        const unresolved = imported.unresolvedRemoteFiles
-          ? `；另有 ${imported.unresolvedRemoteFiles} 个远程项目因无公开下载地址未导入`
-          : "";
+        const notes: string[] = [];
+        if (imported.skippedMods.length) {
+          notes.push(
+            `${imported.skippedMods.length} 个模组因不兼容被跳过：${imported.skippedMods
+              .slice(0, 3)
+              .join("；")}`,
+          );
+        }
+        if (imported.unresolvedRemoteFiles) {
+          notes.push(
+            `${imported.unresolvedRemoteFiles} 个模组需要 CurseForge 下载，当前启动器暂不支持，请使用完整解压包或手动补齐`,
+          );
+        }
         setMessage(
-          `已导入 ${imported.importedFiles} 个本地文件，其中 ${imported.importedMods} 个模组${unresolved}。`,
+          `已导入 ${imported.importedFiles} 个本地文件，其中 ${imported.importedMods} 个模组。${
+            notes.length ? notes.join("；") + "。" : ""
+          }下一步请安装基础游戏和模组运行环境。`,
         );
       }
     } catch (error) {
