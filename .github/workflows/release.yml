@@ -56,7 +56,6 @@ jobs:
           updaterJsonPreferNsis: true
           includeUpdaterJson: false
           args: --bundles nsis
-          assetNamePattern: SHLauncher-{version}-setup.{ext}
 
       - name: 生成并上传 latest.json
         shell: bash
@@ -68,7 +67,8 @@ jobs:
           VERSION="$(node -p "require('./package.json').version")"
           SIG_FILE="$(ls src-tauri/target/release/bundle/nsis/*.sig | head -n1)"
           SIGNATURE="$(cat "$SIG_FILE")"
-          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/SHLauncher-${VERSION}-setup.exe"
+          ASSET_NAME="$(curl -fsS -H "Authorization: Bearer ${GITHUB_TOKEN}" "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" | jq -r '.assets[] | select(.name | endswith("_x64-setup.exe")) | .name' | head -n1)"
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/${ASSET_NAME}"
           jq -n --arg version "$VERSION" --arg sig "$SIGNATURE" --arg url "$URL" \
             '{version:$version, notes:"SH启动器 " + $version, pub_date:(now|todateiso8601), platforms:{"windows-x86_64":{signature:$sig, url:$url}}}' \
             > latest.json
