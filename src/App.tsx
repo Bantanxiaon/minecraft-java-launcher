@@ -470,13 +470,21 @@ export default function App() {
 
     if (!isTauri() || !updaterEnabled) {
       applyStep("update", { state: "done", detail: "当前版本已是最新" });
-      return;
+    } else {
+      // 更新检查在后台异步进行，不拖慢启动动画
+      void runUpdateCheck();
     }
+  }
+
+  async function runUpdateCheck() {
     setUpdateChecking(true);
+    setUpdateCheckError(false);
+    applyStep("update", { state: "running", detail: "连接更新服务…" });
     try {
       const found = await checkForUpdate(12_000);
       if (bootCancelledRef.current) return;
       setBootUpdate(found ?? null);
+      setUpdateCheckError(false);
       applyStep("update", {
         state: "done",
         detail: found ? `发现新版本 v${found.version}` : "已是最新版本",
@@ -2038,6 +2046,7 @@ export default function App() {
               update={bootUpdate}
               checking={updateChecking}
               checkError={updateCheckError}
+              onRetry={() => void runUpdateCheck()}
             />
             {bootProblems.length ? (
               <section className="boot-problems-card" role="alert">

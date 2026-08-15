@@ -14,12 +14,14 @@ type HomeUpdateCardProps = {
   update?: Update | null;
   checking?: boolean;
   checkError?: boolean;
+  onRetry?: () => void;
 };
 
 export function HomeUpdateCard({
   update,
   checking = false,
   checkError = false,
+  onRetry,
 }: HomeUpdateCardProps) {
   const pendingUpdate = useRef<Update | null>(null);
   const [installing, setInstalling] = useState(false);
@@ -170,6 +172,27 @@ export function HomeUpdateCard({
                 : `更新中 ${progress}%`
               : "立即更新"}
           </button>
+        </div>
+      ) : null}
+
+      {checkError && !update && !checking ? (
+        <div className="home-update-banner home-update-error" role="status">
+          <div className="home-update-icon">
+            <Sparkles size={20} />
+          </div>
+          <div className="home-update-copy">
+            <strong>暂时无法连接更新服务</strong>
+            <small>不影响启动游戏；网络恢复后可以重新检查。</small>
+          </div>
+          {onRetry ? (
+            <button
+              className="primary"
+              type="button"
+              onClick={onRetry}
+            >
+              重新检查
+            </button>
+          ) : null}
         </div>
       ) : null}
     </>

@@ -1711,6 +1711,16 @@ nav button.active svg { color:#3b8d40; }
   font-size: 12px;
 }
 
+.home-update-error {
+  border-color: #ecd9bd;
+  background: #fdf9f1;
+}
+
+.home-update-error .home-update-icon {
+  background: #f7ead2;
+  color: #b0761c;
+}
+
 /* ============ 下载详情弹窗 ============ */
 .download-detail-modal {
   width: min(680px, calc(100vw - 64px));

@@ -1,4 +1,9 @@
 const HIGHLIGHTS_BY_VERSION: Record<string, string[]> = {
+  "0.4.7": [
+    "更新检查不再拖慢启动动画，改为后台并行",
+    "更新失败后首页显示提示和“重新检查”按钮，一键重试",
+    "云更新镜像地址更新为可用节点（gh-proxy、ghproxy.net），更新服务更稳",
+  ],
   "0.4.6": [
     "开通 CurseForge 下载支持：导入整合包时自动从 CurseForge 补齐清单里的远程模组，与 Modrinth 共同覆盖主流模组平台",
     "CurseForge 文件按大小校验并走 HTTPS 官方 CDN，已用真实文件联网实测（21.8MB 完整下载）",
