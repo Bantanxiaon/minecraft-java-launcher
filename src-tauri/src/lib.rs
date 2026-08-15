@@ -2410,6 +2410,15 @@ async fn auto_install_missing_mod_dependencies(
         .filter_map(|inspection| inspection.mod_id.as_deref())
         .map(|id| id.to_ascii_lowercase())
         .collect::<HashSet<_>>();
+    let mut dependents: HashMap<String, Vec<String>> = HashMap::new();
+    for inspection in &inspections {
+        for dependency in &inspection.dependencies {
+            dependents
+                .entry(dependency.to_ascii_lowercase())
+                .or_default()
+                .push(inspection.file_name.clone());
+        }
+    }
     let provided = [
         "minecraft",
         "java",
@@ -2433,10 +2442,22 @@ async fn auto_install_missing_mod_dependencies(
     }
     let mut failures = Vec::new();
     for missing_id in missing {
+        let dependent_mods = dependents
+            .get(&missing_id)
+            .map(|names| names.join("、"))
+            .unwrap_or_default();
         let project_id = match resolve_modrinth_project_id(&missing_id).await {
             Ok(project_id) => project_id,
             Err(error) => {
-                failures.push(format!("{missing_id}：{}", error.message));
+                failures.push(format!(
+                    "{missing_id}：{}{}",
+                    error.message,
+                    if dependent_mods.is_empty() {
+                        String::new()
+                    } else {
+                        format!("\n  需要它的模组：{dependent_mods}")
+                    }
+                ));
                 continue;
             }
         };
@@ -2454,14 +2475,22 @@ async fn auto_install_missing_mod_dependencies(
                     && !loaders.iter().any(|item| item.eq_ignore_ascii_case(loader))
                 {
                     failures.push(format!(
-                        "{missing_id}：加载器不兼容（该模组仅支持 {}，当前实例为 {loader}）。请删除依赖它的模组，或改用对应加载器。",
-                        loaders.join("/")
+                        "{missing_id}：加载器不兼容（该模组仅支持 {}，当前实例为 {loader}）。\n  需要它的模组：{dependent_mods}\n  请在模组页删除这些模组，或改用对应加载器。",
+                        loaders.join("/"),
                     ));
                     continue;
                 }
             }
             Err(error) => {
-                failures.push(format!("{missing_id}：{}", error.message));
+                failures.push(format!(
+                    "{missing_id}：{}{}",
+                    error.message,
+                    if dependent_mods.is_empty() {
+                        String::new()
+                    } else {
+                        format!("\n  需要它的模组：{dependent_mods}")
+                    }
+                ));
                 continue;
             }
         }

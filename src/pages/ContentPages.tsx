@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import type { BackupItem, ContentItem, Instance, ModInspection, ModpackInspection, ModUpdateInfo, OnlineProject } from "../types";
 import { inspectionSupportsGame, loaderLabel } from "../ui";
 
 function OnlineCatalog({
   title, query, onQuery, onSearch, projects, busy, disabled, onInstall,
+  loaderOptions, selectedLoader, onLoader, versionValue, onVersion,
 }: {
   title: string;
   query: string;
@@ -13,6 +14,11 @@ function OnlineCatalog({
   busy: boolean;
   disabled?: boolean;
   onInstall: (project: OnlineProject) => void;
+  loaderOptions?: string[];
+  selectedLoader?: string;
+  onLoader?: (value: string) => void;
+  versionValue?: string;
+  onVersion?: (value: string) => void;
 }) {
   return (
     <section className="online-catalog">
@@ -31,6 +37,33 @@ function OnlineCatalog({
           {busy ? "处理中…" : "搜索"}
         </button>
       </div>
+      {loaderOptions && onLoader && onVersion ? (
+        <div className="catalog-filters">
+          <label>
+            <span>模组环境</span>
+            <select
+              value={selectedLoader ?? ""}
+              onChange={(event) => onLoader(event.target.value)}
+            >
+              <option value="">跟随当前游戏配置</option>
+              {loaderOptions.map((loader) => (
+                <option key={loader} value={loader}>
+                  {loaderLabel(loader)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span>游戏版本</span>
+            <input
+              value={versionValue ?? ""}
+              maxLength={24}
+              placeholder="跟随当前游戏配置"
+              onChange={(event) => onVersion(event.target.value)}
+            />
+          </label>
+        </div>
+      ) : null}
       {disabled ? <p className="catalog-hint">请先选择一套已经启用 Fabric、Forge、NeoForge 或 Quilt 的游戏配置。</p> : null}
       {projects.length ? <div className="catalog-grid">
         {projects.map((project) => <article key={project.projectId}>
@@ -91,6 +124,10 @@ type ModsPageProps = {
   onOnlineQuery: (value: string) => void;
   onOnlineSearch: () => void;
   onOnlineInstall: (project: OnlineProject) => void;
+  onlineLoader?: string;
+  onlineVersion?: string;
+  onOnlineLoader?: (value: string) => void;
+  onOnlineVersion?: (value: string) => void;
   updates: ModUpdateInfo[];
   onCheckUpdates: () => void;
   onUpdate: (item: ContentItem) => void;
@@ -119,6 +156,10 @@ export function ModsPage({
   onOnlineQuery,
   onOnlineSearch,
   onOnlineInstall,
+  onlineLoader,
+  onlineVersion,
+  onOnlineLoader,
+  onOnlineVersion,
   updates,
   onCheckUpdates,
   onUpdate,
@@ -138,6 +179,29 @@ export function ModsPage({
     ) &&
     selected.loaderType !== "vanilla",
   );
+  const [modSearch, setModSearch] = useState("");
+  const [modFilter, setModFilter] = useState<"all" | "enabled" | "disabled">(
+    "all",
+  );
+  const visibleItems = useMemo(() => {
+    const keyword = modSearch.trim().toLowerCase();
+    return items.filter((item) => {
+      if (modFilter === "enabled" && !item.enabled) return false;
+      if (modFilter === "disabled" && item.enabled) return false;
+      if (!keyword) return true;
+      let metadata: Partial<ModInspection> = {};
+      try {
+        metadata = item.metadataJson ? JSON.parse(item.metadataJson) : {};
+      } catch {
+        // 文件名兜底
+      }
+      return (
+        item.fileName.toLowerCase().includes(keyword) ||
+        (metadata.name ?? "").toLowerCase().includes(keyword) ||
+        (metadata.modId ?? "").toLowerCase().includes(keyword)
+      );
+    });
+  }, [items, modSearch, modFilter]);
   return (
     <>
       <header>
@@ -235,7 +299,12 @@ export function ModsPage({
       </section>
       <OnlineCatalog title="在线搜索模组" query={onlineQuery} onQuery={onOnlineQuery}
         onSearch={onOnlineSearch} projects={onlineProjects} busy={busy}
-        disabled={!selected || selected.loaderType === "vanilla"} onInstall={onOnlineInstall} />
+        disabled={!selected || selected.loaderType === "vanilla"} onInstall={onOnlineInstall}
+        loaderOptions={["fabric", "quilt", "forge", "neoforge"]}
+        selectedLoader={onlineLoader}
+        onLoader={onOnlineLoader}
+        versionValue={onlineVersion}
+        onVersion={onOnlineVersion} />
       <section className="installed-mods">
         <div className="section-heading">
           <div>
@@ -252,9 +321,31 @@ export function ModsPage({
             <button className="primary" disabled={busy || !updates.some((item) => item.updateAvailable)} onClick={onUpdateAll}>全部更新</button>
           </div>
         </div>
-        {items.length ? (
+        <div className="installed-mod-filters">
+          <input
+            value={modSearch}
+            maxLength={80}
+            placeholder="搜索已安装的模组（名称 / 文件名 / ID）"
+            onChange={(event) => setModSearch(event.target.value)}
+          />
+          <select
+            aria-label="模组状态筛选"
+            value={modFilter}
+            onChange={(event) =>
+              setModFilter(event.target.value as "all" | "enabled" | "disabled")
+            }
+          >
+            <option value="all">全部状态</option>
+            <option value="enabled">已启用</option>
+            <option value="disabled">已停用</option>
+          </select>
+          <span className="filter-count">
+            {visibleItems.length} / {items.length} 个
+          </span>
+        </div>
+        {visibleItems.length ? (
           <div className="mod-rows">
-            {items.map((item) => {
+            {visibleItems.map((item) => {
               let metadata: Partial<ModInspection> = {};
               try {
                 metadata = item.metadataJson

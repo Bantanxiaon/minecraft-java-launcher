@@ -1613,6 +1613,104 @@ nav button.active svg { color:#3b8d40; }
   min-width: 140px;
 }
 
+/* ============ 错误弹窗 ============ */
+.error-modal-body {
+  margin: 0 0 18px;
+  padding: 14px 16px;
+  border: 1px solid #f0d4d0;
+  border-radius: 12px;
+  background: #fdf5f4;
+  display: grid;
+  gap: 8px;
+}
+
+.error-modal-body p {
+  margin: 0;
+  color: #7d4b44;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.error-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.error-modal-actions button {
+  border: 1px solid #dfe4e8;
+  border-radius: 9px;
+  background: #fff;
+  color: #44505c;
+  padding: 10px 16px;
+}
+
+.error-modal-actions button.primary {
+  border-color: #4c9a4a;
+  background: #4c9a4a;
+  color: #fff;
+}
+
+/* ============ 模组页筛选 ============ */
+.catalog-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 10px 0 0;
+}
+
+.catalog-filters label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #68736d;
+}
+
+.catalog-filters select,
+.catalog-filters input {
+  border: 1px solid #d9dfe4;
+  border-radius: 8px;
+  background: #fff;
+  padding: 7px 10px;
+  font-size: 12.5px;
+}
+
+.installed-mod-filters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #edf0f2;
+  background: #fafbfc;
+}
+
+.installed-mod-filters input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid #d9dfe4;
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px 11px;
+  font-size: 12.5px;
+}
+
+.installed-mod-filters select {
+  border: 1px solid #d9dfe4;
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px 10px;
+  font-size: 12.5px;
+}
+
+.filter-count {
+  flex: 0 0 auto;
+  color: #7b8590;
+  font-size: 12px;
+}
+
 /* ============ 下载详情弹窗 ============ */
 .download-detail-modal {
   width: min(680px, calc(100vw - 64px));

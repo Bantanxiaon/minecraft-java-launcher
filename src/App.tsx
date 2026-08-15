@@ -34,6 +34,7 @@ import { HomeUpdateCard } from "./components/HomeUpdateCard";
 import { SplashScreen } from "./components/SplashScreen";
 import { VersionHighlightsModal } from "./components/VersionHighlightsModal";
 import { ChangelogModal } from "./components/ChangelogModal";
+import { ErrorModal } from "./components/ErrorModal";
 import { checkForUpdate, updaterEnabled } from "./updater";
 import type { Update } from "./updater";
 import type {
@@ -199,6 +200,12 @@ export default function App() {
   const [bootProblems, setBootProblems] = useState<BootProblem[]>([]);
   const [showChangelog, setShowChangelog] = useState(false);
   const [showHighlights, setShowHighlights] = useState(false);
+  const [errorModal, setErrorModal] = useState<{
+    title: string;
+    lines: string[];
+    actionLabel?: string;
+    action?: () => void;
+  } | null>(null);
   const bootCancelledRef = useRef(false);
   const [activeNav, setActiveNav] = useState("主页");
   const activeNavRef = useRef(activeNav);
@@ -244,6 +251,8 @@ export default function App() {
   const [gameLogText, setGameLogText] = useState("");
   const [onlineModQuery, setOnlineModQuery] = useState("");
   const [onlinePackQuery, setOnlinePackQuery] = useState("");
+  const [onlineModLoader, setOnlineModLoader] = useState("");
+  const [onlineModVersion, setOnlineModVersion] = useState("");
   const [onlineModProjects, setOnlineModProjects] = useState<OnlineProject[]>([]);
   const [onlinePackProjects, setOnlinePackProjects] = useState<OnlineProject[]>([]);
   const [microsoftLoginAvailable, setMicrosoftLoginAvailable] = useState(false);
@@ -906,7 +915,10 @@ export default function App() {
         query: projectType === "mod" ? onlineModQuery : onlinePackQuery,
         projectType,
         ...(projectType === "mod" && target
-          ? { gameVersion: target.gameVersion, loader: target.loaderType }
+          ? {
+              gameVersion: onlineModVersion.trim() || target.gameVersion,
+              loader: onlineModLoader || target.loaderType,
+            }
           : {}),
       });
       if (projectType === "mod") setOnlineModProjects(projects);
@@ -1537,7 +1549,26 @@ export default function App() {
         await invoke("exit_launcher");
       }
     } catch (error) {
-      setMessage(errorText(error, "游戏启动失败。"));
+      const text = errorText(error, "游戏启动失败。");
+      setMessage(text);
+      const isModIssue = /模组|前置|加载器|依赖/i.test(text);
+      setErrorModal({
+        title: "启动前检查未通过",
+        lines: text
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean),
+        ...(isModIssue
+          ? {
+              actionLabel: "前往模组页处理",
+              action: () => {
+                setErrorModal(null);
+                setActiveNav("模组");
+                setModInstanceId(requestedInstance.id);
+              },
+            }
+          : {}),
+      });
     } finally {
       setBusy(false);
     }
@@ -2300,6 +2331,10 @@ export default function App() {
             onOnlineQuery={setOnlineModQuery}
             onOnlineSearch={() => void searchOnline("mod")}
             onOnlineInstall={(project) => void installOnlineMod(project)}
+            onlineLoader={onlineModLoader}
+            onlineVersion={onlineModVersion}
+            onOnlineLoader={setOnlineModLoader}
+            onOnlineVersion={setOnlineModVersion}
             updates={modUpdates}
             onCheckUpdates={() => void checkModUpdates()}
             onUpdate={(item) => void updateMod(item)}
@@ -2408,6 +2443,15 @@ export default function App() {
         )}
       </section>
       </main>
+      {errorModal ? (
+        <ErrorModal
+          title={errorModal.title}
+          lines={errorModal.lines}
+          actionLabel={errorModal.actionLabel}
+          onAction={errorModal.action}
+          onClose={() => setErrorModal(null)}
+        />
+      ) : null}
     </div>
   );
 }
