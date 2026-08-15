@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import loadingAnimation from "../assets/loading.json";
 import type { BootStep, BootStepState } from "../types/splash";
+import { RELEASE_CHANNEL_LABEL } from "../version";
 
 type SplashScreenProps = {
   steps: BootStep[];
@@ -128,7 +129,7 @@ export function SplashScreen({
         </ul>
 
         <p className="splash-version">
-          v{version} · 本地数据仅保存在此设备上
+          v{version} {RELEASE_CHANNEL_LABEL} · 本地数据仅保存在此设备上
         </p>
       </div>
     </div>

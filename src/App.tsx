@@ -39,7 +39,7 @@ import type {
   BootStep,
   BootStepKey,
 } from "./types/splash";
-import packageJson from "../package.json";
+import { APP_VERSION, RELEASE_CHANNEL_LABEL } from "./version";
 import {
   ArchiveContentPage,
   ComingSoonPage,
@@ -80,8 +80,6 @@ import {
 } from "lucide-react";
 import "./App.css";
 import "./overrides.css";
-
-const APP_VERSION = packageJson.version;
 
 function deriveProgress(steps: BootStep[]) {
   if (!steps.length) return 0;
@@ -1809,7 +1807,10 @@ export default function App() {
       <aside>
         <div className="brand">
           <img className="brand-art" src={grassBlock} alt="Minecraft grass block" />
-          <span className="brand-copy"><strong>Launcher</strong><small>Minecraft Java Edition</small></span>
+          <span className="brand-copy">
+            <strong>Launcher</strong>
+            <small>{RELEASE_CHANNEL_LABEL} · Minecraft Java Edition</small>
+          </span>
         </div>
         <nav>
           {navItems.map((item, index) => {
