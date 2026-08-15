@@ -3,14 +3,14 @@ import type { LauncherError } from "./types";
 export const navItems = [
   "主页",
   "游戏库",
-  "实例",
   "模组",
   "整合包",
   "资源包",
   "光影",
   "存档",
-  "服务器",
+  "联机",
   "下载",
+  "存储",
   "设置",
 ];
 
@@ -49,7 +49,9 @@ export const gameVersionMatches = (
 ): boolean => {
   const rule = requirement.trim();
   const current = versionParts(actual);
-  if (!rule || rule === "*" || !current.length) return !rule || rule === "*";
+  if (!rule || rule === "*" || /^\$\{.+\}$/.test(rule) || !current.length) {
+    return !rule || rule === "*" || /^\$\{.+\}$/.test(rule);
+  }
   if (/^[[(].*,.*[\])]$/.test(rule)) {
     const lowerInclusive = rule.startsWith("[");
     const upperInclusive = rule.endsWith("]");

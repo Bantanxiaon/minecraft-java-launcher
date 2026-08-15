@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { Account, Instance, ServerEntry, ServerPing } from "../types";
+import { listen } from "@tauri-apps/api/event";
+import type { Account, Instance, RoomInfo, ServerEntry, ServerPing } from "../types";
 
 type ServersPageProps = {
   servers: ServerEntry[];
@@ -8,6 +9,7 @@ type ServersPageProps = {
   accounts: Account[];
   selectedInstanceId?: number;
   selectedAccountId?: number;
+  javaPath?: string;
   busy: boolean;
   message: string;
   onAddServer: (
@@ -40,6 +42,7 @@ export function ServersPage({
   accounts,
   selectedInstanceId,
   selectedAccountId,
+  javaPath,
   busy,
   message,
   onAddServer,
@@ -62,6 +65,24 @@ export function ServersPage({
   const [joinAccountId, setJoinAccountId] = useState<number | undefined>(
     selectedAccountId,
   );
+  const [room, setRoom] = useState<RoomInfo>();
+  const [roomBusy, setRoomBusy] = useState(false);
+  const [roomMessage, setRoomMessage] = useState("");
+
+  useEffect(() => {
+    let dispose: (() => void) | undefined;
+    let cancelled = false;
+    void listen<RoomInfo>("multiplayer-state", (event) => {
+      setRoom(event.payload);
+    }).then((unlisten) => {
+      if (cancelled) unlisten();
+      else dispose = unlisten;
+    });
+    return () => {
+      cancelled = true;
+      dispose?.();
+    };
+  }, []);
 
   const readyInstances = instances.filter((instance) => instance.status === "ready");
   const effectiveInstanceId =
@@ -145,15 +166,81 @@ export function ServersPage({
     onJoin(server, effectiveInstanceId, effectiveAccountId);
   }
 
+  async function createRoom() {
+    if (!effectiveInstanceId || !effectiveAccountId) {
+      setRoomMessage("请先选择启动配置和账户。");
+      return;
+    }
+    if (!javaPath) {
+      setRoomMessage("未检测到可用的 64 位 Java，请先到设置安装。");
+      return;
+    }
+    setRoomBusy(true);
+    setRoomMessage("");
+    try {
+      await invoke("multiplayer_prepare", { instanceId: effectiveInstanceId });
+      const started = await invoke<RoomInfo>("multiplayer_start", {
+        instanceId: effectiveInstanceId,
+        accountId: effectiveAccountId,
+        javaPath,
+      });
+      setRoom(started);
+      setRoomMessage("游戏正在启动；进入世界后选择“对局域网开放”，这里会自动显示邀请地址。");
+    } catch (error) {
+      setRoomMessage(String(error));
+    } finally {
+      setRoomBusy(false);
+    }
+  }
+
+  async function stopRoom() {
+    if (!effectiveInstanceId) return;
+    try {
+      setRoom(await invoke<RoomInfo>("multiplayer_stop", { instanceId: effectiveInstanceId }));
+      setRoomMessage("联机已结束。");
+    } catch (error) {
+      setRoomMessage(String(error));
+    }
+  }
+
   return (
     <>
       <header>
         <div>
-          <h1>服务器</h1>
-          <p>保存常用服务器地址，一键启动游戏并自动加入；支持外置登录服务器。</p>
+          <h1>联机</h1>
+          <p>一键创建联机房间，或保存常用服务器地址快速加入。</p>
         </div>
-        <span className="ready-label">联机已开通</span>
+        <span className="ready-label">免费联机</span>
       </header>
+
+      <section className="pack-export-card">
+        <div>
+          <h2>一键创建房间</h2>
+          <p>
+            自动安装联机组件（e4mc），启动游戏后进入世界点“对局域网开放”，好友就能通过邀请地址直接加入。
+          </p>
+        </div>
+        {room?.address ? (
+          <div className="server-row-side">
+            <span className="ping-badge ok">邀请地址</span>
+            <code>{room.address}</code>
+            <button type="button" onClick={() => void stopRoom()}>结束联机</button>
+          </div>
+        ) : room && room.state !== "IDLE" && room.state !== "CLOSED" && room.state !== "STOPPED" ? (
+          <span className="ping-badge pending">{room.state === "PREPARING" ? "准备联机组件…" : "等待你在游戏中开放局域网…"}</span>
+        ) : null}
+        <div className="server-form-actions">
+          <button
+            className="primary"
+            type="button"
+            disabled={roomBusy || !effectiveInstanceId || !effectiveAccountId}
+            onClick={() => void createRoom()}
+          >
+            {roomBusy ? "创建中…" : "创建房间并启动游戏"}
+          </button>
+        </div>
+        {roomMessage ? <p className="pack-warning">{roomMessage}</p> : null}
+      </section>
 
       <section className="server-toolbar">
         <label>

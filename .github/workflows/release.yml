@@ -14,6 +14,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
         with:
@@ -25,9 +27,24 @@ jobs:
           cache: pnpm
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
+
+      - name: 前端质量门禁
+        run: |
+          pnpm lint
+          pnpm test
+          pnpm build
+
+      - name: Rust 质量门禁
+        shell: bash
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+          cargo test --manifest-path src-tauri/Cargo.toml --all-targets
 
       - name: 写入当前 GitHub 仓库的免费更新地址
         run: node scripts/configure-updater.mjs
@@ -40,22 +57,26 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           VITE_SH_UPDATES_ENABLED: "true"
+          SH_GIT_COMMIT: ${{ github.sha }}
         with:
           tagName: v__VERSION__
           releaseName: "SH启动器 v__VERSION__"
-          releaseBody: |
-            ## SH启动器 v__VERSION__
-
-            - 新增精美启动动画：动画期间并行完成游戏、游戏库、模组与整合包、Java 环境和更新检查，并显示进度条与检查清单。
-            - 启动前自动识别缺失的前置模组，并从 Modrinth 自动下载补全。
-            - 下载任务显示文件名、大小、速度和预计剩余时间。
-            - 首页显示新版本更新卡片，更新完成后自动弹出更新内容。
-            - 修复窗口无法拖动的问题。
+          releaseBody: "SH启动器 v__VERSION__（详见更新日志）"
           releaseDraft: false
           prerelease: false
           updaterJsonPreferNsis: true
           includeUpdaterJson: false
           args: --bundles nsis
+
+      - name: 写入正式发布说明
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ -f "docs/release-notes/${VERSION}.md" ]; then
+            gh release edit "${GITHUB_REF_NAME}" --notes-file "docs/release-notes/${VERSION}.md"
+          fi
 
       - name: 推送安装包到仓库（jsDelivr CDN 分发）
         shell: bash
@@ -71,10 +92,9 @@ jobs:
           git checkout -f -b dist-update origin/main
           mkdir -p release-assets
           cp "$EXE_FILE" release-assets/SHLauncher-setup.exe
-          cp "$EXE_FILE" release-assets/SHLauncher-setup.zip
           SIG_FILE="$(ls src-tauri/target/release/bundle/nsis/*.sig | head -n1)"
           SIGNATURE="$(cat "$SIG_FILE")"
-          URL="https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/release-assets/SHLauncher-setup.zip"
+          URL="https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/release-assets/SHLauncher-setup.exe"
           jq -n --arg version "$VERSION" --arg sig "$SIGNATURE" --arg url "$URL" \
             '{version:$version, notes:"SH启动器 " + $version, pub_date:(now|todateiso8601), platforms:{"windows-x86_64":{signature:$sig, url:$url}}}' \
             > release-assets/latest.json
@@ -93,8 +113,7 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           SIG_FILE="$(ls src-tauri/target/release/bundle/nsis/*.sig | head -n1)"
           SIGNATURE="$(cat "$SIG_FILE")"
-          # jsDelivr 国内 CDN 稳定分发（提交号固定，避免 CDN 缓存旧包）；签名校验保证内容安全
-          URL="https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@${DIST_SHA}/release-assets/SHLauncher-setup.zip"
+          URL="https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@${DIST_SHA}/release-assets/SHLauncher-setup.exe"
           jq -n --arg version "$VERSION" --arg sig "$SIGNATURE" --arg url "$URL" \
             '{version:$version, notes:"SH启动器 " + $version, pub_date:(now|todateiso8601), platforms:{"windows-x86_64":{signature:$sig, url:$url}}}' \
             > latest.json
@@ -103,11 +122,3 @@ jobs:
             -H "Content-Type: application/json" \
             --data-binary @latest.json \
             "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?name=latest.json"
-      - name: 生成并上传 latest.json
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-          RELEASE_ID: ${{ steps.tauri.outputs.releaseId }}
-        run: |
-          set -euo pipefail
-          VERSION="$(node -p "require('./package.json').version")"

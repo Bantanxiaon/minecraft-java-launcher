@@ -1,41 +1,11 @@
-# SH启动器 0.1.3 测试报告
+# Test Report（2026-08-16，v0.8.0 本地执行）
 
-测试日期：2026-08-14；平台：Windows x64。
-
-## 自动检查
-
-- `pnpm lint`：通过。
-- TypeScript 严格类型检查与 Vite release build：通过。
-- `cargo check`：通过。
-- Rust 单元测试：30 项发现，26 项常规测试通过；4 项需要真实文件或联网的验收测试默认忽略。
-- Java 21 实时联网测试：另行启用并通过。
-
-覆盖范围包括：数据库迁移、Mojang Manifest、版本解析、Windows Rules、启动参数、SHA-1/SHA-256、下载路径、ZIP Slip、模组说明、加载器匹配、整合包路径、导出路径和中断任务恢复。
-
-## 本轮真实验收
-
-- Vanilla 1.21.1 全量安装：通过。客户端 26,836,906 字节；97 个依赖库共 75,122,740 字节；assets、libraries 和客户端 JAR 均完整。
-- 已有下载复用：重复验收只补缺失的客户端 JAR，已有库和 assets 直接校验复用。
-- 官方 OpenJDK 21：通过 Microsoft 官方 CDN 下载 201,095,574 字节 ZIP，SHA-256 校验、解压、64 位和 Java 21 版本自检通过。
-- Minecraft 1.21.1 离线启动：通过。Java 21.0.12，进程保持运行 30 秒且未提前退出，随后由验收程序主动结束。
-- Forge 26.2 / 65.1.0：使用用户现场下载的官方安装器验证通过；兼容官方 JSON 中网址末尾换行，并正确跳过由安装器现场生成、没有下载网址的 client JAR。官方安装器最终生成 `26.2-forge-65.1.0` 配置并报告安装成功。
-- 模组兼容性：Forge 的 Minecraft `versionRange`、Fabric/Quilt 的版本声明、加载器类型和必需前置均会检查；现场的 Caelus 1.20.1 模组已验证会拒绝安装到 26.2。
-- 关闭按钮：自绘标题栏的“×”改为退出整个 Tauri 进程，不再只发送窗口关闭请求。
-- Release EXE：关闭 Vite 后独立启动并稳定存活；4173 和 5173 监听数量均为 0。
-- 免费云更新：Tauri 更新插件、进程重启权限、签名公钥和 GitHub Actions 发布流程已接入；0.1.3 NSIS 安装包及 `.sig` 签名已真实生成。
-- 安装器语言：NSIS 构建脚本确认包含 `SimpChinese` 和 `English`，中文 Windows 默认选择简体中文。
-- 无响应处理：运行中的游戏可从主页二次确认后强制结束整个 Java 进程树；正常退出仍使用原有等待与日志流程。
-- UI 自动操作：主页、设置、模组、整合包、游戏库、下载与日志页面均可真实导航；Microsoft 按钮确认禁用并显示“暂未开通”。
-
-机器可读报告：
-
-- `验收证据/acceptance-install-1.21.1.json`
-- `验收证据/acceptance-launch-vanilla-1.21.1.json`
-
-## 已知且明确的发行边界
-
-- 联机/服务器按产品决定暂缓开通。
-- Microsoft OAuth + PKCE 后端已实现，但发行包没有发布者应用编号，所以入口暂未开通；没有要求玩家填写 Client ID。
-- CurseForge 远程受限文件不会绕过平台授权。
-- 安装包尚未使用商业代码签名证书，Windows 可能提示“未知发布者”。
-- 全新机器的多杀毒软件兼容矩阵仍需要公开测试者覆盖。
+- pnpm lint：通过（3 条既有告警：HomeUpdateCard ref 清理、App.tsx 2 处 unsafe-finally，均为历史代码，非本次引入）
+- pnpm test（Vitest）：4/4 通过（gameVersionMatches 范围/运算符/模板占位符、loaderLabel）
+- pnpm build（tsc + vite）：通过
+- cargo fmt --check：通过
+- cargo clippy --all-targets --all-features -- -D warnings：通过（0 告警）
+- cargo test：44 通过，8 忽略（联网/真实包测试按需运行）
+  - 关键回归：kotlinforforge 缺失报告、Offline UUID 与 Java fixture 一致、同名不同身份共存、e4mc/LAN 日志解析、迁移 v1–v8
+- 真包测试（落幕曲 1.6.5，497MB）：CurseForge / Forge / 1.20.1 / 266 模组 / 5846 覆盖文件，识别 0.43 秒
+- 联网测试：Modrinth 搜索、CurseForge 搜索（代理）、CurseForge 21.8MB 真实下载、authlib-injector 下载校验：全部通过

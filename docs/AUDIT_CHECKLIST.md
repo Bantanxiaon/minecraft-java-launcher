@@ -1,0 +1,21 @@
+# Audit Checklist
+
+- [x] 已修复：不再从 modId 盲猜 provider project 并自动安装（可信别名 + provides + 模糊不装）
+- [x] 已测试：Bookshelf/Prism/KotlinForForge 类误判回归测试
+- [x] 已修复：content 磁盘与 DB 可 reconcile（content_provenance 记录）
+- [x] 已修复：Modpack 导入来源记录（instance_pack_source 表已建）
+- [x] 已修复：Offline UUID 标准化（MD5 v3 + legacy）
+- [x] 已修复：account displayName 不再作为唯一身份
+- [x] 已修复：删除实例闭环（列表/恢复/永久删除 + 二次确认）
+- [x] 已修复：同实例双开后端阻止（delete 前检查 running_games）
+- [x] 已修复：per-job download cancellation
+- [x] 已修复：D 盘硬编码移除（保留旧数据兼容）
+- [x] 已修复：真实 Migration（v6/v7/v8）+ WAL/busy_timeout + 升级前 DB 备份
+- [x] 已修复：Windows 路径安全（保留名/结尾点空格/禁用字符）
+- [x] 已修复：存储管理（总览/清理预览/执行/已删除实例）
+- [x] 已修复：联机 V1（e4mc managed content + LAN/e4mc 日志识别）
+- [x] 已修复：版本唯一来源（scripts/sync-version.mjs）+ BuildInfo
+- [x] 已修复：CI 质量门禁（ci.yml + release.yml 门禁）
+- [x] 已修复：假 ZIP 发布物（release.yml 不再复制 exe 为 .zip）
+- [x] 已测试：cargo fmt / clippy -D warnings / cargo test / pnpm lint / pnpm test / pnpm build
+- [x] 已文档化：本清单 + AUDIT_REMEDIATION + 各模块文档

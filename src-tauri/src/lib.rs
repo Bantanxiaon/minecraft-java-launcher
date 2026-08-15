@@ -1,3 +1,11 @@
+#![allow(
+    clippy::needless_lifetimes,
+    clippy::too_many_arguments,
+    clippy::type_complexity,
+    clippy::useless_conversion
+)]
+
+use dashmap::DashMap;
 use futures_util::StreamExt;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -20,15 +28,65 @@ use std::{
 use tauri::Manager;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 const AUTHLIB_INJECTOR_VERSION: &str = "1.2.8";
 const AUTHLIB_INJECTOR_MIN_BYTES: u64 = 300_000;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BuildInfo {
+    version: &'static str,
+    git_commit: &'static str,
+    channel: &'static str,
+    build_timestamp: &'static str,
+}
+
+#[tauri::command]
+fn build_info() -> BuildInfo {
+    BuildInfo {
+        version: env!("CARGO_PKG_VERSION"),
+        git_commit: env!("SH_GIT_COMMIT"),
+        channel: if env!("CARGO_PKG_VERSION").starts_with("0.") {
+            "beta"
+        } else {
+            "stable"
+        },
+        build_timestamp: env!("SH_BUILD_TIMESTAMP"),
+    }
+}
+
+/// 与 Java `UUID.nameUUIDFromBytes("OfflinePlayer:<name>")` 完全一致的离线 UUID：
+/// 对输入 bytes 做 MD5，再按 Java 语义设置 version=3 与 IETF variant。
+pub(crate) fn minecraft_offline_uuid(player_name: &str) -> Uuid {
+    use md5::{Digest, Md5};
+    let input = format!("OfflinePlayer:{player_name}");
+    let digest = Md5::digest(input.as_bytes());
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x30;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(bytes)
+}
+
+/// 旧版启动器曾使用 SHA-256 前 32 hex 作为离线 UUID，保留用于历史兼容。
+pub(crate) fn legacy_offline_uuid(player_name: &str) -> String {
+    format!(
+        "{:x}",
+        Sha256::digest(format!("OfflinePlayer:{player_name}").as_bytes())
+    )[..32]
+        .to_string()
+}
 
 #[cfg(debug_assertions)]
 mod acceptance;
 mod auth;
 mod diagnostics;
 mod exports;
+mod fs_safe;
+mod multiplayer;
+mod storage;
 mod system;
 
 #[derive(Debug, Serialize)]
@@ -146,15 +204,23 @@ fn save_settings(
     Ok(settings)
 }
 
-fn launcher_data_directory() -> Result<PathBuf, LauncherError> {
-    let directory = std::env::var_os("MINECRAFT_LAUNCHER_DATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(r"D:\MinecraftLauncherData"));
-    if !directory.is_absolute() || directory.components().next().is_none_or(|component| !matches!(component, Component::Prefix(prefix) if prefix.as_os_str().to_string_lossy().eq_ignore_ascii_case("D:"))) {
-        return Err(LauncherError::validation("启动器数据目录必须是 D 盘绝对路径。"));
+pub(crate) fn launcher_data_directory() -> Result<PathBuf, LauncherError> {
+    if let Some(explicit) = std::env::var_os("MINECRAFT_LAUNCHER_DATA").map(PathBuf::from) {
+        fs::create_dir_all(&explicit).map_err(|error| LauncherError::storage(error.to_string()))?;
+        return Ok(explicit);
     }
-    fs::create_dir_all(&directory).map_err(|error| LauncherError::storage(error.to_string()))?;
-    Ok(directory)
+    // 旧版 D 盘数据目录若存在，继续沿用，避免升级丢数据。
+    let legacy = PathBuf::from(r"D:\MinecraftLauncherData");
+    if legacy.is_dir() {
+        return Ok(legacy);
+    }
+    // 没有旧数据时使用系统本地应用数据目录，不再要求必须有 D 盘。
+    let local = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("SHLauncher"))
+        .join("SHLauncher");
+    fs::create_dir_all(&local).map_err(|error| LauncherError::storage(error.to_string()))?;
+    Ok(local)
 }
 
 fn database_path(_app: &AppHandle) -> Result<PathBuf, LauncherError> {
@@ -187,16 +253,10 @@ fn run_migrations(connection: &mut Connection) -> rusqlite::Result<()> {
     drop(columns);
     drop(statement);
     if !existing.iter().any(|name| name == "started_at") {
-        connection.execute(
-            "ALTER TABLE download_jobs ADD COLUMN started_at TEXT",
-            [],
-        )?;
+        connection.execute("ALTER TABLE download_jobs ADD COLUMN started_at TEXT", [])?;
     }
     if !existing.iter().any(|name| name == "updated_at") {
-        connection.execute(
-            "ALTER TABLE download_jobs ADD COLUMN updated_at TEXT",
-            [],
-        )?;
+        connection.execute("ALTER TABLE download_jobs ADD COLUMN updated_at TEXT", [])?;
     }
     if !existing.iter().any(|name| name == "bytes_per_second") {
         connection.execute(
@@ -234,14 +294,232 @@ fn run_migrations(connection: &mut Connection) -> rusqlite::Result<()> {
         )?;
         tx.commit()?;
     }
+    let has_v6: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM migrations WHERE version=6)",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_v6 {
+        let tx = connection.transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS content_provenance (
+                content_id INTEGER PRIMARY KEY,
+                provider TEXT NOT NULL,
+                project_id TEXT,
+                version_id TEXT,
+                file_id TEXT,
+                source_url TEXT,
+                sha1 TEXT,
+                sha256 TEXT,
+                installed_at TEXT NOT NULL,
+                FOREIGN KEY(content_id) REFERENCES content_items(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS content_identity_cache (
+                local_mod_id TEXT NOT NULL,
+                game_version TEXT NOT NULL,
+                loader TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                confidence TEXT NOT NULL,
+                source TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(local_mod_id, game_version, loader, provider)
+            );
+            CREATE TABLE IF NOT EXISTS storage_retention_policy (
+                id INTEGER PRIMARY KEY CHECK(id = 1),
+                successful_download_days INTEGER NOT NULL DEFAULT 14,
+                failed_download_days INTEGER NOT NULL DEFAULT 60,
+                log_days INTEGER NOT NULL DEFAULT 30,
+                deleted_instance_days INTEGER NOT NULL DEFAULT 30,
+                removed_content_days INTEGER NOT NULL DEFAULT 30,
+                world_backup_count INTEGER NOT NULL DEFAULT 5,
+                mod_backup_versions INTEGER NOT NULL DEFAULT 2
+            );
+            INSERT OR IGNORE INTO storage_retention_policy(id) VALUES (1);
+            CREATE TABLE IF NOT EXISTS deleted_instances (
+                id TEXT PRIMARY KEY,
+                original_instance_id INTEGER NOT NULL,
+                display_name TEXT NOT NULL,
+                backup_path TEXT NOT NULL,
+                size_bytes INTEGER,
+                deleted_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS instance_launch_settings (
+                instance_id INTEGER PRIMARY KEY,
+                memory_min_mb INTEGER,
+                memory_max_mb INTEGER,
+                java_mode TEXT NOT NULL DEFAULT 'AUTO',
+                java_path TEXT,
+                jvm_args_json TEXT NOT NULL DEFAULT '[]',
+                game_args_json TEXT NOT NULL DEFAULT '[]',
+                width INTEGER,
+                height INTEGER,
+                account_id INTEGER,
+                FOREIGN KEY(instance_id) REFERENCES instances(id) ON DELETE CASCADE,
+                FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE SET NULL
+            );
+            CREATE TABLE IF NOT EXISTS managed_content (
+                id TEXT PRIMARY KEY,
+                instance_id INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                version_id TEXT NOT NULL,
+                file_sha1 TEXT,
+                file_sha256 TEXT NOT NULL,
+                installed_path TEXT NOT NULL,
+                installed_by_launcher INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(instance_id) REFERENCES instances(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS instance_pack_source (
+                instance_id INTEGER PRIMARY KEY,
+                provider TEXT NOT NULL,
+                project_id TEXT,
+                version_id TEXT,
+                pack_version TEXT,
+                source_url TEXT,
+                installed_at TEXT NOT NULL,
+                FOREIGN KEY(instance_id) REFERENCES instances(id) ON DELETE CASCADE
+            );",
+        )?;
+        tx.execute(
+            "INSERT INTO migrations(version, applied_at) VALUES(6, strftime('%s','now'))",
+            [],
+        )?;
+        tx.commit()?;
+    }
+    let has_v7: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM migrations WHERE version=7)",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_v7 {
+        let tx = connection.transaction()?;
+        tx.execute_batch(
+            "ALTER TABLE accounts RENAME TO accounts_identity_old;
+            CREATE TABLE accounts (
+                id INTEGER PRIMARY KEY,
+                account_type TEXT NOT NULL CHECK(account_type IN ('OFFLINE','MICROSOFT','EXTERNAL')),
+                minecraft_uuid TEXT,
+                display_name TEXT NOT NULL,
+                microsoft_subject TEXT,
+                xuid TEXT,
+                credential_ref TEXT,
+                legacy_offline_uuid TEXT,
+                created_at TEXT NOT NULL,
+                last_used_at TEXT,
+                auth_server TEXT
+            );
+            CREATE UNIQUE INDEX idx_accounts_minecraft_uuid
+                ON accounts(minecraft_uuid) WHERE minecraft_uuid IS NOT NULL;
+            INSERT INTO accounts (id, account_type, display_name, created_at, last_used_at, credential_ref, auth_server)
+            SELECT id, account_type, display_name, created_at, last_used_at, safe_secret_ref, auth_server FROM accounts_identity_old;
+            DROP TABLE accounts_identity_old;",
+        )?;
+        tx.execute(
+            "INSERT INTO migrations(version, applied_at) VALUES(7, strftime('%s','now'))",
+            [],
+        )?;
+        tx.commit()?;
+    }
+    let has_v8: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM migrations WHERE version=8)",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_v8 {
+        connection.execute_batch("ALTER TABLE deleted_instances ADD COLUMN instance_json TEXT;")?;
+        connection.execute(
+            "INSERT INTO migrations(version, applied_at) VALUES(8, strftime('%s','now'))",
+            [],
+        )?;
+    }
+    // 补齐离线账户的标准 UUID 与旧 SHA-256 UUID，仅处理缺失的旧数据。
+    {
+        let mut statement = connection.prepare(
+            "SELECT id, display_name FROM accounts
+             WHERE account_type='OFFLINE' AND (minecraft_uuid IS NULL OR legacy_offline_uuid IS NULL)",
+        )?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>();
+        drop(statement);
+        for (account_id, display_name) in rows {
+            let standard = minecraft_offline_uuid(&display_name).to_string();
+            let legacy = legacy_offline_uuid(&display_name);
+            connection.execute(
+                "UPDATE accounts SET minecraft_uuid=?1, legacy_offline_uuid=?2 WHERE id=?3",
+                params![standard, legacy, account_id],
+            )?;
+        }
+    }
     Ok(())
 }
 
 pub(crate) fn open_database(app: &AppHandle) -> Result<Connection, LauncherError> {
+    let db_path = database_path(app)?;
+    backup_database_before_migration(&db_path);
     let mut connection = Connection::open(database_path(app)?)
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    connection
+        .execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA busy_timeout = 5000;",
+        )
         .map_err(|error| LauncherError::storage(error.to_string()))?;
     run_migrations(&mut connection).map_err(|error| LauncherError::storage(error.to_string()))?;
     Ok(connection)
+}
+
+fn backup_database_before_migration(db_path: &Path) {
+    let Ok(metadata) = fs::metadata(db_path) else {
+        return;
+    };
+    if metadata.len() == 0 {
+        return;
+    }
+    let Some(parent) = db_path.parent() else {
+        return;
+    };
+    let backup_dir = parent.join("db-backups");
+    if fs::create_dir_all(&backup_dir).is_err() {
+        return;
+    }
+    let stamp = chrono_like_timestamp();
+    let backup_path = backup_dir.join(format!(
+        "launcher.db.pre-{}-{stamp}.bak",
+        env!("CARGO_PKG_VERSION")
+    ));
+    if backup_path.exists() {
+        return;
+    }
+    let _ = fs::copy(db_path, &backup_path);
+    // 保留最近 5 份迁移前备份。
+    if let Ok(entries) = fs::read_dir(&backup_dir) {
+        let mut backups = entries
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("launcher.db.pre-")
+            })
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>();
+        backups.sort();
+        while backups.len() > 5 {
+            if let Some(oldest) = backups.first() {
+                let _ = fs::remove_file(oldest);
+                backups.remove(0);
+            } else {
+                break;
+            }
+        }
+    }
 }
 
 fn recover_interrupted_download_jobs(connection: &Connection) -> rusqlite::Result<usize> {
@@ -281,7 +559,18 @@ fn create_offline_account(app: AppHandle, display_name: String) -> Result<Accoun
     validate_profile_name(&display_name)?;
     let connection = open_database(&app)?;
     let created_at = chrono_like_timestamp();
-    connection.execute("INSERT INTO accounts (account_type, display_name, created_at, last_used_at) VALUES ('OFFLINE', ?1, ?2, ?2)", params![display_name, created_at]).map_err(|error| LauncherError::storage(error.to_string()))?;
+    connection
+        .execute(
+            "INSERT INTO accounts (account_type, minecraft_uuid, display_name, legacy_offline_uuid, created_at, last_used_at)
+             VALUES ('OFFLINE', ?1, ?2, ?3, ?4, ?4)",
+            params![
+                minecraft_offline_uuid(&display_name).to_string(),
+                display_name,
+                legacy_offline_uuid(&display_name),
+                created_at
+            ],
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
     let id = connection.last_insert_rowid();
     Ok(Account {
         id,
@@ -314,8 +603,10 @@ async fn login_microsoft(app: AppHandle, client_id: String) -> Result<Account, L
     let created_at = chrono_like_timestamp();
     connection
         .execute(
-            "INSERT INTO accounts (account_type, display_name, created_at, last_used_at) VALUES ('MICROSOFT', ?1, ?2, ?2) ON CONFLICT(display_name) DO UPDATE SET account_type='MICROSOFT', last_used_at=excluded.last_used_at",
-            params![profile_name, created_at],
+            "INSERT INTO accounts (account_type, minecraft_uuid, display_name, xuid, created_at, last_used_at)
+             VALUES ('MICROSOFT', ?1, ?2, ?3, ?4, ?4)
+             ON CONFLICT(minecraft_uuid) DO UPDATE SET account_type='MICROSOFT', last_used_at=excluded.last_used_at",
+            params![profile_uuid, profile_name, profile_xuid, created_at],
         )
         .map_err(|error| LauncherError::storage(error.to_string()))?;
     let account_id: i64 = connection
@@ -382,9 +673,7 @@ async fn download_authlib_injector_bytes(
         .get(url)
         .send()
         .await
-        .map_err(|error| {
-            LauncherError::validation(format!("下载外置登录组件失败：{error}"))
-        })?;
+        .map_err(|error| LauncherError::validation(format!("下载外置登录组件失败：{error}")))?;
     let status = response.status();
     if !status.is_success() {
         return Err(LauncherError::validation(format!(
@@ -450,8 +739,7 @@ async fn ensure_authlib_injector() -> Result<PathBuf, LauncherError> {
         }
     }
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        fs::create_dir_all(parent).map_err(|error| LauncherError::storage(error.to_string()))?;
     }
     let temp = path.with_extension(format!("tmp-{}", unique_timestamp()));
     fs::write(&temp, &bytes).map_err(|error| LauncherError::storage(error.to_string()))?;
@@ -496,9 +784,7 @@ async fn refresh_external_token(
         }))
         .send()
         .await
-        .map_err(|error| {
-            LauncherError::validation(format!("外置登录服务器连接失败：{error}"))
-        })?;
+        .map_err(|error| LauncherError::validation(format!("外置登录服务器连接失败：{error}")))?;
     if !response.status().is_success() {
         return Ok(None);
     }
@@ -549,20 +835,21 @@ async fn login_external(
         }))
         .send()
         .await
-        .map_err(|error| {
-            LauncherError::validation(format!("无法连接外置登录服务器：{error}"))
-        })?;
+        .map_err(|error| LauncherError::validation(format!("无法连接外置登录服务器：{error}")))?;
     let status = response.status();
-    let body: serde_json::Value = response.json().await.map_err(|error| {
-        LauncherError::validation(format!("外置登录返回内容无效：{error}"))
-    })?;
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|error| LauncherError::validation(format!("外置登录返回内容无效：{error}")))?;
     if !status.is_success() {
         let message = body
             .get("errorMessage")
             .and_then(|value| value.as_str())
             .or_else(|| body.get("error").and_then(|value| value.as_str()))
             .unwrap_or("用户名或密码错误");
-        return Err(LauncherError::validation(format!("外置登录失败：{message}")));
+        return Err(LauncherError::validation(format!(
+            "外置登录失败：{message}"
+        )));
     }
     let access_token = body
         .get("accessToken")
@@ -596,14 +883,16 @@ async fn login_external(
     }
     ensure_authlib_injector().await?;
     let connection = open_database(&app)?;
-    let existing_type: Option<String> = connection
+    let existing: Option<(i64, String)> = connection
         .query_row(
-            "SELECT account_type FROM accounts WHERE display_name=?1",
-            [&profile_name],
-            |row| row.get(0),
+            "SELECT id, account_type FROM accounts
+             WHERE minecraft_uuid=?1 OR (minecraft_uuid IS NULL AND display_name=?2)
+             ORDER BY id LIMIT 1",
+            params![profile_uuid, profile_name],
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .ok();
-    if let Some(existing_type) = existing_type {
+    if let Some((_, existing_type)) = existing.as_ref() {
         if existing_type != "EXTERNAL" {
             return Err(LauncherError::validation(
                 "已有同名的正版或离线账户，请先移除该账户，或更换外置登录用户名。",
@@ -611,22 +900,24 @@ async fn login_external(
         }
     }
     let created_at = chrono_like_timestamp();
-    connection
-        .execute(
-            "INSERT INTO accounts (account_type, display_name, created_at, last_used_at, auth_server)
-             VALUES ('EXTERNAL', ?1, ?2, ?2, ?3)
-             ON CONFLICT(display_name) DO UPDATE SET account_type='EXTERNAL', last_used_at=excluded.last_used_at, auth_server=excluded.auth_server
-             WHERE accounts.account_type='EXTERNAL'",
-            params![profile_name, created_at, api_root],
-        )
-        .map_err(|error| LauncherError::storage(error.to_string()))?;
-    let account_id: i64 = connection
-        .query_row(
-            "SELECT id FROM accounts WHERE display_name=?1",
-            [&profile_name],
-            |row| row.get(0),
-        )
-        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let account_id: i64 = if let Some((existing_id, _)) = existing {
+        connection
+            .execute(
+                "UPDATE accounts SET account_type='EXTERNAL', last_used_at=?1, auth_server=?2 WHERE id=?3",
+                params![created_at, api_root, existing_id],
+            )
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        existing_id
+    } else {
+        connection
+            .execute(
+                "INSERT INTO accounts (account_type, minecraft_uuid, display_name, created_at, last_used_at, auth_server)
+                 VALUES ('EXTERNAL', ?1, ?2, ?3, ?3, ?4)",
+                params![profile_uuid, profile_name, created_at, api_root],
+            )
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        connection.last_insert_rowid()
+    };
     let secret_ref = format!("external-account-{account_id}");
     let entry = keyring::Entry::new("SH启动器", &secret_ref)
         .map_err(|error| LauncherError::storage(format!("无法打开 Windows 凭据存储：{error}")))?;
@@ -641,7 +932,7 @@ async fn login_external(
         .map_err(|error| LauncherError::storage(format!("无法保存外置登录凭据：{error}")))?;
     connection
         .execute(
-            "UPDATE accounts SET safe_secret_ref=?1 WHERE id=?2",
+            "UPDATE accounts SET credential_ref=?1 WHERE id=?2",
             params![secret_ref, account_id],
         )
         .map_err(|error| LauncherError::storage(error.to_string()))?;
@@ -659,7 +950,7 @@ fn remove_account(app: AppHandle, account_id: i64) -> Result<(), LauncherError> 
     let connection = open_database(&app)?;
     let secret_ref: Option<String> = connection
         .query_row(
-            "SELECT safe_secret_ref FROM accounts WHERE id=?1",
+            "SELECT credential_ref FROM accounts WHERE id=?1",
             [account_id],
             |row| row.get(0),
         )
@@ -699,7 +990,9 @@ fn validate_server_name(value: &str) -> Result<String, LauncherError> {
     let value = value.trim();
     if value.is_empty()
         || value.chars().count() > 64
-        || value.chars().any(|character| character.is_control() || matches!(character, '\n' | '\r'))
+        || value
+            .chars()
+            .any(|character| character.is_control() || matches!(character, '\n' | '\r'))
     {
         return Err(LauncherError::validation(
             "服务器名称须为 1–64 个字符，且不能包含换行。",
@@ -715,10 +1008,9 @@ fn validate_server_address(value: &str) -> Result<String, LauncherError> {
             "服务器地址不能为空，且不能超过 253 个字符。",
         ));
     }
-    if value
-        .chars()
-        .any(|character| character.is_whitespace() || character.is_control() || matches!(character, '/' | '\\'))
-    {
+    if value.chars().any(|character| {
+        character.is_whitespace() || character.is_control() || matches!(character, '/' | '\\')
+    }) {
         return Err(LauncherError::validation(
             "服务器地址不能包含空格、控制字符或路径符号。",
         ));
@@ -1073,10 +1365,7 @@ fn record_modpack_archive(
 fn remove_modpack_archive(app: AppHandle, archive_id: i64) -> Result<(), LauncherError> {
     let connection = open_database(&app)?;
     connection
-        .execute(
-            "DELETE FROM modpack_archives WHERE id=?1",
-            [archive_id],
-        )
+        .execute("DELETE FROM modpack_archives WHERE id=?1", [archive_id])
         .map_err(|error| LauncherError::storage(error.to_string()))?;
     Ok(())
 }
@@ -1096,6 +1385,7 @@ fn validate_profile_name(value: &str) -> Result<(), LauncherError> {
 }
 
 fn validate_instance_field(value: &str, max: usize) -> Result<(), LauncherError> {
+    fs_safe::validate_windows_filename(value)?;
     let forbidden = ['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
     if value.is_empty()
         || value.len() > max
@@ -1648,6 +1938,7 @@ struct ModInspection {
     file_name: String,
     loader_type: String,
     mod_id: Option<String>,
+    provides: Vec<String>,
     name: Option<String>,
     version: Option<String>,
     sha256: String,
@@ -1703,7 +1994,7 @@ fn exit_launcher(app: AppHandle) {
     app.exit(0);
 }
 
-fn running_games() -> &'static Mutex<HashMap<i64, u32>> {
+pub(crate) fn running_games() -> &'static Mutex<HashMap<i64, u32>> {
     static RUNNING_GAMES: OnceLock<Mutex<HashMap<i64, u32>>> = OnceLock::new();
     RUNNING_GAMES.get_or_init(|| Mutex::new(HashMap::new()))
 }
@@ -1732,6 +2023,10 @@ fn terminate_game(instance_id: i64) -> Result<(), LauncherError> {
         ));
     }
     Ok(())
+}
+
+pub(crate) fn stop_game(instance_id: i64) -> Result<(), LauncherError> {
+    terminate_game(instance_id)
 }
 
 #[derive(Serialize)]
@@ -2091,6 +2386,7 @@ fn inspect_mod_jar_path(path: &Path) -> Result<ModInspection, LauncherError> {
     }
     let mut loader_type = "unknown".to_string();
     let mut mod_id = None;
+    let mut provides = Vec::new();
     let mut display_name = None;
     let mut version = None;
     let mut dependencies = Vec::new();
@@ -2118,6 +2414,13 @@ fn inspect_mod_jar_path(path: &Path) -> Result<ModInspection, LauncherError> {
             if let Some(requirement) = required.get("minecraft") {
                 game_version_requirements.extend(json_requirement_strings(requirement));
             }
+        }
+        if let Some(provided) = value.get("provides").and_then(|entry| entry.as_array()) {
+            provides.extend(
+                provided
+                    .iter()
+                    .filter_map(|entry| entry.as_str().map(str::to_string)),
+            );
         }
         if let Some(blocked) = value.get("breaks").and_then(|entry| entry.as_object()) {
             conflicts.extend(blocked.keys().cloned());
@@ -2156,6 +2459,17 @@ fn inspect_mod_jar_path(path: &Path) -> Result<ModInspection, LauncherError> {
                     }
                 }
             }
+        }
+        if let Some(provided) = value
+            .pointer("/quilt_loader/provides")
+            .and_then(|entry| entry.as_array())
+        {
+            provides.extend(provided.iter().filter_map(|entry| {
+                entry
+                    .get("id")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string)
+            }));
         }
     } else {
         for (descriptor, loader) in [
@@ -2232,6 +2546,7 @@ fn inspect_mod_jar_path(path: &Path) -> Result<ModInspection, LauncherError> {
             .into(),
         loader_type,
         mod_id,
+        provides,
         name: display_name,
         version,
         sha256: format!("{:x}", hasher.finalize()),
@@ -2274,9 +2589,26 @@ fn missing_dependencies<'a, S: AsRef<str> + std::cmp::Eq + std::hash::Hash>(
         .filter(|id| {
             !provided.contains(&id.as_str())
                 && !(id == "kotlinforforge" && kotlin_forge_present)
-                && !installed_ids.iter().any(|installed| installed.as_ref() == id)
+                && !installed_ids
+                    .iter()
+                    .any(|installed| installed.as_ref() == id)
         })
         .collect()
+}
+
+fn installed_mod_ids<'a>(
+    inspections: impl IntoIterator<Item = &'a ModInspection>,
+) -> HashSet<String> {
+    let mut ids = HashSet::new();
+    for inspection in inspections {
+        if let Some(id) = inspection.mod_id.as_deref() {
+            ids.insert(id.to_ascii_lowercase());
+        }
+        for provided in &inspection.provides {
+            ids.insert(provided.to_ascii_lowercase());
+        }
+    }
+    ids
 }
 
 fn validate_instance_mods(
@@ -2330,11 +2662,7 @@ fn validate_instance_mods(
             )),
         }
     }
-    let installed_ids = inspections
-        .iter()
-        .filter_map(|inspection| inspection.mod_id.as_deref())
-        .map(|id| id.to_ascii_lowercase())
-        .collect::<HashSet<_>>();
+    let installed_ids = installed_mod_ids(&inspections);
     let missing = missing_dependencies(
         inspections
             .iter()
@@ -2454,8 +2782,9 @@ fn inspect_modpack_path(path: &Path) -> Result<ModpackInspection, LauncherError>
         });
     }
     if let Some(bytes) = read_descriptor(&mut archive, "mmc-pack.json")? {
-        let value: serde_json::Value = serde_json::from_slice(&bytes)
-            .map_err(|error| LauncherError::validation(format!("MultiMC mmc-pack.json 无效：{error}")))?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
+            LauncherError::validation(format!("MultiMC mmc-pack.json 无效：{error}"))
+        })?;
         let components = value
             .get("components")
             .and_then(|entry| entry.as_array())
@@ -2510,12 +2839,15 @@ fn inspect_modpack_path(path: &Path) -> Result<ModpackInspection, LauncherError>
             loader_type,
             mod_count: mmc_mods,
             override_count: mmc_files,
-            warnings: vec!["MultiMC 整合包：导入后会创建对应实例，仍需安装基础游戏和加载器。".into()],
+            warnings: vec![
+                "MultiMC 整合包：导入后会创建对应实例，仍需安装基础游戏和加载器。".into(),
+            ],
         });
     }
     if let Some(bytes) = read_descriptor(&mut archive, "modpack.json")? {
-        let value: serde_json::Value = serde_json::from_slice(&bytes)
-            .map_err(|error| LauncherError::validation(format!("HMCL modpack.json 无效：{error}")))?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
+            LauncherError::validation(format!("HMCL modpack.json 无效：{error}"))
+        })?;
         let loader_type = value
             .get("addons")
             .and_then(|entry| entry.as_array())
@@ -2575,7 +2907,11 @@ fn inspect_modpack_path(path: &Path) -> Result<ModpackInspection, LauncherError>
     }
     if read_descriptor(&mut archive, "mcbbs.packmeta")?.is_some() {
         let bytes = read_descriptor(&mut archive, "mcbbs.packmeta")?
-            .or_else(|| read_descriptor(&mut archive, "manifest.json").ok().flatten())
+            .or_else(|| {
+                read_descriptor(&mut archive, "manifest.json")
+                    .ok()
+                    .flatten()
+            })
             .ok_or_else(|| LauncherError::validation("MCBBS 整合包元数据缺失。"))?;
         let value: serde_json::Value = serde_json::from_slice(&bytes)
             .map_err(|error| LauncherError::validation(format!("MCBBS 元数据无效：{error}")))?;
@@ -2590,9 +2926,7 @@ fn inspect_modpack_path(path: &Path) -> Result<ModpackInspection, LauncherError>
                     .and_then(|addons| {
                         addons
                             .iter()
-                            .find(|addon| {
-                                addon.get("id").and_then(|v| v.as_str()) == Some("game")
-                            })
+                            .find(|addon| addon.get("id").and_then(|v| v.as_str()) == Some("game"))
                             .and_then(|addon| addon.get("version").and_then(|v| v.as_str()))
                     })
                     .map(str::to_string)
@@ -2875,12 +3209,21 @@ const CHINESE_DICTIONARY: &[(&str, &str)] = &[
     ("alex's mobs", "亚历克斯的怪物 (Alex's Mobs)"),
     ("farmer's delight", "农夫乐事 (Farmer's Delight)"),
     ("minecolonies", "我的殖民地 (MineColonies)"),
-    ("sophisticated backpacks", "精致背包 (Sophisticated Backpacks)"),
-    ("iron's spells 'n spellbooks", "铁咒书 (Iron's Spells 'n Spellbooks)"),
+    (
+        "sophisticated backpacks",
+        "精致背包 (Sophisticated Backpacks)",
+    ),
+    (
+        "iron's spells 'n spellbooks",
+        "铁咒书 (Iron's Spells 'n Spellbooks)",
+    ),
     ("storage drawers", "存储抽屉 (Storage Drawers)"),
     ("mr crayfish's gun mod", "枪械工艺 (MrCrayfish's Gun Mod)"),
     ("create above and beyond", "机械动力：以上与以外"),
-    ("enchantment descriptions", "附魔描述 (Enchantment Descriptions)"),
+    (
+        "enchantment descriptions",
+        "附魔描述 (Enchantment Descriptions)",
+    ),
     ("legendary tooltips", "传说品质提示 (Legendary Tooltips)"),
     ("simple voice chat", "简单语音聊天 (Simple Voice Chat)"),
     ("journeymap", "旅行地图 (JourneyMap)"),
@@ -3169,7 +3512,8 @@ async fn translate_text_mymemory(text: &str) -> Option<String> {
 }
 
 async fn translate_text_google(text: &str) -> Option<String> {
-    let mut url = reqwest::Url::parse("https://translate.googleapis.com/translate_a/single").ok()?;
+    let mut url =
+        reqwest::Url::parse("https://translate.googleapis.com/translate_a/single").ok()?;
     url.query_pairs_mut()
         .append_pair("client", "gtx")
         .append_pair("sl", "auto")
@@ -3203,7 +3547,7 @@ async fn translate_text_google(text: &str) -> Option<String> {
     Some(result)
 }
 
-fn localize_titles(projects: &mut Vec<OnlineProject>) {
+fn localize_titles(projects: &mut [OnlineProject]) {
     static LOADED: AtomicBool = AtomicBool::new(false);
     if !LOADED.swap(true, Ordering::SeqCst) {
         load_translation_cache();
@@ -3273,10 +3617,7 @@ async fn search_curseforge_projects(
     if query.chars().count() > 80 || !matches!(project_type.as_str(), "mod" | "modpack") {
         return Err(LauncherError::validation("搜索条件无效。"));
     }
-    if let Some(version) = game_version
-        .as_deref()
-        .filter(|value| !value.is_empty())
-    {
+    if let Some(version) = game_version.as_deref().filter(|value| !value.is_empty()) {
         validate_instance_field(version, 64)?;
     }
     let mut url = reqwest::Url::parse("https://api.curse.tools/v1/cf/mods/search")
@@ -3291,15 +3632,16 @@ async fn search_curseforge_projects(
             .append_pair("searchFilter", query.trim())
             .append_pair(
                 "classId",
-                if project_type == "modpack" { "4471" } else { "6" },
+                if project_type == "modpack" {
+                    "4471"
+                } else {
+                    "6"
+                },
             )
             .append_pair("pageSize", "20")
             .append_pair("sortField", "2")
             .append_pair("sortOrder", "desc");
-        if let Some(version) = game_version
-            .as_deref()
-            .filter(|value| !value.is_empty())
-        {
+        if let Some(version) = game_version.as_deref().filter(|value| !value.is_empty()) {
             query_pairs.append_pair("gameVersion", version);
         }
         if project_type == "mod" {
@@ -3320,9 +3662,7 @@ async fn search_curseforge_projects(
     let response = send_download_request(&quick_http_client()?, &url, None)
         .await?
         .error_for_status()
-        .map_err(|error| {
-            LauncherError::storage(format!("CurseForge 搜索返回错误：{error}"))
-        })?;
+        .map_err(|error| LauncherError::storage(format!("CurseForge 搜索返回错误：{error}")))?;
     if response
         .content_length()
         .is_some_and(|size| size > 4 * 1024 * 1024)
@@ -3371,17 +3711,18 @@ async fn search_curseforge_projects(
             let icon_url = item
                 .get("logo")
                 .and_then(|value| value.get("url"))
-                .or_else(|| {
-                    item.get("logo")
-                        .and_then(|value| value.get("thumbnailUrl"))
-                })
+                .or_else(|| item.get("logo").and_then(|value| value.get("thumbnailUrl")))
                 .and_then(|value| value.as_str())
                 .map(str::to_string);
             let mut versions = Vec::new();
             let mut seen_versions = HashSet::new();
-            if let Some(indexes) = item.get("latestFilesIndexes").and_then(|value| value.as_array()) {
+            if let Some(indexes) = item
+                .get("latestFilesIndexes")
+                .and_then(|value| value.as_array())
+            {
                 for index in indexes {
-                    if let Some(version) = index.get("gameVersion").and_then(|value| value.as_str()) {
+                    if let Some(version) = index.get("gameVersion").and_then(|value| value.as_str())
+                    {
                         if seen_versions.insert(version.to_string()) && versions.len() < 8 {
                             versions.push(version.to_string());
                         }
@@ -3394,7 +3735,12 @@ async fn search_curseforge_projects(
                 .map(|items| {
                     items
                         .iter()
-                        .filter_map(|value| value.get("name").and_then(|v| v.as_str()).map(str::to_string))
+                        .filter_map(|value| {
+                            value
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .map(str::to_string)
+                        })
                         .collect()
                 })
                 .unwrap_or_default();
@@ -3402,7 +3748,10 @@ async fn search_curseforge_projects(
                 source: "curseforge".into(),
                 title_zh: None,
                 description_zh: None,
-                slug: item.get("slug").and_then(|value| value.as_str()).map(str::to_string),
+                slug: item
+                    .get("slug")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string),
                 loader_type: item
                     .get("latestFilesIndexes")
                     .and_then(|value| value.as_array())
@@ -3466,13 +3815,13 @@ async fn fetch_project_versions(
         .ok_or_else(|| LauncherError::storage("Modrinth 版本结果无效。"))
 }
 
-fn pick_best_modrinth_version(
-    versions: &[serde_json::Value],
-) -> Option<serde_json::Value> {
+fn pick_best_modrinth_version(versions: &[serde_json::Value]) -> Option<serde_json::Value> {
     let mut best: Option<&serde_json::Value> = None;
     for candidate in versions {
-        let candidate_release =
-            candidate.get("version_type").and_then(|value| value.as_str()) == Some("release");
+        let candidate_release = candidate
+            .get("version_type")
+            .and_then(|value| value.as_str())
+            == Some("release");
         let candidate_date = candidate
             .get("date_published")
             .and_then(|value| value.as_str())
@@ -3642,7 +3991,6 @@ async fn modrinth_compatible_version(
     modrinth_best_version(project_id, Some(game_version), Some(loader)).await
 }
 
-
 fn collect_modrinth_dependency_order<'a>(
     project_id: String,
     game_version: &'a str,
@@ -3795,7 +4143,10 @@ async fn install_single_modrinth_mod(
             "modrinthProjectId".into(),
             serde_json::Value::String(project_id.to_string()),
         );
-        object.insert("modrinthSha1".into(), serde_json::Value::String(sha1));
+        object.insert(
+            "modrinthSha1".into(),
+            serde_json::Value::String(sha1.clone()),
+        );
     }
     let metadata_json = metadata.to_string();
     connection
@@ -3806,6 +4157,23 @@ async fn install_single_modrinth_mod(
         .map_err(|error| LauncherError::storage(error.to_string()))?;
     item.source = "modrinth".into();
     item.metadata_json = Some(metadata.to_string());
+    connection
+        .execute(
+            "INSERT INTO content_provenance(content_id, provider, project_id, version_id, file_id, source_url, sha1, sha256, installed_at)
+             VALUES(?1, 'modrinth', ?2, NULL, NULL, ?3, ?4, ?5, ?6)
+             ON CONFLICT(content_id) DO UPDATE SET
+                provider='modrinth', project_id=excluded.project_id, source_url=excluded.source_url,
+                sha1=excluded.sha1, sha256=excluded.sha256, installed_at=excluded.installed_at",
+            params![
+                item.id,
+                project_id,
+                url,
+                sha1,
+                info.sha256,
+                item.installed_at
+            ],
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
     Ok(item)
 }
 
@@ -3859,6 +4227,14 @@ async fn install_modrinth_mod(
     requested_item.ok_or_else(|| LauncherError::storage("模组安装结果丢失。"))
 }
 
+pub(crate) async fn install_managed_mod(
+    app: AppHandle,
+    instance_id: i64,
+    project_id: String,
+) -> Result<ContentItem, LauncherError> {
+    install_modrinth_mod(app, instance_id, project_id).await
+}
+
 fn modrinth_slug_candidates(value: &str) -> Vec<String> {
     let lower = value.to_ascii_lowercase();
     let mut candidates = vec![lower.clone()];
@@ -3880,6 +4256,27 @@ async fn resolve_modrinth_project_id(input: &str) -> Result<String, LauncherErro
             "前置模组标识无效：{input}"
         )));
     }
+    // 可信别名映射：这些 modId 与 Modrinth slug 不一致，禁止再靠 slug 猜测。
+    // 每个条目都来自官方项目页核对的 project_id。
+    let trusted_aliases: &[(&str, &str)] = &[
+        ("kotlinforforge", "ordsPcFz"),
+        ("bookshelf", "uy4Cnpcm"),
+        ("prism", "1OE8wbN0"),
+        ("alexscaves", "U6GY0xp0"),
+        ("irons_spellbooks", "s4OWxYQQ"),
+        ("tacz", "SzzJttH8"),
+        ("expandability", "X5dUUm4k"),
+        ("fzzy_config", "hYykXjDp"),
+        ("l2library", "4Vh3BQ3F"),
+        ("goety", "4ZVIxU8x"),
+    ];
+    let normalized_input = input.to_ascii_lowercase().replace('_', "-");
+    if let Some((_, project_id)) = trusted_aliases
+        .iter()
+        .find(|(key, _)| *key == input.to_ascii_lowercase() || *key == normalized_input)
+    {
+        return Ok((*project_id).to_string());
+    }
     let candidates = modrinth_slug_candidates(input);
     for candidate in &candidates {
         if candidate.is_empty()
@@ -3890,16 +4287,10 @@ async fn resolve_modrinth_project_id(input: &str) -> Result<String, LauncherErro
         {
             continue;
         }
-        let url = reqwest::Url::parse(&format!(
-            "https://api.modrinth.com/v2/project/{candidate}"
-        ))
-        .map_err(|error| LauncherError::storage(error.to_string()))?;
+        let url = reqwest::Url::parse(&format!("https://api.modrinth.com/v2/project/{candidate}"))
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
         if let Ok(value) = fetch_modrinth_json(url).await {
-            if value
-                .get("project_type")
-                .and_then(|value| value.as_str())
-                == Some("mod")
-            {
+            if value.get("project_type").and_then(|value| value.as_str()) == Some("mod") {
                 if let Some(project_id) = value.get("id").and_then(|value| value.as_str()) {
                     if (3..=64).contains(&project_id.len())
                         && project_id
@@ -3966,8 +4357,7 @@ async fn resolve_missing_mod_dependency(
     // kotlinforforge 是语言加载器：Modrinth 项目名是 “kotlin-for-forge”，
     // 直接按官方项目 ID 安装，避免搜索不到。
     if dep.eq_ignore_ascii_case("kotlinforforge") {
-        if let Ok(item) = install_modrinth_mod(app.clone(), instance_id, "ordsPcFz".into()).await
-        {
+        if let Ok(item) = install_modrinth_mod(app.clone(), instance_id, "ordsPcFz".into()).await {
             return Ok(item);
         }
     }
@@ -4006,11 +4396,7 @@ async fn auto_install_missing_mod_dependencies(
             inspections.push(inspection);
         }
     }
-    let mut installed_ids = inspections
-        .iter()
-        .filter_map(|inspection| inspection.mod_id.as_deref())
-        .map(|id| id.to_ascii_lowercase())
-        .collect::<HashSet<_>>();
+    let mut installed_ids = installed_mod_ids(&inspections);
     let mut dependents: HashMap<String, Vec<String>> = HashMap::new();
     for inspection in &inspections {
         for dependency in &inspection.dependencies {
@@ -4033,8 +4419,7 @@ async fn auto_install_missing_mod_dependencies(
     for missing_id in missing {
         if auto_fill_started.elapsed().as_secs() >= 60 {
             failures.push(
-                "自动补齐超过 60 秒时间预算，已停止尝试；可先启动游戏，稍后重试补齐。"
-                    .to_string(),
+                "自动补齐超过 60 秒时间预算，已停止尝试；可先启动游戏，稍后重试补齐。".to_string(),
             );
             break;
         }
@@ -4051,7 +4436,8 @@ async fn auto_install_missing_mod_dependencies(
             Ok(Ok(item)) => {
                 if let Some(metadata_json) = item.metadata_json.as_deref() {
                     if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(metadata_json) {
-                        if let Some(mod_id) = metadata.get("modId").and_then(|value| value.as_str()) {
+                        if let Some(mod_id) = metadata.get("modId").and_then(|value| value.as_str())
+                        {
                             installed_ids.insert(mod_id.to_ascii_lowercase());
                         }
                     }
@@ -4529,7 +4915,9 @@ fn parse_curseforge_file_info(value: &serde_json::Value) -> Result<(String, u64)
         .and_then(|entry| entry.as_u64())
         .ok_or_else(|| LauncherError::validation("CurseForge 文件缺少大小。"))?;
     if size > 2 * 1024 * 1024 * 1024 {
-        return Err(LauncherError::validation("CurseForge 文件超过安全大小限制。"));
+        return Err(LauncherError::validation(
+            "CurseForge 文件超过安全大小限制。",
+        ));
     }
     Ok((file_name.to_string(), size))
 }
@@ -4541,9 +4929,12 @@ async fn fetch_curseforge_file_info_json(
     file_id: i64,
 ) -> Result<serde_json::Value, LauncherError> {
     let url = format!("{base}/mods/{project_id}/files/{file_id}");
-    let parsed = reqwest::Url::parse(&url)
-        .map_err(|error| LauncherError::storage(error.to_string()))?;
-    if !matches!(parsed.host_str(), Some("www.curseforge.com") | Some("api.curse.tools")) {
+    let parsed =
+        reqwest::Url::parse(&url).map_err(|error| LauncherError::storage(error.to_string()))?;
+    if !matches!(
+        parsed.host_str(),
+        Some("www.curseforge.com") | Some("api.curse.tools")
+    ) {
         return Err(LauncherError::validation("CurseForge 信息地址不受信任。"));
     }
     let response = send_download_request(client, &parsed, None)
@@ -4554,14 +4945,18 @@ async fn fetch_curseforge_file_info_json(
         .content_length()
         .is_some_and(|length| length > 2 * 1024 * 1024)
     {
-        return Err(LauncherError::validation("CurseForge 文件信息超过安全限制。"));
+        return Err(LauncherError::validation(
+            "CurseForge 文件信息超过安全限制。",
+        ));
     }
     let bytes = response
         .bytes()
         .await
         .map_err(|error| LauncherError::storage(error.to_string()))?;
     if bytes.len() > 2 * 1024 * 1024 {
-        return Err(LauncherError::validation("CurseForge 文件信息超过安全限制。"));
+        return Err(LauncherError::validation(
+            "CurseForge 文件信息超过安全限制。",
+        ));
     }
     serde_json::from_slice(&bytes)
         .map_err(|error| LauncherError::storage(format!("CurseForge 文件信息无效：{error}")))
@@ -4582,9 +4977,7 @@ async fn curseforge_file_info(
             Err(error) => last_error = Some(error),
         }
     }
-    Err(last_error.unwrap_or_else(|| {
-        LauncherError::validation("无法获取 CurseForge 文件信息。")
-    }))
+    Err(last_error.unwrap_or_else(|| LauncherError::validation("无法获取 CurseForge 文件信息。")))
 }
 
 async fn download_curseforge_file(
@@ -4596,9 +4989,8 @@ async fn download_curseforge_file(
     target: &Path,
 ) -> Result<u64, LauncherError> {
     let client = shared_download_client()?;
-    let mut download_url = format!(
-        "{CURSEFORGE_API_BASE}/mods/{project_id}/files/{file_id}/download"
-    );
+    let mut download_url =
+        format!("{CURSEFORGE_API_BASE}/mods/{project_id}/files/{file_id}/download");
     if let Ok(value) =
         fetch_curseforge_file_info_json(&client, CURSEFORGE_PROXY_BASE, project_id, file_id).await
     {
@@ -4678,7 +5070,11 @@ fn collect_curseforge_index_files(root_path: &str) -> Vec<serde_json::Value> {
     let mut candidates = Vec::new();
     let mut paths = vec![PathBuf::from(root_path).join(".curseforge-index.json")];
     if let Ok(root) = launcher_data_directory() {
-        paths.push(root.join("cache").join("curseforge").join("global-index.json"));
+        paths.push(
+            root.join("cache")
+                .join("curseforge")
+                .join("global-index.json"),
+        );
     }
     for path in paths {
         if !path.is_file() {
@@ -4703,7 +5099,10 @@ fn best_curseforge_match(files: &[serde_json::Value], dep: &str) -> Option<(i64,
         if project_id <= 0 || file_id <= 0 {
             continue;
         }
-        let mod_id = file.get("modId").and_then(|v| v.as_str()).unwrap_or_default();
+        let mod_id = file
+            .get("modId")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
         if !mod_id.is_empty() && mod_id.eq_ignore_ascii_case(dep) {
             return Some((project_id, file_id));
         }
@@ -4718,13 +5117,19 @@ fn best_curseforge_match(files: &[serde_json::Value], dep: &str) -> Option<(i64,
             continue;
         }
         let name = normalize_curseforge_key(
-            file.get("name").and_then(|v| v.as_str()).unwrap_or_default(),
+            file.get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default(),
         );
         let slug = normalize_curseforge_key(
-            file.get("slug").and_then(|v| v.as_str()).unwrap_or_default(),
+            file.get("slug")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default(),
         );
         let file_name = normalize_curseforge_key(
-            file.get("fileName").and_then(|v| v.as_str()).unwrap_or_default(),
+            file.get("fileName")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default(),
         );
         let score = curseforge_match_score(&normalized, &name, &slug, &file_name);
         if score > best_score {
@@ -4772,8 +5177,8 @@ async fn install_curseforge_ids(
     };
     fs::copy(&cache_target, &final_path)
         .map_err(|error| LauncherError::storage(format!("写入模组文件夹失败：{error}")))?;
-    let metadata = serde_json::to_string(&info)
-        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let metadata =
+        serde_json::to_string(&info).map_err(|error| LauncherError::storage(error.to_string()))?;
     let connection = open_database(app)?;
     connection
         .execute(
@@ -4790,13 +5195,31 @@ async fn install_curseforge_ids(
             ],
         )
         .map_err(|error| LauncherError::storage(error.to_string()))?;
-    connection
+    let item = connection
         .query_row(
             "SELECT id,instance_id,kind,file_name,hash,metadata_json,enabled,source,installed_at FROM content_items WHERE instance_id=?1 AND kind='mod' AND hash=?2",
             params![instance_id, info.sha256],
             content_item_from_row,
         )
-        .map_err(|error| LauncherError::storage(error.to_string()))
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    connection
+        .execute(
+            "INSERT INTO content_provenance(content_id, provider, project_id, version_id, file_id, source_url, sha1, sha256, installed_at)
+             VALUES(?1, 'curseforge', ?2, NULL, ?3, ?4, NULL, ?5, ?6)
+             ON CONFLICT(content_id) DO UPDATE SET
+                provider='curseforge', project_id=excluded.project_id, file_id=excluded.file_id,
+                source_url=excluded.source_url, sha256=excluded.sha256, installed_at=excluded.installed_at",
+            params![
+                item.id,
+                project_id.to_string(),
+                file_id.to_string(),
+                format!("{CURSEFORGE_API_BASE}/mods/{project_id}/files/{file_id}"),
+                info.sha256,
+                item.installed_at
+            ],
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    Ok(item)
 }
 
 fn curseforge_modloader_type(loader: &str) -> i32 {
@@ -4828,8 +5251,13 @@ async fn fetch_curseforge_files_page(
             query.append_pair("modLoaderType", &value.to_string());
         }
     }
-    if !matches!(url.host_str(), Some("www.curseforge.com") | Some("api.curse.tools")) {
-        return Err(LauncherError::validation("CurseForge 文件列表地址不受信任。"));
+    if !matches!(
+        url.host_str(),
+        Some("www.curseforge.com") | Some("api.curse.tools")
+    ) {
+        return Err(LauncherError::validation(
+            "CurseForge 文件列表地址不受信任。",
+        ));
     }
     let response = send_download_request(client, &url, None)
         .await?
@@ -4839,14 +5267,18 @@ async fn fetch_curseforge_files_page(
         .content_length()
         .is_some_and(|length| length > 4 * 1024 * 1024)
     {
-        return Err(LauncherError::validation("CurseForge 文件列表超过安全限制。"));
+        return Err(LauncherError::validation(
+            "CurseForge 文件列表超过安全限制。",
+        ));
     }
     let bytes = response
         .bytes()
         .await
         .map_err(|error| LauncherError::storage(error.to_string()))?;
     if bytes.len() > 4 * 1024 * 1024 {
-        return Err(LauncherError::validation("CurseForge 文件列表超过安全限制。"));
+        return Err(LauncherError::validation(
+            "CurseForge 文件列表超过安全限制。",
+        ));
     }
     let value: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|error| LauncherError::storage(format!("CurseForge 文件列表无效：{error}")))?;
@@ -4878,17 +5310,26 @@ fn select_best_curseforge_file(
                     .collect()
             })
             .unwrap_or_default();
-        if version_filter.is_some() && !versions.iter().any(|v| *v == game_version_lc) {
+        if version_filter.is_some() && !versions.contains(&game_version_lc) {
             continue;
         }
-        if loader_filter.is_some() && !versions.iter().any(|v| *v == loader_lc) {
+        if loader_filter.is_some() && !versions.contains(&loader_lc) {
             continue;
         }
         candidates.push(file.clone());
     }
     let best = candidates.iter().max_by_key(|file| {
-        let release = file.get("releaseType").and_then(|v| v.as_i64()).unwrap_or(3);
-        let rank = if release == 1 { 2 } else if release == 2 { 1 } else { 0 };
+        let release = file
+            .get("releaseType")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(3);
+        let rank = if release == 1 {
+            2
+        } else if release == 2 {
+            1
+        } else {
+            0
+        };
         let id = file.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
         (rank, id)
     })?;
@@ -4921,9 +5362,13 @@ async fn curseforge_best_file(
             match fetch_curseforge_files_page(client, base, project_id, version, loader_type).await
             {
                 Ok(files) => {
-                    if let Some(candidate) =
-                        select_best_curseforge_file(&files, game_version, loader, version, loader_type)
-                    {
+                    if let Some(candidate) = select_best_curseforge_file(
+                        &files,
+                        game_version,
+                        loader,
+                        version,
+                        loader_type,
+                    ) {
                         return Ok(candidate);
                     }
                 }
@@ -4931,9 +5376,8 @@ async fn curseforge_best_file(
             }
         }
     }
-    Err(last_error.unwrap_or_else(|| {
-        LauncherError::validation("CurseForge 没有找到与该实例兼容的文件。")
-    }))
+    Err(last_error
+        .unwrap_or_else(|| LauncherError::validation("CurseForge 没有找到与该实例兼容的文件。")))
 }
 
 async fn resolve_curseforge_dependency(
@@ -5031,10 +5475,14 @@ async fn install_curseforge_url(
             }
         }
         let name = normalize_curseforge_key(
-            file.get("name").and_then(|v| v.as_str()).unwrap_or_default(),
+            file.get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default(),
         );
         let entry_slug = normalize_curseforge_key(
-            file.get("slug").and_then(|v| v.as_str()).unwrap_or_default(),
+            file.get("slug")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default(),
         );
         let score = if let Some(target) = &slug {
             if *target == entry_slug || *target == name {
@@ -5071,7 +5519,9 @@ async fn install_curseforge_project(
     let project_id = project_id.trim();
     if project_id.is_empty()
         || project_id.len() > 16
-        || !project_id.chars().all(|character| character.is_ascii_digit())
+        || !project_id
+            .chars()
+            .all(|character| character.is_ascii_digit())
     {
         return Err(LauncherError::validation("CurseForge 项目标识无效。"));
     }
@@ -5081,8 +5531,7 @@ async fn install_curseforge_project(
         .parse()
         .map_err(|_| LauncherError::validation("CurseForge 项目标识无效。"))?;
     let client = shared_download_client()?;
-    let (file_id, _, _) =
-        curseforge_best_file(&client, project_id, &game_version, &loader).await?;
+    let (file_id, _, _) = curseforge_best_file(&client, project_id, &game_version, &loader).await?;
     install_curseforge_ids(&app, instance_id, project_id, file_id).await
 }
 
@@ -5098,7 +5547,9 @@ async fn download_curseforge_modpack(
     let project_id = project_id.trim();
     if project_id.is_empty()
         || project_id.len() > 16
-        || !project_id.chars().all(|character| character.is_ascii_digit())
+        || !project_id
+            .chars()
+            .all(|character| character.is_ascii_digit())
     {
         return Err(LauncherError::validation("CurseForge 项目标识无效。"));
     }
@@ -5253,8 +5704,9 @@ async fn import_local_pack(
     if inspection.format == "curseforge" {
         let bytes = read_descriptor(&mut archive, "manifest.json")?
             .ok_or_else(|| LauncherError::validation("CurseForge manifest 缺失。"))?;
-        let value: serde_json::Value = serde_json::from_slice(&bytes)
-            .map_err(|error| LauncherError::validation(format!("CurseForge manifest 无效：{error}")))?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
+            LauncherError::validation(format!("CurseForge manifest 无效：{error}"))
+        })?;
         let files = value
             .get("files")
             .and_then(|entry| entry.as_array())
@@ -5267,7 +5719,11 @@ async fn import_local_pack(
         let mods_dir = game.join("mods");
         let tasks = files
             .into_iter()
-            .filter(|file| file.get("required").and_then(|v| v.as_bool()).unwrap_or(true))
+            .filter(|file| {
+                file.get("required")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true)
+            })
             .map(|file| {
                 let project_id = file.get("projectID").and_then(|v| v.as_i64()).unwrap_or(0);
                 let file_id = file.get("fileID").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -5292,7 +5748,7 @@ async fn import_local_pack(
                         .await
                         .map_err(|error| format!("项目 {project_id}/文件 {file_id}：{}", error.message))?;
                     if installed_mod_names.contains(&file_name.to_ascii_lowercase()) {
-                        let mod_id = std::fs::metadata(&mods_dir.join(&file_name))
+                        let mod_id = std::fs::metadata(mods_dir.join(&file_name))
                             .ok()
                             .and_then(|_| inspect_mod_jar_path(&mods_dir.join(&file_name)).ok())
                             .and_then(|info| info.mod_id);
@@ -5471,7 +5927,9 @@ async fn import_mmc_pack(
             .unix_mode()
             .is_some_and(|mode| mode & 0o170000 == 0o120000)
         {
-            return Err(LauncherError::validation("MultiMC 整合包包含不允许的符号链接。"));
+            return Err(LauncherError::validation(
+                "MultiMC 整合包包含不允许的符号链接。",
+            ));
         }
         let normalized = entry.name().replace('\\', "/");
         let Some(relative) = normalized.strip_prefix(".minecraft/") else {
@@ -5553,13 +6011,18 @@ async fn import_override_pack(
     let source = PathBuf::from(&source_path);
     let inspection = inspect_modpack_path(&source)?;
     if !matches!(inspection.format.as_str(), "hmcl" | "mcbbs") {
-        return Err(LauncherError::validation("该整合包格式暂不支持此导入方式。"));
+        return Err(LauncherError::validation(
+            "该整合包格式暂不支持此导入方式。",
+        ));
     }
     let game_version = inspection
         .game_version
         .clone()
         .ok_or_else(|| LauncherError::validation("整合包未声明 Minecraft 版本。"))?;
-    let loader_type = inspection.loader_type.clone().unwrap_or_else(|| "vanilla".to_string());
+    let loader_type = inspection
+        .loader_type
+        .clone()
+        .unwrap_or_else(|| "vanilla".to_string());
     validate_loader_type(&loader_type)?;
     let prefix = if inspection.format == "hmcl" {
         "minecraft/"
@@ -6371,7 +6834,10 @@ fn delete_world_permanently(
             .map_err(|error| LauncherError::storage(format!("删除存档失败：{error}")))?;
     }
     connection
-        .execute("DELETE FROM content_items WHERE id=?1 AND kind='world'", [content_id])
+        .execute(
+            "DELETE FROM content_items WHERE id=?1 AND kind='world'",
+            [content_id],
+        )
         .map_err(|error| LauncherError::storage(error.to_string()))?;
     Ok(DeletedContent {
         id: content_id,
@@ -6419,8 +6885,9 @@ fn remove_incompatible_mods(
             let source = mods_dir.join(file_name);
             if source.is_file() {
                 let backup = backup_dir.join(format!("{}-{}", unique_timestamp(), file_name));
-                fs::rename(&source, &backup)
-                    .map_err(|error| LauncherError::storage(format!("移出不兼容模组失败：{error}")))?;
+                fs::rename(&source, &backup).map_err(|error| {
+                    LauncherError::storage(format!("移出不兼容模组失败：{error}"))
+                })?;
                 removed += 1;
             }
             let _ = connection.execute(
@@ -6855,11 +7322,7 @@ fn scan_boot_mods(
         }
     }
     let mod_count = inspections.len();
-    let installed_ids = inspections
-        .iter()
-        .filter_map(|inspection| inspection.mod_id.as_deref())
-        .map(|id| id.to_ascii_lowercase())
-        .collect::<HashSet<_>>();
+    let installed_ids = installed_mod_ids(&inspections);
     let mods_path = PathBuf::from(&root_path).join(".minecraft").join("mods");
     let kotlin_forge_present = has_kotlinforforge_file(&mods_path);
     let provided = [
@@ -6954,8 +7417,8 @@ fn boot_health_check(app: AppHandle) -> Result<BootHealthReport, LauncherError> 
     let mut instances = Vec::new();
     let mut mods = Vec::new();
     for row in rows {
-        let (id, name, root_path, game_version, loader_type, status) = row
-            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        let (id, name, root_path, game_version, loader_type, status) =
+            row.map_err(|error| LauncherError::storage(error.to_string()))?;
         instances.push(BootInstanceCheck {
             id,
             name,
@@ -7158,11 +7621,36 @@ fn delete_instance_to_backup(
     instance_id: i64,
 ) -> Result<RemovedContent, LauncherError> {
     let connection = open_database(&app)?;
-    let root: String = connection
+    if running_games()
+        .lock()
+        .map_err(|_| LauncherError::storage("无法读取游戏运行状态。"))?
+        .contains_key(&instance_id)
+    {
+        return Err(LauncherError::validation("实例正在运行，不能删除。"));
+    }
+    let (name, root, game_version, loader_type, memory_mb, status, source): (
+        String,
+        String,
+        String,
+        String,
+        i64,
+        String,
+        String,
+    ) = connection
         .query_row(
-            "SELECT root_path FROM instances WHERE id=?1",
+            "SELECT name, root_path, game_version, loader_type, memory_mb, status, source FROM instances WHERE id=?1",
             [instance_id],
-            |row| row.get(0),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
         )
         .map_err(|_| LauncherError::validation("实例不存在。"))?;
     let root = PathBuf::from(root);
@@ -7181,6 +7669,25 @@ fn delete_instance_to_backup(
         fs::rename(&root, &destination)
             .map_err(|error| LauncherError::storage(format!("移动实例备份失败：{error}")))?;
     }
+    let size_bytes = storage::directory_size(&destination);
+    let instance_json = serde_json::to_string(&serde_json::json!({
+        "name": name,
+        "root_path": root.to_string_lossy(),
+        "game_version": game_version,
+        "loader_type": loader_type,
+        "memory_mb": memory_mb,
+        "status": status,
+        "source": source,
+    }))
+    .map_err(|error| LauncherError::storage(error.to_string()))?;
+    storage::record_deleted_instance(
+        &connection,
+        instance_id,
+        &name,
+        &destination.to_string_lossy(),
+        size_bytes,
+        &instance_json,
+    )?;
     connection
         .execute("DELETE FROM instances WHERE id=?1", [instance_id])
         .map_err(|error| LauncherError::storage(error.to_string()))?;
@@ -7367,15 +7874,13 @@ fn bmclapi_mirror_url(original: &reqwest::Url) -> Option<reqwest::Url> {
             if path.ends_with("version_manifest.json") || path.ends_with("version_manifest_v2.json")
             {
                 "https://bmclapi2.bangbang93.com/mc/game/version_manifest.json".to_string()
-            } else if let Some(stem) = path
-                .rsplit('/')
-                .next()
-                .and_then(|name| name.strip_suffix(".json"))
-                .filter(|stem| !stem.is_empty())
-            {
-                format!("https://bmclapi2.bangbang93.com/version/{stem}/json")
             } else {
-                return None;
+                let stem = path
+                    .rsplit('/')
+                    .next()
+                    .and_then(|name| name.strip_suffix(".json"))
+                    .filter(|stem| !stem.is_empty())?;
+                format!("https://bmclapi2.bangbang93.com/version/{stem}/json")
             }
         }
         "piston-data.mojang.com" => format!("https://bmclapi2.bangbang93.com{path}"),
@@ -8384,9 +8889,32 @@ fn download_cancel_flag() -> &'static AtomicBool {
     &CANCELLED
 }
 
+fn download_cancel_tokens() -> &'static DashMap<i64, CancellationToken> {
+    static TOKENS: OnceLock<DashMap<i64, CancellationToken>> = OnceLock::new();
+    TOKENS.get_or_init(DashMap::new)
+}
+
 #[tauri::command]
 fn cancel_active_downloads() {
     download_cancel_flag().store(true, Ordering::Release);
+    download_cancel_tokens()
+        .iter()
+        .for_each(|entry| entry.cancel());
+}
+
+#[tauri::command]
+fn cancel_download_job(job_id: i64) {
+    download_cancel_tokens()
+        .entry(job_id)
+        .or_default()
+        .cancel();
+}
+
+fn download_job_cancelled(job_id: i64) -> bool {
+    download_cancel_flag().load(Ordering::Acquire)
+        || download_cancel_tokens()
+            .get(&job_id)
+            .is_some_and(|token| token.is_cancelled())
 }
 
 async fn send_download_request(
@@ -8398,10 +8926,7 @@ async fn send_download_request(
     for attempt in 0..=3u32 {
         let mut request = client.get(url.clone());
         if url.host_str() == Some("www.curseforge.com") {
-            request = request.header(
-                reqwest::header::REFERER,
-                "https://www.curseforge.com/",
-            );
+            request = request.header(reqwest::header::REFERER, "https://www.curseforge.com/");
         }
         if let Some(offset) = resume_from.filter(|offset| *offset > 0) {
             request = request.header(reqwest::header::RANGE, format!("bytes={offset}-"));
@@ -8466,7 +8991,7 @@ async fn download_verified_file_parallel(
             .map_err(|error| LauncherError::storage(error.to_string()))?;
     }
     let segments = 4u64;
-    let chunk = (expected_size + segments - 1) / segments;
+    let chunk = expected_size.div_ceil(segments);
     let mut tasks = Vec::new();
     for index in 0..segments {
         let start = index * chunk;
@@ -8484,10 +9009,8 @@ async fn download_verified_file_parallel(
                     .get(url.clone())
                     .header(reqwest::header::RANGE, format!("bytes={start}-{end}"));
                 if url.host_str() == Some("www.curseforge.com") {
-                    request = request.header(
-                        reqwest::header::REFERER,
-                        "https://www.curseforge.com/",
-                    );
+                    request =
+                        request.header(reqwest::header::REFERER, "https://www.curseforge.com/");
                 }
                 match request.send().await {
                     Ok(response)
@@ -8499,8 +9022,8 @@ async fn download_verified_file_parallel(
                             .map_err(|error| LauncherError::storage(error.to_string()))?;
                         let mut stream = response.bytes_stream();
                         while let Some(chunk) = stream.next().await {
-                            let chunk = chunk
-                                .map_err(|error| LauncherError::storage(error.to_string()))?;
+                            let chunk =
+                                chunk.map_err(|error| LauncherError::storage(error.to_string()))?;
                             tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
                                 .await
                                 .map_err(|error| LauncherError::storage(error.to_string()))?;
@@ -8517,14 +9040,15 @@ async fn download_verified_file_parallel(
                     tokio::time::sleep(Duration::from_millis(300 * 2u64.pow(attempt))).await;
                 }
             }
-            Err(LauncherError::storage(format!("分段下载失败：{last_error}")))
+            Err(LauncherError::storage(format!(
+                "分段下载失败：{last_error}"
+            )))
         });
     }
-    let results: Vec<Result<(), LauncherError>> =
-        futures_util::stream::iter(tasks)
-            .buffer_unordered(segments as usize)
-            .collect()
-            .await;
+    let results: Vec<Result<(), LauncherError>> = futures_util::stream::iter(tasks)
+        .buffer_unordered(segments as usize)
+        .collect()
+        .await;
     if results.iter().any(Result::is_err) {
         for index in 0..segments {
             let _ = tokio::fs::remove_file(target.with_extension(format!("part{index}"))).await;
@@ -8556,7 +9080,8 @@ async fn download_verified_file_parallel(
         .await
         .map_err(|error| LauncherError::storage(error.to_string()))?
         .len();
-    if actual_size != expected_size || !sha1_file(target).await?.eq_ignore_ascii_case(expected_sha1) {
+    if actual_size != expected_size || !sha1_file(target).await?.eq_ignore_ascii_case(expected_sha1)
+    {
         let _ = tokio::fs::remove_file(target).await;
         return Err(LauncherError::validation("下载文件大小或 SHA-1 校验失败。"));
     }
@@ -8575,16 +9100,10 @@ async fn download_verified_file_with_progress(
     target: &std::path::Path,
     emit_file_progress: bool,
 ) -> Result<u64, LauncherError> {
-    if !expected_sha1.is_empty()
-        && expected_size.is_some_and(|size| size >= 16 * 1024 * 1024)
-    {
-        if let Ok(size) = download_verified_file_parallel(
-            url,
-            expected_sha1,
-            expected_size.unwrap_or(0),
-            target,
-        )
-        .await
+    if !expected_sha1.is_empty() && expected_size.is_some_and(|size| size >= 16 * 1024 * 1024) {
+        if let Ok(size) =
+            download_verified_file_parallel(url, expected_sha1, expected_size.unwrap_or(0), target)
+                .await
         {
             return Ok(size);
         }
@@ -8859,7 +9378,7 @@ async fn download_verified_file_attempt(
                     )
                 })?;
             let Some(chunk) = next else { break };
-            if download_cancel_flag().load(Ordering::Acquire) {
+            if download_job_cancelled(job_id) {
                 file.flush()
                     .await
                     .map_err(|error| LauncherError::storage(error.to_string()))?;
@@ -9541,7 +10060,7 @@ async fn install_vanilla_client(
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct LaunchResult {
+pub(crate) struct LaunchResult {
     process_id: u32,
     log_path: String,
 }
@@ -9824,13 +10343,15 @@ async fn launch_instance(
     }
     let (player_name, account_type, secret_ref): (String, String, Option<String>) = connection
         .query_row(
-            "SELECT display_name, account_type, safe_secret_ref FROM accounts WHERE id=?1",
+            "SELECT display_name, account_type, credential_ref FROM accounts WHERE id=?1",
             [account_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .map_err(|_| LauncherError::validation("请选择有效的账户。"))?;
     drop(connection);
-    let (player_uuid, access_token, user_type, xuid, authlib_javaagent) = if account_type == "MICROSOFT" {
+    let (player_uuid, access_token, user_type, xuid, authlib_javaagent) = if account_type
+        == "MICROSOFT"
+    {
         let secret_ref = secret_ref
             .ok_or_else(|| LauncherError::validation("Microsoft 凭据不存在，请重新登录。"))?;
         let entry = keyring::Entry::new("SH启动器", &secret_ref)
@@ -9931,12 +10452,8 @@ async fn launch_instance(
             Some(format!("-javaagent:{}={}", jar.display(), api_root)),
         )
     } else {
-        let digest = format!(
-            "{:x}",
-            Sha256::digest(format!("OfflinePlayer:{player_name}").as_bytes())
-        );
         (
-            digest[..32].to_string(),
+            minecraft_offline_uuid(&player_name).to_string(),
             "0".to_string(),
             "legacy".to_string(),
             String::new(),
@@ -10102,7 +10619,8 @@ async fn fetch_version_details(
         Ok(value) => Ok(value),
         Err(primary_error) => {
             if let Some(mirror) = bmclapi_mirror_url(&parsed) {
-                if let Ok(value) = fetch_version_details_from(&client, &mirror, &expected_sha1).await
+                if let Ok(value) =
+                    fetch_version_details_from(&client, &mirror, &expected_sha1).await
                 {
                     return Ok(value);
                 }
@@ -10114,9 +10632,10 @@ async fn fetch_version_details(
 
 #[tauri::command]
 async fn fetch_remote_changelog() -> Result<Vec<serde_json::Value>, LauncherError> {
-    let url = "https://cdn.jsdelivr.net/gh/Bantanxiaon/minecraft-java-launcher@main/docs/changelog.json";
-    let parsed = reqwest::Url::parse(url)
-        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let url =
+        "https://cdn.jsdelivr.net/gh/Bantanxiaon/minecraft-java-launcher@main/docs/changelog.json";
+    let parsed =
+        reqwest::Url::parse(url).map_err(|error| LauncherError::storage(error.to_string()))?;
     if parsed.host_str() != Some("cdn.jsdelivr.net") {
         return Err(LauncherError::validation("更新日志地址不受信任。"));
     }
@@ -10171,13 +10690,13 @@ async fn fetch_version_manifest(include_snapshots: bool) -> Result<VersionManife
     Ok(manifest)
 }
 
-fn chrono_like_timestamp() -> String {
+pub(crate) fn chrono_like_timestamp() -> String {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|value| value.as_secs().to_string())
         .unwrap_or_else(|_| "0".into())
 }
-fn unique_timestamp() -> u128 {
+pub(crate) fn unique_timestamp() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|value| value.as_nanos())
@@ -10288,6 +10807,7 @@ pub fn run() {
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![
+            build_info,
             exit_launcher,
             terminate_game,
             list_accounts,
@@ -10322,7 +10842,12 @@ pub fn run() {
             preview_vanilla_install,
             install_vanilla_client,
             cancel_active_downloads,
+            cancel_download_job,
             launch_instance,
+            multiplayer::multiplayer_prepare,
+            multiplayer::multiplayer_start,
+            multiplayer::multiplayer_stop,
+            multiplayer::multiplayer_state,
             repair_missing_mod_dependencies,
             list_loader_versions,
             install_profile_loader,
@@ -10357,6 +10882,12 @@ pub fn run() {
             delete_world_permanently,
             remove_incompatible_mods,
             clean_launcher_cache,
+            storage::get_storage_overview,
+            storage::build_safe_cleanup_plan,
+            storage::execute_cleanup_plan,
+            storage::list_deleted_instances,
+            storage::restore_deleted_instance,
+            storage::permanently_delete_instance_backup,
             list_removed_backups,
             restore_removed_backup,
             exports::export_instance_modpack,
@@ -10370,6 +10901,25 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+pub(crate) async fn multiplayer_launch(
+    app: AppHandle,
+    instance_id: i64,
+    account_id: i64,
+    java_path: String,
+) -> Result<LaunchResult, LauncherError> {
+    launch_instance(
+        app,
+        instance_id,
+        account_id,
+        java_path,
+        Some(true),
+        None,
+        None,
+        None,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -10392,10 +10942,9 @@ mod tests {
             bmclapi_mirror_url(&details).unwrap().as_str(),
             "https://bmclapi2.bangbang93.com/version/1.21.1/json"
         );
-        let client = reqwest::Url::parse(
-            "https://piston-data.mojang.com/v1/objects/abcdef0123/client.jar",
-        )
-        .unwrap();
+        let client =
+            reqwest::Url::parse("https://piston-data.mojang.com/v1/objects/abcdef0123/client.jar")
+                .unwrap();
         assert_eq!(
             bmclapi_mirror_url(&client).unwrap().as_str(),
             "https://bmclapi2.bangbang93.com/v1/objects/abcdef0123/client.jar"
@@ -10423,13 +10972,10 @@ mod tests {
             bmclapi_mirror_url(&reqwest::Url::parse("https://api.modrinth.com/v2/x").unwrap())
                 .is_none()
         );
-        assert!(
-            bmclapi_mirror_url(
-                &reqwest::Url::parse("https://bmclapi2.bangbang93.com/version/1.21.1/json")
-                    .unwrap()
-            )
-            .is_none()
-        );
+        assert!(bmclapi_mirror_url(
+            &reqwest::Url::parse("https://bmclapi2.bangbang93.com/version/1.21.1/json").unwrap()
+        )
+        .is_none());
     }
 
     #[test]
@@ -10452,14 +10998,22 @@ mod tests {
     #[test]
     fn curseforge_matcher_resolves_real_pack_dependencies() {
         let cases = [
-            ("iceandfire", "Ice and Fire: Dragons", "ice-and-fire-dragons"),
+            (
+                "iceandfire",
+                "Ice and Fire: Dragons",
+                "ice-and-fire-dragons",
+            ),
             ("ftblibrary", "FTB Library", "ftb-library"),
             ("cupboard", "Cupboard", "cupboard"),
             ("octolib", "OctoLib", "octolib"),
             ("slashblade", "Slashblade", "slashblade"),
             ("structure_gel", "Structure Gel", "structure-gel"),
             ("tacz", "Tacz", "tacz"),
-            ("irons_spellbooks", "Iron's Spells 'n Spellbooks", "irons-spells-n-spellbooks"),
+            (
+                "irons_spellbooks",
+                "Iron's Spells 'n Spellbooks",
+                "irons-spells-n-spellbooks",
+            ),
             ("alexscaves", "Alex's Caves", "alexs-caves"),
         ];
         for (dep, name, slug) in cases {
@@ -10835,8 +11389,7 @@ side="BOTH"
         let path =
             std::env::var("LAUNCHER_TEST_MODPACK").expect("LAUNCHER_TEST_MODPACK is required");
         let started = std::time::Instant::now();
-        let inspection = inspect_modpack_path(Path::new(&path))
-            .expect("真实整合包应能通过检查");
+        let inspection = inspect_modpack_path(Path::new(&path)).expect("真实整合包应能通过检查");
         println!(
             "format={} name={:?} version={:?} mc={:?} loader={:?} mods={} overrides={} elapsed_ms={}",
             inspection.format,
@@ -10943,7 +11496,10 @@ side="BOTH"
         let mut buffer = std::io::Cursor::new(Vec::new());
         let mut writer = zip::ZipWriter::new(&mut buffer);
         writer
-            .start_file("META-INF/mods.toml", zip::write::SimpleFileOptions::default())
+            .start_file(
+                "META-INF/mods.toml",
+                zip::write::SimpleFileOptions::default(),
+            )
             .unwrap();
         writer.write_all(toml.as_bytes()).unwrap();
         writer.finish().unwrap();
@@ -10998,12 +11554,19 @@ side="BOTH"
         for (name, entries, expected_format) in cases {
             let path = test_temp_path(name).with_extension("zip");
             write_test_zip(&path, entries);
-            let inspection = inspect_modpack_path(&path).unwrap_or_else(|error| {
-                panic!("{name} 应能通过检查：{}", error.message)
-            });
+            let inspection = inspect_modpack_path(&path)
+                .unwrap_or_else(|error| panic!("{name} 应能通过检查：{}", error.message));
             assert_eq!(inspection.format, expected_format, "{name} 格式识别错误");
-            assert_eq!(inspection.game_version.as_deref(), Some("1.20.1"), "{name} 游戏版本错误");
-            assert_eq!(inspection.loader_type.as_deref(), Some("forge"), "{name} 加载器错误");
+            assert_eq!(
+                inspection.game_version.as_deref(),
+                Some("1.20.1"),
+                "{name} 游戏版本错误"
+            );
+            assert_eq!(
+                inspection.loader_type.as_deref(),
+                Some("forge"),
+                "{name} 加载器错误"
+            );
             assert!(inspection.mod_count >= 1, "{name} 模组数量错误");
             fs::remove_file(path).unwrap();
         }
@@ -11120,13 +11683,14 @@ side="BOTH"
     #[ignore = "联网测试 CurseForge 搜索代理"]
     fn curseforge_search_proxy_live() {
         tauri::async_runtime::block_on(async {
-            let projects =
-                search_curseforge_projects("create".into(), "mod".into(), None, None)
-                    .await
-                    .expect("应能通过代理搜索 CurseForge");
+            let projects = search_curseforge_projects("create".into(), "mod".into(), None, None)
+                .await
+                .expect("应能通过代理搜索 CurseForge");
             assert!(!projects.is_empty(), "应返回搜索结果");
             assert!(
-                projects.iter().all(|project| project.source == "curseforge"),
+                projects
+                    .iter()
+                    .all(|project| project.source == "curseforge"),
                 "来源应标记为 curseforge"
             );
         });
@@ -11140,7 +11704,10 @@ side="BOTH"
             &installed,
             false,
         );
-        assert!(missing.contains("kotlinforforge"), "缺少 kotlinforforge 时必须报出");
+        assert!(
+            missing.contains("kotlinforforge"),
+            "缺少 kotlinforforge 时必须报出"
+        );
         assert!(missing.contains("patchouli"));
 
         let with_kotlin = missing_dependencies(
@@ -11164,5 +11731,41 @@ side="BOTH"
         assert!(has_kotlinforforge_file(&mods));
         assert!(!has_kotlinforforge_file(&dir));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn offline_uuid_matches_java_name_uuid_from_bytes() {
+        // 与 Java 交叉验证的固定值：
+        // UUID.nameUUIDFromBytes("OfflinePlayer:Notch".getBytes(StandardCharsets.UTF_8))
+        let expected = uuid::Uuid::parse_str("b50ad385-829d-3141-a216-7e7d7539ba7f").unwrap();
+        assert_eq!(minecraft_offline_uuid("Notch"), expected);
+        assert_ne!(
+            minecraft_offline_uuid("Notch"),
+            minecraft_offline_uuid("Alex")
+        );
+    }
+
+    #[test]
+    fn duplicate_display_names_do_not_overwrite_account_identity() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        run_migrations(&mut connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO accounts (account_type, minecraft_uuid, display_name, legacy_offline_uuid, created_at)
+                 VALUES ('OFFLINE', ?1, 'Alex', ?2, '1')",
+                params![minecraft_offline_uuid("Alex").to_string(), legacy_offline_uuid("Alex")],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO accounts (account_type, minecraft_uuid, display_name, legacy_offline_uuid, created_at)
+                 VALUES ('EXTERNAL', ?1, 'Alex', NULL, '2')",
+                params![uuid::Uuid::new_v4().to_string()],
+            )
+            .expect("同名但身份不同的账户应可共存，display_name 不再是唯一约束");
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM accounts", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
     }
 }

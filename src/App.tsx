@@ -31,6 +31,7 @@ import type {
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { ServersPage } from "./pages/ServersPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { StoragePage } from "./pages/StoragePage";
 import { InstanceLibraryPage } from "./pages/InstanceLibraryPage";
 import { HomeUpdateCard } from "./components/HomeUpdateCard";
 import { SplashScreen } from "./components/SplashScreen";
@@ -67,12 +68,12 @@ import {
 } from "./ui";
 import grassBlock from "./assets/grass-block.png";
 import {
-  Archive,
   Box,
   CircleUserRound,
   Download,
   FolderOpen,
   Gamepad2,
+  HardDrive,
   House,
   Image as ImageIcon,
   LibraryBig,
@@ -2667,7 +2668,7 @@ export default function App() {
   const selectedJava =
     javaRuntimes.find((runtime) => runtime.path === selectedJavaPath) ??
     javaRuntimes.find((runtime) => runtime.is64Bit);
-  const navIcons = [House, LibraryBig, Box, Puzzle, Package, ImageIcon, Sun, Server, Download, Settings, Archive];
+  const navIcons = [House, LibraryBig, Puzzle, Package, ImageIcon, Sun, Box, Server, Download, HardDrive, Settings];
   return (
     <div className="app-frame">
       <DesktopTitleBar />
@@ -3074,7 +3075,7 @@ export default function App() {
               />
             ) : null}
           </>
-        ) : activeNav === "服务器" ? (
+        ) : activeNav === "联机" ? (
           <ServersPage
             servers={servers}
             instances={instances}
@@ -3086,6 +3087,7 @@ export default function App() {
             onAddServer={addServer}
             onUpdateServer={updateServer}
             onRemoveServer={removeServer}
+            javaPath={selectedJava?.path}
             onJoin={(server, instanceId, accountId) => {
               const instance = instances.find((candidate) => candidate.id === instanceId);
               if (!instance) {
@@ -3097,6 +3099,8 @@ export default function App() {
               void launchSelectedInstance(instance, false, server, accountId);
             }}
           />
+        ) : activeNav === "存储" ? (
+          <StoragePage />
         ) : activeNav === "游戏库" || activeNav === "实例" ? (
           <InstanceLibraryPage
             instances={instances}

@@ -2,6 +2,18 @@
 
 版本号固定三位：主版本.次版本.补丁版本。最右一位是小补丁/Bug 修复，中间一位是稍大补丁更新，最左一位是包含 UI 与新增内容的大型更新。每个版本在 `src/versionHighlights.ts` 维护“版本亮点”，软件首页自动展示。
 
+## SH启动器 0.8.0 Beta - 2026-08-16
+
+- 依赖解析可信化：不再从 modId 盲猜 Modrinth slug；内置已核对的 provider 别名映射（KotlinForForge、Bookshelf、Prism、Alex's Caves、Iron's Spells、TaCZ、ExpandAbility、fzzy_config、L2Library、Goety），Fabric/Quilt 的 provides 声明参与依赖满足判断。
+- 内容来源溯源：Modrinth / CurseForge 安装写入 content_provenance（provider、projectId、fileId、来源 URL、SHA），建立可信 provenance。
+- 标准离线 UUID：按 Java nameUUIDFromBytes 语义生成，保留旧 SHA-256 UUID 兼容字段；display_name 不再唯一，minecraft_uuid 唯一索引。
+- 存储管理：磁盘占用总览、一键安全清理（预览 + fingerprint 二次校验）、已删除实例列表/恢复/永久删除。
+- 数据库：新增 6 组表与真实 Migration（v6/v7/v8），开启 WAL 与 busy_timeout，升级前自动备份数据库并保留最近 5 份。
+- 下载：新增单任务取消，任务间互不影响；数据目录无 D 盘时自动使用系统本地应用数据目录，仍优先沿用旧 D 盘数据。
+- 一键免费联机 V1：e4mc 作为受管理内容精确安装（project identity + hash），启动后自动识别局域网端口与邀请地址，游戏退出自动清理房间状态。
+- 路径安全：统一 Windows 文件名校验（保留设备名、结尾点/空格、禁用字符）。
+- 工程化：Vitest 前端测试、CI 质量门禁（lint/test/build + cargo fmt/clippy/test）、版本同步脚本、BuildInfo 注入 commit/构建时间。
+
 ## SH启动器 0.7.0 Beta - 2026-08-16
 
 - 整合包 = 独立实例（对齐 PCL）：导入或下载任何整合包都自动创建一套独立实例，自动读取游戏版本与加载器；通用 ZIP 可手动选择版本与加载器后同样生成独立实例。

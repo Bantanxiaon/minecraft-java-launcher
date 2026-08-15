@@ -199,3 +199,54 @@ export type OnlineProject = {
   versions: string[];
   categories: string[];
 };
+export type StorageCategory =
+  | "INSTANCE"
+  | "DOWNLOAD_CACHE"
+  | "PARTIAL_DOWNLOAD"
+  | "JAVA_RUNTIME"
+  | "JAVA_ARCHIVE"
+  | "LOADER_INSTALLER"
+  | "LOG"
+  | "CRASH_REPORT"
+  | "WORLD_BACKUP"
+  | "REMOVED_CONTENT_BACKUP"
+  | "DELETED_INSTANCE"
+  | "TEMPORARY"
+  | "CORRUPT_BACKUP";
+export type StorageOverview = {
+  totalBytes: number;
+  reclaimableBytes: number;
+  categories: Array<{ category: StorageCategory; bytes: number; itemCount: number }>;
+};
+export type CleanupPlan = {
+  id: string;
+  fingerprint: string;
+  generatedAt: number;
+  reclaimableBytes: number;
+  destructiveCount: number;
+  items: Array<{
+    id: string;
+    category: StorageCategory;
+    label: string;
+    path: string;
+    bytes: number;
+    safety: "SAFE" | "RECOVERABLE" | "DESTRUCTIVE" | "IN_USE";
+    lastModifiedAt?: number;
+    inUseBy: string[];
+  }>;
+};
+export type DeletedInstance = {
+  id: string;
+  originalInstanceId: number;
+  displayName: string;
+  backupPath: string;
+  sizeBytes?: number;
+  deletedAt: string;
+  gameVersion?: string;
+  loaderType?: string;
+};
+export type RoomInfo = {
+  instanceId: number;
+  state: string;
+  address?: string;
+};
