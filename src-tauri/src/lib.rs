@@ -744,11 +744,11 @@ async fn download_sha256_file(
     }
     let mut downloaded = resume_from;
     loop {
-        let next = tokio::time::timeout(Duration::from_secs(60), stream.next())
+        let next = tokio::time::timeout(Duration::from_secs(180), stream.next())
             .await
             .map_err(|_| {
                 LauncherError::storage(
-                    "Java 下载连续 60 秒没有收到数据。请检查网络后重试；已下载的部分会保留。",
+                    "Java 下载连续 180 秒没有收到数据。请检查网络后重试；已下载的部分会保留。",
                 )
             })?;
         let Some(chunk) = next else { break };
@@ -3221,17 +3221,125 @@ async fn install_curseforge_ids(
         .map_err(|error| LauncherError::storage(error.to_string()))
 }
 
+fn curseforge_modloader_type(loader: &str) -> i32 {
+    match loader {
+        "forge" => 1,
+        "fabric" => 4,
+        "quilt" => 5,
+        "neoforge" => 6,
+        _ => 0,
+    }
+}
+
+async fn curseforge_best_file(
+    client: &reqwest::Client,
+    project_id: i64,
+    game_version: &str,
+    loader: &str,
+) -> Result<(i64, String, u64), LauncherError> {
+    let mod_loader_type = curseforge_modloader_type(loader);
+    let attempts: Vec<(Option<&str>, Option<i32>)> = vec![
+        (Some(game_version), Some(mod_loader_type)),
+        (Some(game_version), None),
+        (None, Some(mod_loader_type)),
+        (None, None),
+    ];
+    for (version, loader_type) in attempts {
+        let mut url = reqwest::Url::parse(&format!(
+            "{CURSEFORGE_API_BASE}/mods/{project_id}/files"
+        ))
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+        {
+            let mut query = url.query_pairs_mut();
+            query.append_pair("pageSize", "50");
+            if let Some(value) = version {
+                query.append_pair("gameVersion", value);
+            }
+            if let Some(value) = loader_type {
+                query.append_pair("modLoaderType", &value.to_string());
+            }
+        }
+        let response = send_download_request(client, &url, None)
+            .await?
+            .error_for_status()
+            .map_err(|error| LauncherError::storage(format!("CurseForge 文件列表错误：{error}")))?;
+        if response
+            .content_length()
+            .is_some_and(|length| length > 4 * 1024 * 1024)
+        {
+            return Err(LauncherError::validation("CurseForge 文件列表超过安全限制。"));
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        if bytes.len() > 4 * 1024 * 1024 {
+            return Err(LauncherError::validation("CurseForge 文件列表超过安全限制。"));
+        }
+        let value: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|error| LauncherError::storage(format!("CurseForge 文件列表无效：{error}")))?;
+        let files = value
+            .get("data")
+            .and_then(|entry| entry.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let game_version_lc = game_version.to_ascii_lowercase();
+        let loader_lc = loader.to_ascii_lowercase();
+        let mut candidates = Vec::new();
+        for file in &files {
+            let versions: Vec<String> = file
+                .get("gameVersions")
+                .and_then(|entry| entry.as_array())
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| item.as_str().map(|v| v.to_ascii_lowercase()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if version.is_some() && !versions.iter().any(|v| *v == game_version_lc) {
+                continue;
+            }
+            if loader_type.is_some() && !versions.iter().any(|v| *v == loader_lc) {
+                continue;
+            }
+            candidates.push(file.clone());
+        }
+        let best = candidates.iter().max_by_key(|file| {
+            let release = file.get("releaseType").and_then(|v| v.as_i64()).unwrap_or(3);
+            let rank = if release == 1 { 2 } else if release == 2 { 1 } else { 0 };
+            let id = file.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+            (rank, id)
+        });
+        if let Some(file) = best {
+            let file_id = file.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+            let file_name = file
+                .get("fileName")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let size = file.get("fileLength").and_then(|v| v.as_u64()).unwrap_or(0);
+            if file_id > 0 && !file_name.is_empty() && size > 0 {
+                return Ok((file_id, file_name, size));
+            }
+        }
+    }
+    Err(LauncherError::validation(
+        "CurseForge 没有找到与该实例兼容的文件。",
+    ))
+}
+
 async fn resolve_curseforge_dependency(
     app: &AppHandle,
     instance_id: i64,
     dep: &str,
 ) -> Result<ContentItem, LauncherError> {
     let connection = open_database(app)?;
-    let root_path: String = connection
+    let (root_path, game_version, loader): (String, String, String) = connection
         .query_row(
-            "SELECT root_path FROM instances WHERE id=?1",
+            "SELECT root_path, game_version, loader_type FROM instances WHERE id=?1",
             [instance_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .map_err(|_| LauncherError::validation("目标实例不存在。"))?;
     drop(connection);
@@ -3241,8 +3349,14 @@ async fn resolve_curseforge_dependency(
             "没有可用的 CurseForge 索引；请先导入包含该模组的 CurseForge 整合包。",
         ));
     }
-    let (project_id, file_id) = best_curseforge_match(&files, dep)
+    let (project_id, indexed_file_id) = best_curseforge_match(&files, dep)
         .ok_or_else(|| LauncherError::validation("在 CurseForge 索引中未匹配到该项目。"))?;
+    // 优先按实例版本与加载器选择最优文件；接口不可用时退回索引中的文件
+    let client = shared_download_client()?;
+    let file_id = match curseforge_best_file(&client, project_id, &game_version, &loader).await {
+        Ok((file_id, _, _)) => file_id,
+        Err(_) => indexed_file_id,
+    };
     install_curseforge_ids(app, instance_id, project_id, file_id).await
 }
 
@@ -6409,25 +6523,23 @@ async fn download_verified_file_with_progress(
         true,
     )
     .await;
-    if let Err(primary_error) = &first {
-        // 1) 官方源校验失败时，去掉断点再试一次，排除残留的部分文件。
-        if primary_error.message == "下载文件大小或 SHA-1 校验失败。" {
-            if let Ok(size) = download_verified_file_attempt(
-                app,
-                instance_id,
-                url,
-                expected_sha1,
-                expected_size,
-                target,
-                emit_file_progress,
-                false,
-            )
-            .await
-            {
-                return Ok(size);
-            }
+    if first.is_err() {
+        // 1) 先用同一地址重新开一个连接重试一次，缓解断流、超时和残留部分文件。
+        if let Ok(size) = download_verified_file_attempt(
+            app,
+            instance_id,
+            url,
+            expected_sha1,
+            expected_size,
+            target,
+            emit_file_progress,
+            false,
+        )
+        .await
+        {
+            return Ok(size);
         }
-        // 2) 官方源网络失败时，自动改用 BMCLAPI 国内镜像重试一次（SHA-1 校验不变）。
+        // 2) 仍失败时，自动改用 BMCLAPI 国内镜像重试一次（SHA-1 校验不变）。
         if let Ok(parsed) = validate_resource_url(url) {
             if let Some(mirror) = bmclapi_mirror_url(&parsed) {
                 if let Ok(size) = download_verified_file_attempt(
@@ -6662,11 +6774,11 @@ async fn download_verified_file_attempt(
         let mut downloaded = resume_from;
         let mut last_emit = std::time::Instant::now();
         loop {
-            let next = tokio::time::timeout(Duration::from_secs(60), stream.next())
+            let next = tokio::time::timeout(Duration::from_secs(180), stream.next())
                 .await
                 .map_err(|_| {
                     LauncherError::storage(
-                        "下载连续 60 秒没有收到数据。请检查网络后重试；已下载的部分会保留。",
+                        "下载连续 180 秒没有收到数据。请检查网络后重试；已下载的部分会保留。",
                     )
                 })?;
             let Some(chunk) = next else { break };
