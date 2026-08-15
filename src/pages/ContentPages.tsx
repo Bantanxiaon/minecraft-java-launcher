@@ -92,6 +92,7 @@ function OnlineCatalog({
   onTranslate?: (text: string) => Promise<string | undefined>;
 }) {
   const [translations, setTranslations] = useState<Record<string, string>>({});
+  const [pendingKeys, setPendingKeys] = useState<Set<string>>(new Set());
   const onTranslateRef = useRef(onTranslate);
   onTranslateRef.current = onTranslate;
 
@@ -101,28 +102,31 @@ function OnlineCatalog({
     const queue: Array<{ text: string; keys: string[] }> = [];
     const byText = new Map<string, string[]>();
     const hasCjk = (value: string) => /[\u4e00-\u9fff]/.test(value);
-    for (const project of projects) {
-      if (queue.length >= 18) break;
-      const titleKey = `${project.source}:${project.projectId}:title`;
-      const descKey = `${project.source}:${project.projectId}:desc`;
-      if (!project.titleZh && !hasCjk(project.title) && project.title) {
-        byText.set(project.title, [...(byText.get(project.title) ?? []), titleKey]);
+    const collect = (kind: "title" | "desc") => {
+      for (const project of projects) {
+        if (queue.length >= 30) break;
+        const key = `${project.source}:${project.projectId}:${kind}`;
+        const text =
+          kind === "title" ? project.title : project.description.slice(0, 300);
+        if (!text || hasCjk(text)) continue;
+        if (kind === "title" && project.titleZh) continue;
+        if (kind === "desc" && project.descriptionZh) continue;
+        byText.set(text, [...(byText.get(text) ?? []), key]);
       }
-      if (
-        !project.descriptionZh &&
-        !hasCjk(project.description) &&
-        project.description
-      ) {
-        const text = project.description.slice(0, 300);
-        byText.set(text, [...(byText.get(text) ?? []), descKey]);
-      }
-    }
+    };
+    collect("title");
+    collect("desc");
     for (const [text, keys] of byText) {
-      if (queue.length >= 18) break;
+      if (queue.length >= 30) break;
       queue.push({ text, keys });
     }
+    const pending = new Set<string>();
+    for (const item of queue) {
+      for (const key of item.keys) pending.add(key);
+    }
+    setPendingKeys(pending);
     let index = 0;
-    const workers = Array.from({ length: 3 }, async () => {
+    const workers = Array.from({ length: 4 }, async () => {
       while (index < queue.length && !cancelled) {
         const item = queue[index];
         index += 1;
@@ -131,6 +135,13 @@ function OnlineCatalog({
           setTranslations((existing) => {
             const next = { ...existing };
             for (const key of item.keys) next[key] = translated;
+            return next;
+          });
+        }
+        if (!cancelled) {
+          setPendingKeys((existing) => {
+            const next = new Set(existing);
+            for (const key of item.keys) next.delete(key);
             return next;
           });
         }
@@ -204,6 +215,11 @@ function OnlineCatalog({
                 </small>
                 {title !== project.title ? (
                   <small className="catalog-original">原文：{project.title}</small>
+                ) : pendingKeys.has(titleKey) ? (
+                  <small className="catalog-original">标题汉化中…</small>
+                ) : null}
+                {pendingKeys.has(descKey) && description === project.description ? (
+                  <small className="catalog-original">简介汉化中…</small>
                 ) : null}
                 <p>{description}</p>
                 <span>{project.categories.slice(0, 3).map(categoryText).join(" · ") || "Minecraft"}</span>

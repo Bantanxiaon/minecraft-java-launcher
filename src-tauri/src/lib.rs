@@ -2243,6 +2243,42 @@ fn inspect_mod_jar_path(path: &Path) -> Result<ModInspection, LauncherError> {
     })
 }
 
+fn has_kotlinforforge_file(mods_directory: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(mods_directory) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        name.contains("kotlinforforge") || name.contains("kotlin-for-forge")
+    })
+}
+
+fn missing_dependencies<'a, S: AsRef<str> + std::cmp::Eq + std::hash::Hash>(
+    dependencies: impl IntoIterator<Item = &'a str>,
+    installed_ids: &HashSet<S>,
+    kotlin_forge_present: bool,
+) -> BTreeSet<String> {
+    let provided = [
+        "minecraft",
+        "java",
+        "fabricloader",
+        "fabric-loader",
+        "quilt_loader",
+        "quilt-loader",
+        "forge",
+        "neoforge",
+    ];
+    dependencies
+        .into_iter()
+        .map(|id| id.to_ascii_lowercase())
+        .filter(|id| {
+            !provided.contains(&id.as_str())
+                && !(id == "kotlinforforge" && kotlin_forge_present)
+                && !installed_ids.iter().any(|installed| installed.as_ref() == id)
+        })
+        .collect()
+}
+
 fn validate_instance_mods(
     root_path: &str,
     game_version: &str,
@@ -2255,6 +2291,7 @@ fn validate_instance_mods(
     if !mods.is_dir() {
         return Ok(());
     }
+    let kotlin_forge_present = has_kotlinforforge_file(&mods);
     let mut inspections = Vec::new();
     let mut problems = Vec::new();
     let entries = fs::read_dir(&mods)
@@ -2298,23 +2335,13 @@ fn validate_instance_mods(
         .filter_map(|inspection| inspection.mod_id.as_deref())
         .map(|id| id.to_ascii_lowercase())
         .collect::<HashSet<_>>();
-    let provided = [
-        "minecraft",
-        "java",
-        "fabricloader",
-        "fabric-loader",
-        "quilt_loader",
-        "quilt-loader",
-        "forge",
-        "neoforge",
-        "kotlinforforge",
-    ];
-    let missing = inspections
-        .iter()
-        .flat_map(|inspection| inspection.dependencies.iter())
-        .map(|id| id.to_ascii_lowercase())
-        .filter(|id| !provided.contains(&id.as_str()) && !installed_ids.contains(id))
-        .collect::<std::collections::BTreeSet<_>>();
+    let missing = missing_dependencies(
+        inspections
+            .iter()
+            .flat_map(|inspection| inspection.dependencies.iter().map(|id| id.as_str())),
+        &installed_ids,
+        kotlin_forge_present,
+    );
     if !missing.is_empty() {
         problems.push(format!(
             "缺少前置模组：{}",
@@ -2925,6 +2952,127 @@ const CHINESE_DICTIONARY: &[(&str, &str)] = &[
     ("tacz", "现代战争枪械 (TaCZ)"),
     ("create", "机械动力 (Create)"),
     ("essential", "Essential 联机模组"),
+    ("cloth config", "Cloth Config 配置库"),
+    ("forge config api", "Forge Config API"),
+    ("fabric language kotlin", "Fabric 语言 Kotlin"),
+    ("architectury", "Architectury API"),
+    ("geckolib", "GeckoLib 动画库"),
+    ("citadel", "城堡核心 (Citadel)"),
+    ("mantle", "地幔前置 (Mantle)"),
+    ("quark", "夸克 (Quark)"),
+    ("supplementaries", "补充品 (Supplementaries)"),
+    ("chipped", "Chipped 装饰方块"),
+    ("handcrafted", "Handcrafted 手工家具"),
+    ("macaw's", "Macaw 系列家具"),
+    ("decorative blocks", "装饰方块"),
+    ("charm", "魅力 (Charm)"),
+    ("terralith", "Terralith 地形"),
+    ("biomes o' plenty", "更多生物群系 (Biomes O' Plenty)"),
+    ("oh the biomes we've gone", "我们踏足过的生物群系"),
+    ("betterend", "更好的末地 (BetterEnd)"),
+    ("betternether", "更好的下界 (BetterNether)"),
+    ("blue skies", "蓝天 (Blue Skies)"),
+    ("the bumblezone", "蜂巢维度 (The Bumblezone)"),
+    ("tectonic", "Tectonic 地形"),
+    ("caves & cliffs backport", "洞穴与山崖回溯"),
+    ("when dungeons arise", "当遗迹浮现 (When Dungeons Arise)"),
+    ("dungeons and taverns", "地牢与酒馆"),
+    ("dungeon crawl", "地牢爬行"),
+    ("cataclysm", "灾厄 (Cataclysm)"),
+    ("goety", "巫术 (Goety)"),
+    ("vampirism", "吸血鬼 (Vampirism)"),
+    ("bewitchment", "巫术技艺 (Bewitchment)"),
+    ("malum", "Malum 黑暗魔法"),
+    ("ars nouveau", "新生魔艺 (Ars Nouveau)"),
+    ("ars elemental", "元素魔艺"),
+    ("occultism", "神秘学 (Occultism)"),
+    ("spell engine", "咒语引擎"),
+    ("mana and artifice", "魔导工艺"),
+    ("pneumaticcraft", "气动工艺 (PneumaticCraft)"),
+    ("immersive petroleum", "沉浸石油"),
+    ("railcraft", "铁路工艺 (Railcraft)"),
+    ("computercraft", "电脑 (ComputerCraft)"),
+    ("opencomputers", "开放电脑 (OpenComputers)"),
+    ("integrated dynamics", "集成动力"),
+    ("laserio", "LaserIO 激光物流"),
+    ("pipez", "Pipez 管道"),
+    ("sophisticated storage", "精致存储 (Sophisticated Storage)"),
+    ("functional storage", "功能存储"),
+    ("tom's simple storage", "Tom 的简易存储"),
+    ("expanded storage", "扩展存储"),
+    ("ender storage", "末影存储"),
+    ("explorer's compass", "探险家指南针"),
+    ("nature's compass", "自然指南针"),
+    ("antique atlas", "古地图册"),
+    ("map atlas", "地图册"),
+    ("spyglass improvements", "望远镜增强"),
+    ("neat", "NEAT 血条"),
+    ("torohealth", "Toro 血条"),
+    ("shoulder surfing reloaded", "第三人称越肩视角"),
+    ("falling leaves", "飘落树叶"),
+    ("particle rain", "粒子雨"),
+    ("ambient sounds", "环境音效"),
+    ("sound physics remastered", "声音物理重制"),
+    ("presence footstep", "脚步声"),
+    ("first person model", "第一人称模型"),
+    ("not enough animations", "更多动画"),
+    ("3d skin layers", "3D 皮肤层"),
+    ("zoomify", "缩放"),
+    ("ok zoomer", "缩放"),
+    ("accessories", "饰品 (Accessories)"),
+    ("trinkets", "饰品 (Trinkets)"),
+    ("elytra slot", "鞘翅栏"),
+    ("back slot", "背部栏"),
+    ("cosmetic armor", "时装盔甲"),
+    ("tetra", "四艺 (Tetra)"),
+    ("silent gear", "寂静装备"),
+    ("silent gems", "寂静宝石"),
+    ("construct's armory", "匠魂军械库"),
+    ("materialis", "匠魂材料扩展"),
+    ("jade", "玉 (Jade)"),
+    ("wthit", "WTHIT 信息提示"),
+    ("hwyla", "HWYLA 信息提示"),
+    ("the one probe", "TOP 信息提示"),
+    ("waila", "WAILA 信息提示"),
+    ("just enough resources", "JE 资源信息"),
+    ("inventory profiles next", "背包配置 Next"),
+    ("inventory tweaks", "背包整理"),
+    ("carry on", "搬起来 (Carry On)"),
+    ("pick up notifier", "拾取提示"),
+    ("starlight", "星光 (Starlight)"),
+    ("canary", "金丝雀 (Canary)"),
+    ("krypton", "氪 (Krypton)"),
+    ("lazy language loader", "懒加载语言文件"),
+    ("smooth boot", "平滑启动"),
+    ("fastload", "快速加载"),
+    ("chunky", "Chunky 预生成区块"),
+    ("distanthorizons", "遥远地平线 (Distant Horizons)"),
+    ("nvidium", "Nvidium 渲染"),
+    ("sodium extra", "钠扩展"),
+    ("optifabric", "OptiFabric 兼容"),
+    ("betterfps", "BetterFPS"),
+    ("friends and foes", "朋友与敌人"),
+    ("naturalist", "博物学家 (Naturalist)"),
+    ("ecologics", "生态学"),
+    ("gardens of the dead", "死亡花园"),
+    ("biomemakeover", "生物群系改造"),
+    ("mutant beasts", "变异野兽"),
+    ("savage and ravage", "野蛮与掠夺"),
+    ("illagers wear armor", "灾厄村民穿盔甲"),
+    ("enderman overhaul", "末影人重做"),
+    ("legendary monsters", "传说怪物"),
+    ("dragonmounts", "龙坐骑"),
+    ("moredragoneggs", "更多龙蛋"),
+    ("flywheel", "飞轮 (Flywheel)"),
+    ("create addition", "机械动力扩展"),
+    ("create crafts & additions", "机械动力：工艺与扩展"),
+    ("steam 'n' rails", "机械动力：蒸汽与铁路"),
+    ("copycats+", "机械动力：仿制方块"),
+    ("ponder", "Ponder 教程机制"),
+    ("serene seasons", "宁静四季"),
+    ("seasonhud", "季节 HUD"),
+    ("packing tape", "打包胶带"),
+    ("little logistics", "小型物流"),
 ];
 
 fn translation_cache() -> &'static Mutex<HashMap<String, String>> {
@@ -3009,6 +3157,44 @@ async fn translate_text_mymemory(text: &str) -> Option<String> {
             .and_then(|value| value.as_str())?
             .trim()
             .to_string();
+        (!translated.is_empty()).then_some(translated)
+    })
+    .await
+    .ok()
+    .flatten()?;
+    if !result.is_empty() {
+        return Some(result);
+    }
+    translate_text_google(text).await
+}
+
+async fn translate_text_google(text: &str) -> Option<String> {
+    let mut url = reqwest::Url::parse("https://translate.googleapis.com/translate_a/single").ok()?;
+    url.query_pairs_mut()
+        .append_pair("client", "gtx")
+        .append_pair("sl", "auto")
+        .append_pair("tl", "zh-CN")
+        .append_pair("dt", "t")
+        .append_pair("q", text);
+    let client = quick_http_client().ok()?;
+    let result = tokio::time::timeout(Duration::from_secs(5), async {
+        let response = client.get(url).send().await.ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        let value: serde_json::Value = response.json().await.ok()?;
+        let translated = value
+            .as_array()?
+            .first()?
+            .as_array()?
+            .iter()
+            .filter_map(|segment| {
+                segment
+                    .as_array()
+                    .and_then(|parts| parts.first())
+                    .and_then(|part| part.as_str())
+            })
+            .collect::<String>();
         (!translated.is_empty()).then_some(translated)
     })
     .await
@@ -3777,6 +3963,14 @@ async fn resolve_missing_mod_dependency(
     if let Ok(item) = resolve_curseforge_dependency(app, instance_id, dep).await {
         return Ok(item);
     }
+    // kotlinforforge 是语言加载器：Modrinth 项目名是 “kotlin-for-forge”，
+    // 直接按官方项目 ID 安装，避免搜索不到。
+    if dep.eq_ignore_ascii_case("kotlinforforge") {
+        if let Ok(item) = install_modrinth_mod(app.clone(), instance_id, "ordsPcFz".into()).await
+        {
+            return Ok(item);
+        }
+    }
     let project_id = resolve_modrinth_project_id(dep).await?;
     install_modrinth_mod(app.clone(), instance_id, project_id).await
 }
@@ -3826,28 +4020,14 @@ async fn auto_install_missing_mod_dependencies(
                 .push(inspection.file_name.clone());
         }
     }
-    let provided = [
-        "minecraft",
-        "java",
-        "fabricloader",
-        "fabric-loader",
-        "quilt_loader",
-        "quilt-loader",
-        "forge",
-        "neoforge",
-        "kotlinforforge",
-    ];
-    let mut missing = BTreeSet::new();
-    for inspection in &inspections {
-        for dependency in &inspection.dependencies {
-            let dependency = dependency.to_ascii_lowercase();
-            if !provided.iter().any(|item| *item == dependency)
-                && !installed_ids.contains(&dependency)
-            {
-                missing.insert(dependency);
-            }
-        }
-    }
+    let kotlin_forge_present = has_kotlinforforge_file(&mods);
+    let missing = missing_dependencies(
+        inspections
+            .iter()
+            .flat_map(|inspection| inspection.dependencies.iter().map(|id| id.as_str())),
+        &installed_ids,
+        kotlin_forge_present,
+    );
     let mut failures = Vec::new();
     let auto_fill_started = std::time::Instant::now();
     for missing_id in missing {
@@ -5609,25 +5789,15 @@ fn install_mod(
             }
         }
     }
-    let provided_by_loader = [
-        "minecraft",
-        "java",
-        "fabricloader",
-        "fabric-loader",
-        "quilt_loader",
-        "quilt-loader",
-        "forge",
-        "neoforge",
-        "kotlinforforge",
-    ];
-    let missing = inspection
-        .dependencies
-        .iter()
-        .filter(|id| {
-            !provided_by_loader.contains(&id.as_str()) && !installed_ids.contains(id.as_str())
-        })
-        .cloned()
-        .collect::<Vec<_>>();
+    let mods_directory = PathBuf::from(root_path).join(".minecraft").join("mods");
+    let kotlin_forge_present = has_kotlinforforge_file(&mods_directory);
+    let missing = missing_dependencies(
+        inspection.dependencies.iter().map(|id| id.as_str()),
+        &installed_ids,
+        kotlin_forge_present,
+    )
+    .into_iter()
+    .collect::<Vec<_>>();
     if !missing.is_empty() {
         inspection.warnings.push(format!(
             "尚未检测到必需依赖：{}。安装后启动前请补齐。",
@@ -5635,7 +5805,6 @@ fn install_mod(
         ));
     }
 
-    let mods_directory = PathBuf::from(root_path).join(".minecraft").join("mods");
     fs::create_dir_all(&mods_directory)
         .map_err(|error| LauncherError::storage(error.to_string()))?;
     let mut destination_name = source_name;
@@ -6691,6 +6860,8 @@ fn scan_boot_mods(
         .filter_map(|inspection| inspection.mod_id.as_deref())
         .map(|id| id.to_ascii_lowercase())
         .collect::<HashSet<_>>();
+    let mods_path = PathBuf::from(&root_path).join(".minecraft").join("mods");
+    let kotlin_forge_present = has_kotlinforforge_file(&mods_path);
     let provided = [
         "minecraft",
         "java",
@@ -6700,14 +6871,14 @@ fn scan_boot_mods(
         "quilt-loader",
         "forge",
         "neoforge",
-        "kotlinforforge",
     ];
-    let missing = inspections
-        .iter()
-        .flat_map(|inspection| inspection.dependencies.iter())
-        .map(|id| id.to_ascii_lowercase())
-        .filter(|id| !provided.contains(&id.as_str()) && !installed_ids.contains(id))
-        .collect::<BTreeSet<_>>();
+    let missing = missing_dependencies(
+        inspections
+            .iter()
+            .flat_map(|inspection| inspection.dependencies.iter().map(|id| id.as_str())),
+        &installed_ids,
+        kotlin_forge_present,
+    );
     let mut incompatible_mods = Vec::new();
     let mut problem_mods = Vec::new();
     for inspection in &inspections {
@@ -6732,7 +6903,11 @@ fn scan_boot_mods(
             .dependencies
             .iter()
             .map(|id| id.to_ascii_lowercase())
-            .filter(|id| !provided.contains(&id.as_str()) && !installed_ids.contains(id))
+            .filter(|id| {
+                !provided.contains(&id.as_str())
+                    && !(id == "kotlinforforge" && kotlin_forge_present)
+                    && !installed_ids.contains(id)
+            })
             .collect::<Vec<_>>();
         if !missing_deps.is_empty() {
             reasons.push(format!(
@@ -10955,5 +11130,39 @@ side="BOTH"
                 "来源应标记为 curseforge"
             );
         });
+    }
+
+    #[test]
+    fn missing_dependencies_reports_kotlinforforge_when_absent() {
+        let installed: HashSet<String> = HashSet::new();
+        let missing = missing_dependencies(
+            ["kotlinforforge", "patchouli"].into_iter(),
+            &installed,
+            false,
+        );
+        assert!(missing.contains("kotlinforforge"), "缺少 kotlinforforge 时必须报出");
+        assert!(missing.contains("patchouli"));
+
+        let with_kotlin = missing_dependencies(
+            ["kotlinforforge", "patchouli"].into_iter(),
+            &installed,
+            true,
+        );
+        assert!(
+            !with_kotlin.contains("kotlinforforge"),
+            "存在 kotlinforforge 文件时不应再报缺失"
+        );
+        assert!(with_kotlin.contains("patchouli"));
+    }
+
+    #[test]
+    fn kotlinforforge_detected_by_file_name() {
+        let dir = std::env::temp_dir().join(format!("sh-kff-test-{}", unique_timestamp()));
+        let mods = dir.join("mods");
+        fs::create_dir_all(&mods).unwrap();
+        fs::write(mods.join("kotlinforforge-4.12.0-all.jar"), b"x").unwrap();
+        assert!(has_kotlinforforge_file(&mods));
+        assert!(!has_kotlinforforge_file(&dir));
+        let _ = fs::remove_dir_all(&dir);
     }
 }

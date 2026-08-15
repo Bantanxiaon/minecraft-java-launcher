@@ -2,6 +2,13 @@ export function TutorialModal({ onClose }: { onClose: () => void }) {
   return (
     <div className="error-modal-backdrop" role="dialog" aria-modal="true" aria-label="使用教程">
       <div className="changelog-modal tutorial-modal">
+        <button
+          className="download-detail-close"
+          aria-label="关闭"
+          onClick={onClose}
+        >
+          ×
+        </button>
         <h2>SH启动器 完整使用教程</h2>
         <p className="changelog-subtitle">
           覆盖开始游戏、整合包、模组、联机、下载与设置；所有数据保存在 D 盘，不影响系统。

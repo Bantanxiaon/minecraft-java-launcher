@@ -66,6 +66,13 @@ export function OnboardingGuide({ onClose }: { onClose: () => void }) {
   return (
     <div className="error-modal-backdrop" role="dialog" aria-modal="true" aria-label="开始游戏引导">
       <div className="changelog-modal onboarding-modal">
+        <button
+          className="download-detail-close"
+          aria-label="关闭"
+          onClick={onClose}
+        >
+          ×
+        </button>
         <div className="onboarding-head">
           <div>
             <h2>{current.title}</h2>

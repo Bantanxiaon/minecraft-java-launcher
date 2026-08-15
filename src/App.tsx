@@ -3257,8 +3257,10 @@ export default function App() {
         visible={busy || downloading || activeDownloadJobs.length > 0}
         message={
           activeDownloadJobs.length
-            ? `${activeDownloadJobs.length} 个下载目标 · 总进度 ${aggregateDownloadPercent ?? "—"}%${message ? ` · ${message}` : ""}`
-            : message || "正在处理…"
+            ? `${activeDownloadJobs.length} 个下载目标 · 总进度 ${aggregateDownloadPercent ?? "—"}%`
+            : busy || downloading
+              ? "正在处理…"
+              : "就绪"
         }
         progress={aggregateDownloadPercent}
         onClick={() => setShowDownloadDetails(true)}
