@@ -72,6 +72,12 @@ jobs:
           mkdir -p release-assets
           cp "$EXE_FILE" release-assets/SHLauncher-setup.exe
           cp "$EXE_FILE" release-assets/SHLauncher-setup.zip
+          SIG_FILE="$(ls src-tauri/target/release/bundle/nsis/*.sig | head -n1)"
+          SIGNATURE="$(cat "$SIG_FILE")"
+          URL="https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/release-assets/SHLauncher-setup.zip"
+          jq -n --arg version "$VERSION" --arg sig "$SIGNATURE" --arg url "$URL" \
+            '{version:$version, notes:"SH启动器 " + $version, pub_date:(now|todateiso8601), platforms:{"windows-x86_64":{signature:$sig, url:$url}}}' \
+            > release-assets/latest.json
           git add release-assets
           git commit -m "release-assets: update installer to v${VERSION}"
           git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main

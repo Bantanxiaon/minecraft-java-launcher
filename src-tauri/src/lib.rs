@@ -2754,6 +2754,23 @@ async fn auto_install_missing_mod_dependencies(
 }
 
 #[tauri::command]
+async fn repair_missing_mod_dependencies(
+    app: AppHandle,
+    instance_id: i64,
+) -> Result<String, LauncherError> {
+    let connection = open_database(&app)?;
+    let (root_path, loader): (String, String) = connection
+        .query_row(
+            "SELECT root_path, loader_type FROM instances WHERE id=?1",
+            [instance_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|_| LauncherError::validation("目标实例不存在。"))?;
+    auto_install_missing_mod_dependencies(&app, instance_id, &root_path, &loader).await?;
+    Ok("前置模组已全部补齐，可以重新开始游戏。".to_string())
+}
+
+#[tauri::command]
 async fn check_mod_updates(
     app: AppHandle,
     instance_id: i64,
@@ -8258,14 +8275,7 @@ async fn launch_instance(
         return Err(LauncherError::validation("实例尚未完成安装或校验。"));
     }
     let force = force.unwrap_or(false);
-    if let Err(error) =
-        auto_install_missing_mod_dependencies(&app, instance_id, &root_path, &loader).await
-    {
-        if !force {
-            return Err(error);
-        }
-        // 用户选择“仍要启动”：保留未补齐状态继续启动，由用户自行承担风险
-    }
+    // 启动不再联网补齐前置：只做本地快速校验，缺前置由前端弹窗让用户选择处理，启动不被网络拖慢
     if !force {
         validate_instance_mods(&root_path, &version, &loader)?;
     }
@@ -8662,6 +8672,7 @@ pub fn run() {
             install_vanilla_client,
             cancel_active_downloads,
             launch_instance,
+            repair_missing_mod_dependencies,
             list_loader_versions,
             install_profile_loader,
             install_java_loader,

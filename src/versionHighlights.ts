@@ -1,4 +1,8 @@
 const HIGHLIGHTS_BY_VERSION: Record<string, string[]> = {
+  "0.5.10": [
+    "更新检查优先走 jsDelivr 国内 CDN，不再依赖不稳定的代理，更新服务器更容易连上",
+    "启动不再联网补齐前置：只做本地快速检查，弹窗可一键“自动补齐”或“仍要启动”",
+  ],
   "0.5.9": [
     "启动检查不再被无元数据的库文件（如 kotlinforforge-all）卡住，Forge 本来就会忽略它们",
     "修复模组把版本要求写成 ${minecraft_version_range} 时误报不支持的问题",

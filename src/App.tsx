@@ -1674,11 +1674,10 @@ export default function App() {
           .filter(Boolean),
         ...(isModIssue
           ? {
-              actionLabel: "前往模组页处理",
+              actionLabel: "自动补齐前置",
               action: () => {
                 setErrorModal(null);
-                setActiveNav("模组");
-                setModInstanceId(requestedInstance.id);
+                void repairDependencies(requestedInstance);
               },
               secondaryLabel: "仍要启动",
               onSecondary: () => {
@@ -1688,6 +1687,21 @@ export default function App() {
             }
           : {}),
       });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function repairDependencies(instance: Instance) {
+    setBusy(true);
+    setMessage("正在自动补齐缺失的前置模组…");
+    try {
+      await invoke<string>("repair_missing_mod_dependencies", {
+        instanceId: instance.id,
+      });
+      setMessage("前置模组已补齐，请再次点击“开始游戏”。");
+    } catch (error) {
+      setMessage(errorText(error, "自动补齐失败，可稍后重试或仍要启动。"));
     } finally {
       setBusy(false);
     }
