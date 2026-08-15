@@ -3,6 +3,65 @@ import { useMemo, useState } from "react";
 import { Box, Play, Plus, Search } from "lucide-react";
 import grassBlock from "../assets/grass-block.png";
 
+const MEMORY_PRESETS = [4096, 6144, 8192, 10240, 12288, 14336, 16384];
+
+function MemoryPicker({
+  instance,
+  onMemoryChange,
+}: {
+  instance: Instance;
+  onMemoryChange: (instance: Instance, memoryMb: number) => void;
+}) {
+  const [mode, setMode] = useState<number | "custom">(
+    MEMORY_PRESETS.includes(instance.memoryMb) ? instance.memoryMb : "custom",
+  );
+  const [custom, setCustom] = useState(String(instance.memoryMb));
+  const save = (value: number) => {
+    const clamped = Math.max(2048, Math.min(65536, value || instance.memoryMb));
+    if (clamped !== instance.memoryMb) onMemoryChange(instance, clamped);
+  };
+  return (
+    <label className="library-memory">
+      内存
+      <select
+        value={mode}
+        onChange={(event) => {
+          const value = event.target.value;
+          if (value === "custom") {
+            setMode("custom");
+            return;
+          }
+          const mb = Number(value);
+          setMode(mb);
+          save(mb);
+        }}
+      >
+        {MEMORY_PRESETS.map((mb) => (
+          <option key={mb} value={mb}>
+            {mb / 1024} GB
+          </option>
+        ))}
+        <option value="custom">自定义</option>
+      </select>
+      {mode === "custom" ? (
+        <input
+          type="number"
+          min={2048}
+          max={65536}
+          step={512}
+          value={custom}
+          onChange={(event) => setCustom(event.target.value)}
+          onBlur={(event) => save(Number(event.target.value))}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") (event.target as HTMLInputElement).blur();
+          }}
+        />
+      ) : null}
+      MB
+    </label>
+  );
+}
+
 export function InstanceLibraryPage({
   instances,
   onPlay,
@@ -79,27 +138,7 @@ export function InstanceLibraryPage({
                 <p>{instance.gameVersion} · {instance.loaderType === "vanilla" ? "Vanilla" : instance.loaderType}</p>
                 <div className="library-card-meta">
                   <span><Box size={14} /> {instance.status === "ready" ? "已就绪" : "待安装"}</span>
-                  <label className="library-memory">
-                    内存
-                    <input
-                      type="number"
-                      min={2048}
-                      max={65536}
-                      step={512}
-                      defaultValue={instance.memoryMb}
-                      onBlur={(event) => {
-                        const value = Math.max(
-                          2048,
-                          Math.min(65536, Number(event.target.value) || instance.memoryMb),
-                        );
-                        if (value !== instance.memoryMb) onMemoryChange(instance, value);
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") (event.target as HTMLInputElement).blur();
-                      }}
-                    />
-                    MB
-                  </label>
+                  <MemoryPicker instance={instance} onMemoryChange={onMemoryChange} />
                 </div>
                 <button className="library-play" onClick={() => onPlay(instance)}><Play size={15} fill="currentColor" /> 启动实例</button>
                 <div className="library-secondary-actions"><button onClick={() => onOpen(instance)}>文件夹</button><button onClick={() => onRepair(instance)}>修复</button><button onClick={() => onRename(instance)}>重命名</button><button onClick={() => onClone(instance)}>复制</button><button className="danger" onClick={() => onDelete(instance)}>移除</button></div>
