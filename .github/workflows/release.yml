@@ -68,7 +68,8 @@ jobs:
           SIG_FILE="$(ls src-tauri/target/release/bundle/nsis/*.sig | head -n1)"
           SIGNATURE="$(cat "$SIG_FILE")"
           ASSET_NAME="$(curl -fsS -H "Authorization: Bearer ${GITHUB_TOKEN}" "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" | jq -r '.assets[] | select(.name | endswith("_x64-setup.exe")) | .name' | head -n1)"
-          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/${ASSET_NAME}"
+          # 国内网络直连 GitHub 不稳：下载地址走 gh-proxy 镜像，签名校验保证内容安全
+          URL="https://gh-proxy.com/https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/${ASSET_NAME}"
           jq -n --arg version "$VERSION" --arg sig "$SIGNATURE" --arg url "$URL" \
             '{version:$version, notes:"SH启动器 " + $version, pub_date:(now|todateiso8601), platforms:{"windows-x86_64":{signature:$sig, url:$url}}}' \
             > latest.json
