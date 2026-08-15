@@ -30,6 +30,7 @@ import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { ServersPage } from "./pages/ServersPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { InstanceLibraryPage } from "./pages/InstanceLibraryPage";
+import { HomeUpdateCard } from "./components/HomeUpdateCard";
 import {
   ArchiveContentPage,
   ComingSoonPage,
@@ -87,11 +88,16 @@ function DesktopTitleBar() {
       }
     }
   };
+  const dragWindow = (event: React.MouseEvent<HTMLDivElement>) => {
+    if ((event.target as HTMLElement).closest("button")) return;
+    if (!isTauri()) return;
+    void getCurrentWindow().startDragging().catch(() => {});
+  };
 
   return (
     <div
       className="desktop-titlebar"
-      data-tauri-drag-region
+      onMouseDown={dragWindow}
       onDoubleClick={() => void runWindowAction("maximize")}
     >
       <span className="desktop-title" data-tauri-drag-region>
@@ -322,12 +328,31 @@ export default function App() {
   }, [activeNav]);
 
   useEffect(() => {
+    if (activeNav !== "下载" || !isTauri()) return;
+    const timer = window.setInterval(() => {
+      invoke<DownloadJob[]>("list_download_jobs")
+        .then(setDownloadJobs)
+        .catch(() => {});
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [activeNav]);
+
+  useEffect(() => {
     if (!isTauri()) return;
     let dispose: (() => void) | undefined;
     let cancelled = false;
     void listen<DownloadProgress>("download-progress", (event) => {
       if (!["主页", "下载"].includes(activeNavRef.current)) return;
-      const { instanceId, downloadedBytes, totalBytes } = event.payload;
+      const {
+        instanceId,
+        downloadedBytes,
+        totalBytes,
+        jobId,
+        sourceUrl,
+        fileName,
+        speedBytesPerSecond,
+        etaSeconds,
+      } = event.payload;
       const percent = totalBytes
         ? Math.min(100, Math.round((downloadedBytes * 100) / totalBytes))
         : 0;
@@ -335,6 +360,35 @@ export default function App() {
         ...existing,
         [instanceId]: percent,
       }));
+      if (jobId != null) {
+        setDownloadJobs((existing) => {
+          const updated = existing.map((job) =>
+            job.id === jobId
+              ? {
+                  ...job,
+                  progressBytes: downloadedBytes,
+                  totalBytes: totalBytes ?? job.totalBytes,
+                  bytesPerSecond: speedBytesPerSecond,
+                  etaSeconds,
+                }
+              : job,
+          );
+          if (updated.some((job) => job.id === jobId)) return updated;
+          const fallback: DownloadJob = {
+            id: jobId,
+            sourceUrl: sourceUrl ?? "",
+            targetPath: fileName ? `…/${fileName}` : "下载文件",
+            progressBytes: downloadedBytes,
+            totalBytes,
+            retryCount: 0,
+            status: "downloading",
+            createdAt: new Date().toISOString(),
+            bytesPerSecond: speedBytesPerSecond,
+            etaSeconds,
+          };
+          return [fallback, ...updated].slice(0, 100);
+        });
+      }
     }).then((unlisten) => {
       if (cancelled) unlisten();
       else dispose = unlisten;
@@ -1605,6 +1659,7 @@ export default function App() {
                 并检查文件是否完整；请使用你合法取得的游戏许可。
               </span>
             </section>
+            <HomeUpdateCard />
             <div className="layout">
               <section className="hero">
                 <div className="instance-icon"><img src={grassBlock} alt="" /></div>

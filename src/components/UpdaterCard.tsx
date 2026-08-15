@@ -4,6 +4,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 
 const updaterEnabled = import.meta.env.VITE_SH_UPDATES_ENABLED === "true";
+const LAST_UPDATE_KEY = "sh-launcher-last-update";
 
 export function UpdaterCard() {
   const pendingUpdate = useRef<Update | null>(null);
@@ -63,6 +64,14 @@ export function UpdaterCard() {
           setProgress(100);
         }
       }, { timeout: 120_000 });
+      localStorage.setItem(
+        LAST_UPDATE_KEY,
+        JSON.stringify({
+          version: update.version,
+          notes: update.body ?? "",
+          at: new Date().toISOString(),
+        }),
+      );
       setStatus("更新已安装，正在重新打开启动器…");
       await relaunch();
     } catch {

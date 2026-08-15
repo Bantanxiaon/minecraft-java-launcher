@@ -38,6 +38,11 @@ export type DownloadProgress = {
   instanceId: number;
   downloadedBytes: number;
   totalBytes?: number;
+  jobId?: number;
+  sourceUrl?: string;
+  fileName?: string;
+  speedBytesPerSecond?: number;
+  etaSeconds?: number;
 };
 export type ModInspection = {
   fileName: string;
@@ -121,6 +126,10 @@ export type DownloadJob = {
   error?: string;
   recoveryAction?: string;
   createdAt: string;
+  startedAt?: string;
+  updatedAt?: string;
+  bytesPerSecond?: number;
+  etaSeconds?: number;
 };
 export type CrashReport = {
   id: number;

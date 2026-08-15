@@ -1,6 +1,21 @@
 import { useState } from "react";
 import type { CrashReport, DownloadJob, GameLog } from "../types";
 
+function formatBytes(value?: number): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(2)} GB`;
+  if (value >= 1024 ** 2) return `${(value / 1024 ** 2).toFixed(1)} MB`;
+  if (value >= 1024) return `${Math.round(value / 1024)} KB`;
+  return `${value} B`;
+}
+
+function formatEta(value?: number): string {
+  if (value == null || !Number.isFinite(value) || value < 0) return "—";
+  if (value < 60) return `${Math.max(1, Math.round(value))} 秒`;
+  if (value < 3600) return `${Math.round(value / 60)} 分钟`;
+  return `${(value / 3600).toFixed(1)} 小时`;
+}
+
 export function DiagnosticsPage({
   jobs,
   crashes,
@@ -77,11 +92,22 @@ export function DiagnosticsPage({
                           ? "已校验"
                           : job.status === "failed"
                             ? "失败"
-                            : "下载中"}
+                          : "下载中"}
                       </strong>
-                      <small>{job.sourceUrl}</small>
+                      <small>
+                        {job.targetPath.split(/[\\/]/).pop() || "下载文件"}
+                      </small>
                     </div>
                     <span>{percent === undefined ? "—" : `${percent}%`}</span>
+                    <p>
+                      已下载 {formatBytes(job.progressBytes)} /{" "}
+                      {formatBytes(job.totalBytes)}
+                      {job.bytesPerSecond ? ` · ${formatBytes(job.bytesPerSecond)}/s` : ""}
+                      {job.status === "downloading"
+                        ? ` · 剩余 ${formatEta(job.etaSeconds)}`
+                        : ""}
+                    </p>
+                    <small>{job.sourceUrl}</small>
                     {job.error ? (
                       <p>
                         {job.error} · {job.recoveryAction ?? "请重试"}

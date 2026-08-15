@@ -5,7 +5,7 @@ use sha1::{Digest, Sha1};
 use sha2::Sha256;
 use std::time::Duration;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     fs,
     io::Read,
     path::{Component, Path, PathBuf},
@@ -161,7 +161,44 @@ fn run_migrations(connection: &Connection) -> rusqlite::Result<()> {
     CREATE TABLE IF NOT EXISTS crash_reports (id INTEGER PRIMARY KEY, instance_id INTEGER NOT NULL REFERENCES instances(id) ON DELETE CASCADE, occurred_at TEXT NOT NULL, exit_code INTEGER, log_path TEXT NOT NULL, suspected_cause TEXT NOT NULL, confidence TEXT NOT NULL, suggestion TEXT NOT NULL);
     INSERT OR IGNORE INTO migrations(version, applied_at) VALUES(1, strftime('%s','now'));
     INSERT OR IGNORE INTO migrations(version, applied_at) VALUES(2, strftime('%s','now'));
-    INSERT OR IGNORE INTO migrations(version, applied_at) VALUES(3, strftime('%s','now'));")
+    INSERT OR IGNORE INTO migrations(version, applied_at) VALUES(3, strftime('%s','now'));")?;
+    let mut statement = connection.prepare("PRAGMA table_info(download_jobs)")?;
+    let mut columns = statement.query([])?;
+    let mut existing = Vec::new();
+    while let Some(row) = columns.next()? {
+        existing.push(row.get::<_, String>(1)?);
+    }
+    drop(columns);
+    drop(statement);
+    if !existing.iter().any(|name| name == "started_at") {
+        connection.execute(
+            "ALTER TABLE download_jobs ADD COLUMN started_at TEXT",
+            [],
+        )?;
+    }
+    if !existing.iter().any(|name| name == "updated_at") {
+        connection.execute(
+            "ALTER TABLE download_jobs ADD COLUMN updated_at TEXT",
+            [],
+        )?;
+    }
+    if !existing.iter().any(|name| name == "bytes_per_second") {
+        connection.execute(
+            "ALTER TABLE download_jobs ADD COLUMN bytes_per_second INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    if !existing.iter().any(|name| name == "eta_seconds") {
+        connection.execute(
+            "ALTER TABLE download_jobs ADD COLUMN eta_seconds INTEGER",
+            [],
+        )?;
+    }
+    connection.execute(
+        "INSERT OR IGNORE INTO migrations(version, applied_at) VALUES(4, strftime('%s','now'))",
+        [],
+    )?;
+    Ok(())
 }
 
 pub(crate) fn open_database(app: &AppHandle) -> Result<Connection, LauncherError> {
@@ -2158,6 +2195,191 @@ async fn install_modrinth_mod(
         }
     }
     requested_item.ok_or_else(|| LauncherError::storage("模组安装结果丢失。"))
+}
+
+fn modrinth_slug_candidates(value: &str) -> Vec<String> {
+    let lower = value.to_ascii_lowercase();
+    let mut candidates = vec![lower.clone()];
+    let hyphenated = lower.replace('_', "-");
+    if hyphenated != lower {
+        candidates.push(hyphenated);
+    }
+    candidates
+}
+
+async fn resolve_modrinth_project_id(input: &str) -> Result<String, LauncherError> {
+    if input.is_empty()
+        || input.len() > 64
+        || !input
+            .chars()
+            .all(|value| value.is_ascii_alphanumeric() || value == '_' || value == '-')
+    {
+        return Err(LauncherError::validation(format!(
+            "前置模组标识无效：{input}"
+        )));
+    }
+    let candidates = modrinth_slug_candidates(input);
+    for candidate in &candidates {
+        if candidate.is_empty()
+            || candidate.len() > 64
+            || !candidate
+                .chars()
+                .all(|value| value.is_ascii_alphanumeric() || value == '-')
+        {
+            continue;
+        }
+        let url = reqwest::Url::parse(&format!(
+            "https://api.modrinth.com/v2/project/{candidate}"
+        ))
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+        if let Ok(value) = fetch_modrinth_json(url).await {
+            if value
+                .get("project_type")
+                .and_then(|value| value.as_str())
+                == Some("mod")
+            {
+                if let Some(project_id) = value.get("id").and_then(|value| value.as_str()) {
+                    if (3..=64).contains(&project_id.len())
+                        && project_id
+                            .chars()
+                            .all(|value| value.is_ascii_alphanumeric())
+                    {
+                        return Ok(project_id.to_string());
+                    }
+                }
+            }
+        }
+    }
+    for candidate in &candidates {
+        let mut url = reqwest::Url::parse("https://api.modrinth.com/v2/search")
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        url.query_pairs_mut()
+            .append_pair("query", candidate)
+            .append_pair(
+                "facets",
+                &serde_json::to_string(&vec![vec!["project_type:mod"]])
+                    .unwrap_or_else(|_| "[]".into()),
+            )
+            .append_pair("limit", "20");
+        let Ok(value) = fetch_modrinth_json(url).await else {
+            continue;
+        };
+        let Some(hits) = value.get("hits").and_then(|value| value.as_array()) else {
+            continue;
+        };
+        for hit in hits {
+            let slug = hit.get("slug").and_then(|value| value.as_str());
+            let project_id = hit.get("project_id").and_then(|value| value.as_str());
+            if slug.is_some_and(|value| value.eq_ignore_ascii_case(candidate))
+                || project_id.is_some_and(|value| value.eq_ignore_ascii_case(input))
+            {
+                if let Some(project_id) = project_id {
+                    return Ok(project_id.to_string());
+                }
+            }
+        }
+    }
+    Err(LauncherError::validation(format!(
+        "没有在 Modrinth 找到前置模组“{input}”。请确认模组来源，或手动安装该前置模组。"
+    )))
+}
+
+async fn auto_install_missing_mod_dependencies(
+    app: &AppHandle,
+    instance_id: i64,
+    root_path: &str,
+    loader: &str,
+) -> Result<(), LauncherError> {
+    if loader == "vanilla" {
+        return Ok(());
+    }
+    let mods = PathBuf::from(root_path).join(".minecraft").join("mods");
+    if !mods.is_dir() {
+        return Ok(());
+    }
+    let entries = fs::read_dir(&mods)
+        .map_err(|error| LauncherError::storage(format!("无法读取模组文件夹：{error}")))?;
+    let mut inspections = Vec::new();
+    for entry in entries {
+        let path = entry
+            .map_err(|error| LauncherError::storage(error.to_string()))?
+            .path();
+        if path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_none_or(|value| !value.eq_ignore_ascii_case("jar"))
+        {
+            continue;
+        }
+        if let Ok(inspection) = inspect_mod_jar_path(&path) {
+            inspections.push(inspection);
+        }
+    }
+    let mut installed_ids = inspections
+        .iter()
+        .filter_map(|inspection| inspection.mod_id.as_deref())
+        .map(|id| id.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+    let provided = [
+        "minecraft",
+        "java",
+        "fabricloader",
+        "fabric-loader",
+        "quilt_loader",
+        "quilt-loader",
+        "forge",
+        "neoforge",
+    ];
+    let mut missing = BTreeSet::new();
+    for inspection in &inspections {
+        for dependency in &inspection.dependencies {
+            let dependency = dependency.to_ascii_lowercase();
+            if !provided.iter().any(|item| *item == dependency)
+                && !installed_ids.contains(&dependency)
+            {
+                missing.insert(dependency);
+            }
+        }
+    }
+    let mut failures = Vec::new();
+    for missing_id in missing {
+        let project_id = match resolve_modrinth_project_id(&missing_id).await {
+            Ok(project_id) => project_id,
+            Err(error) => {
+                failures.push(format!("{missing_id}：{}", error.message));
+                continue;
+            }
+        };
+        match install_modrinth_mod(app.clone(), instance_id, project_id).await {
+            Ok(item) => {
+                if let Some(metadata_json) = item.metadata_json.as_deref() {
+                    if let Ok(metadata) =
+                        serde_json::from_str::<serde_json::Value>(metadata_json)
+                    {
+                        if let Some(mod_id) = metadata
+                            .get("modId")
+                            .and_then(|value| value.as_str())
+                        {
+                            installed_ids.insert(mod_id.to_ascii_lowercase());
+                        }
+                    }
+                }
+            }
+            Err(error) if error.message.contains("已存在相同 Mod ID") => {
+                if !installed_ids.contains(&missing_id) {
+                    failures.push(format!("{missing_id}：{}", error.message));
+                }
+            }
+            Err(error) => failures.push(format!("{missing_id}：{}", error.message)),
+        }
+    }
+    if !failures.is_empty() {
+        return Err(LauncherError::validation(format!(
+            "自动补齐前置模组失败：\n- {}\n请检查网络后重试，或手动安装这些前置模组。",
+            failures.join("\n- ")
+        )));
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -4221,6 +4443,7 @@ async fn download_file_with_local_hash(
             instance_id,
             downloaded_bytes: bytes.len() as u64,
             total_bytes: Some(bytes.len() as u64),
+            ..Default::default()
         },
     );
     Ok(hash)
@@ -4839,12 +5062,105 @@ async fn sha1_file(path: &std::path::Path) -> Result<String, LauncherError> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct DownloadProgress {
     instance_id: i64,
     downloaded_bytes: u64,
     total_bytes: Option<u64>,
+    job_id: Option<i64>,
+    source_url: Option<String>,
+    file_name: Option<String>,
+    speed_bytes_per_second: Option<u64>,
+    eta_seconds: Option<u64>,
+}
+
+fn create_download_job(
+    app: &AppHandle,
+    url: &str,
+    target: &Path,
+    resume_from: u64,
+    total: Option<u64>,
+    expected_sha1: &str,
+) -> Result<i64, LauncherError> {
+    let connection = open_database(app)?;
+    let now = chrono_like_timestamp();
+    connection
+        .execute(
+            "INSERT INTO download_jobs(source_url,target_path,progress_bytes,total_bytes,retry_count,expected_hash,status,error,recovery_action,created_at,started_at,updated_at,bytes_per_second,eta_seconds) VALUES(?1,?2,?3,?4,0,?5,'downloading',NULL,'重试下载',?6,?6,?6,0,NULL)",
+            params![
+                url,
+                target.to_string_lossy(),
+                resume_from as i64,
+                total.map(|value| value as i64),
+                expected_sha1,
+                now
+            ],
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    Ok(connection.last_insert_rowid())
+}
+
+fn update_download_job_progress(
+    app: &AppHandle,
+    job_id: i64,
+    downloaded: u64,
+    total: Option<u64>,
+    speed: u64,
+    eta: Option<u64>,
+) {
+    let Ok(connection) = open_database(app) else {
+        return;
+    };
+    let _ = connection.execute(
+        "UPDATE download_jobs SET progress_bytes=?1,total_bytes=?2,updated_at=?3,bytes_per_second=?4,eta_seconds=?5 WHERE id=?6",
+        params![
+            downloaded as i64,
+            total.map(|value| value as i64),
+            chrono_like_timestamp(),
+            speed as i64,
+            eta.map(|value| value as i64),
+            job_id
+        ],
+    );
+}
+
+fn finish_download_job(
+    app: &AppHandle,
+    job_id: i64,
+    result: &Result<u64, LauncherError>,
+    downloaded: u64,
+    total: Option<u64>,
+) {
+    let Ok(connection) = open_database(app) else {
+        return;
+    };
+    let now = chrono_like_timestamp();
+    match result {
+        Ok(size) => {
+            let _ = connection.execute(
+                "UPDATE download_jobs SET status='verified',progress_bytes=?1,total_bytes=?2,error=NULL,recovery_action=NULL,updated_at=?3,bytes_per_second=0,eta_seconds=NULL WHERE id=?4",
+                params![
+                    *size as i64,
+                    total.map(|value| value as i64).or(Some(*size as i64)),
+                    now,
+                    job_id
+                ],
+            );
+        }
+        Err(error) => {
+            let _ = connection.execute(
+                "UPDATE download_jobs SET status='failed',progress_bytes=?1,total_bytes=?2,error=?3,recovery_action='重新下载',updated_at=?4,bytes_per_second=0,eta_seconds=NULL WHERE id=?5",
+                params![
+                    downloaded as i64,
+                    total.map(|value| value as i64),
+                    error.message,
+                    now,
+                    job_id
+                ],
+            );
+        }
+    }
 }
 
 fn download_cancel_flag() -> &'static AtomicBool {
@@ -5042,113 +5358,141 @@ async fn download_verified_file_attempt(
     if total.is_some_and(|size| size > MAX_DOWNLOAD_BYTES) {
         return Err(LauncherError::validation("下载文件超过安全大小限制。"));
     }
-    let mut file = tokio::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(resume_from > 0)
-        .truncate(resume_from == 0)
-        .open(&part)
-        .await
-        .map_err(|error| LauncherError::storage(error.to_string()))?;
-    let mut stream = response.bytes_stream();
-    let mut hasher = Sha1::new();
-    if resume_from > 0 {
-        let mut existing = tokio::fs::File::open(&part)
+    let job_id = create_download_job(app, url.as_str(), target, resume_from, total, expected_sha1)?;
+    let started = std::time::Instant::now();
+    let completed_bytes = Arc::new(AtomicU64::new(resume_from));
+    let progress_bytes = completed_bytes.clone();
+    let source_url = url.to_string();
+    let file_name = target
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(str::to_string);
+    let download_result: Result<u64, LauncherError> = async move {
+        let mut file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(resume_from > 0)
+            .truncate(resume_from == 0)
+            .open(&part)
             .await
             .map_err(|error| LauncherError::storage(error.to_string()))?;
-        let mut existing_buffer = vec![0u8; 64 * 1024];
-        loop {
-            let count = existing
-                .read(&mut existing_buffer)
+        let mut stream = response.bytes_stream();
+        let mut hasher = Sha1::new();
+        if resume_from > 0 {
+            let mut existing = tokio::fs::File::open(&part)
                 .await
                 .map_err(|error| LauncherError::storage(error.to_string()))?;
-            if count == 0 {
-                break;
+            let mut existing_buffer = vec![0u8; 64 * 1024];
+            loop {
+                let count = existing
+                    .read(&mut existing_buffer)
+                    .await
+                    .map_err(|error| LauncherError::storage(error.to_string()))?;
+                if count == 0 {
+                    break;
+                }
+                hasher.update(&existing_buffer[..count]);
             }
-            hasher.update(&existing_buffer[..count]);
         }
-    }
-    let mut downloaded = resume_from;
-    let mut last_emit = std::time::Instant::now();
-    loop {
-        let next = tokio::time::timeout(Duration::from_secs(60), stream.next())
-            .await
-            .map_err(|_| {
-                LauncherError::storage(
-                    "下载连续 60 秒没有收到数据。请检查网络后重试；已下载的部分会保留。",
-                )
-            })?;
-        let Some(chunk) = next else { break };
-        if download_cancel_flag().load(Ordering::Acquire) {
-            file.flush()
+        let mut downloaded = resume_from;
+        let mut last_emit = std::time::Instant::now();
+        loop {
+            let next = tokio::time::timeout(Duration::from_secs(60), stream.next())
+                .await
+                .map_err(|_| {
+                    LauncherError::storage(
+                        "下载连续 60 秒没有收到数据。请检查网络后重试；已下载的部分会保留。",
+                    )
+                })?;
+            let Some(chunk) = next else { break };
+            if download_cancel_flag().load(Ordering::Acquire) {
+                file.flush()
+                    .await
+                    .map_err(|error| LauncherError::storage(error.to_string()))?;
+                return Err(LauncherError::storage(
+                    "下载已取消；临时文件已保留，下次可断点继续。",
+                ));
+            }
+            let chunk =
+                chunk.map_err(|error| LauncherError::storage(format!("下载中断：{error}")))?;
+            downloaded = downloaded.saturating_add(chunk.len() as u64);
+            progress_bytes.store(downloaded, Ordering::Relaxed);
+            if downloaded > MAX_DOWNLOAD_BYTES {
+                let _ = tokio::fs::remove_file(&part).await;
+                return Err(LauncherError::validation("下载文件超过安全大小限制。"));
+            }
+            hasher.update(&chunk);
+            file.write_all(&chunk)
                 .await
                 .map_err(|error| LauncherError::storage(error.to_string()))?;
-            return Err(LauncherError::storage(
-                "下载已取消；临时文件已保留，下次可断点继续。",
-            ));
+            if last_emit.elapsed() >= Duration::from_millis(250) {
+                let elapsed = started.elapsed().as_secs_f64().max(0.001);
+                let speed =
+                    (downloaded.saturating_sub(resume_from) as f64 / elapsed).round() as u64;
+                let eta = total.and_then(|total| {
+                    let remaining = total.saturating_sub(downloaded);
+                    if speed > 0 {
+                        Some((remaining as f64 / speed as f64).ceil() as u64)
+                    } else {
+                        None
+                    }
+                });
+                update_download_job_progress(app, job_id, downloaded, total, speed, eta);
+                if emit_file_progress && should_emit_download_progress() {
+                    let _ = app.emit(
+                        "download-progress",
+                        DownloadProgress {
+                            instance_id,
+                            downloaded_bytes: downloaded,
+                            total_bytes: total,
+                            job_id: Some(job_id),
+                            source_url: Some(source_url.clone()),
+                            file_name: file_name.clone(),
+                            speed_bytes_per_second: Some(speed),
+                            eta_seconds: eta,
+                        },
+                    );
+                }
+                last_emit = std::time::Instant::now();
+            }
         }
-        let chunk = chunk.map_err(|error| LauncherError::storage(format!("下载中断：{error}")))?;
-        downloaded = downloaded.saturating_add(chunk.len() as u64);
-        if downloaded > MAX_DOWNLOAD_BYTES {
-            let _ = tokio::fs::remove_file(&part).await;
-            return Err(LauncherError::validation("下载文件超过安全大小限制。"));
-        }
-        hasher.update(&chunk);
-        file.write_all(&chunk)
+        file.flush()
             .await
             .map_err(|error| LauncherError::storage(error.to_string()))?;
-        if emit_file_progress
-            && last_emit.elapsed() >= Duration::from_millis(250)
-            && should_emit_download_progress()
+        if expected_size.is_some_and(|size| size != downloaded)
+            || format!("{:x}", hasher.finalize()) != expected_sha1.to_ascii_lowercase()
         {
-            let _ = app.emit(
-                "download-progress",
-                DownloadProgress {
-                    instance_id,
-                    downloaded_bytes: downloaded,
-                    total_bytes: total,
-                },
-            );
-            last_emit = std::time::Instant::now();
+            let _ = tokio::fs::remove_file(&part).await;
+            return Err(LauncherError::validation("下载文件大小或 SHA-1 校验失败。"));
         }
-    }
-    file.flush()
-        .await
-        .map_err(|error| LauncherError::storage(error.to_string()))?;
-    if expected_size.is_some_and(|size| size != downloaded)
-        || format!("{:x}", hasher.finalize()) != expected_sha1.to_ascii_lowercase()
-    {
-        let _ = tokio::fs::remove_file(&part).await;
-        return Err(LauncherError::validation("下载文件大小或 SHA-1 校验失败。"));
-    }
-    if tokio::fs::try_exists(target).await.unwrap_or(false) {
-        let backup = target.with_extension(format!("corrupt-{}", unique_timestamp()));
-        tokio::fs::rename(target, backup)
+        if tokio::fs::try_exists(target).await.unwrap_or(false) {
+            let backup = target.with_extension(format!("corrupt-{}", unique_timestamp()));
+            tokio::fs::rename(target, backup)
+                .await
+                .map_err(|error| LauncherError::storage(error.to_string()))?;
+        }
+        tokio::fs::rename(&part, target)
             .await
             .map_err(|error| LauncherError::storage(error.to_string()))?;
-    }
-    tokio::fs::rename(&part, target)
-        .await
-        .map_err(|error| LauncherError::storage(error.to_string()))?;
-    if let Some(cache_target) = cache_target {
-        if let Some(parent) = cache_target.parent() {
-            let _ = tokio::fs::create_dir_all(parent).await;
+        if let Some(cache_target) = cache_target {
+            if let Some(parent) = cache_target.parent() {
+                let _ = tokio::fs::create_dir_all(parent).await;
+            }
+            if !tokio::fs::try_exists(&cache_target).await.unwrap_or(false) {
+                let _ = tokio::fs::copy(target, cache_target).await;
+            }
         }
-        if !tokio::fs::try_exists(&cache_target).await.unwrap_or(false) {
-            let _ = tokio::fs::copy(target, cache_target).await;
-        }
+        Ok(downloaded)
     }
-    if emit_file_progress && should_emit_download_progress() {
-        let _ = app.emit(
-            "download-progress",
-            DownloadProgress {
-                instance_id,
-                downloaded_bytes: downloaded,
-                total_bytes: total,
-            },
-        );
-    }
-    Ok(downloaded)
+    .await;
+    finish_download_job(
+        app,
+        job_id,
+        &download_result,
+        completed_bytes.load(Ordering::Relaxed),
+        total,
+    );
+    download_result
 }
 
 fn emit_install_percent(app: &AppHandle, instance_id: i64, percent: u64) {
@@ -5158,6 +5502,7 @@ fn emit_install_percent(app: &AppHandle, instance_id: i64, percent: u64) {
             instance_id,
             downloaded_bytes: percent.min(100),
             total_bytes: Some(100),
+            ..Default::default()
         },
     );
 }
@@ -5970,6 +6315,7 @@ async fn launch_instance(
     if status != "ready" {
         return Err(LauncherError::validation("实例尚未完成安装或校验。"));
     }
+    auto_install_missing_mod_dependencies(&app, instance_id, &root_path, &loader).await?;
     validate_instance_mods(&root_path, &version, &loader)?;
     let (player_name, account_type, secret_ref): (String, String, Option<String>) = connection
         .query_row(
