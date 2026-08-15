@@ -8505,6 +8505,38 @@ async fn fetch_version_details(
 }
 
 #[tauri::command]
+async fn fetch_remote_changelog() -> Result<Vec<serde_json::Value>, LauncherError> {
+    let url = "https://cdn.jsdelivr.net/gh/Bantanxiaon/minecraft-java-launcher@main/docs/changelog.json";
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    if parsed.host_str() != Some("cdn.jsdelivr.net") {
+        return Err(LauncherError::validation("更新日志地址不受信任。"));
+    }
+    let client = shared_download_client()?;
+    let response = client
+        .get(parsed)
+        .send()
+        .await
+        .map_err(|error| LauncherError::storage(format!("获取更新日志失败：{error}")))?;
+    let response = response
+        .error_for_status()
+        .map_err(|error| LauncherError::storage(format!("更新日志服务返回错误：{error}")))?;
+    if response
+        .content_length()
+        .is_some_and(|length| length > 1024 * 1024)
+    {
+        return Err(LauncherError::validation("更新日志超过安全限制。"));
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|error| LauncherError::storage(format!("更新日志内容无效：{error}")))?;
+    Ok(value.as_array().cloned().unwrap_or_default())
+}
+
+#[tauri::command]
 async fn fetch_version_manifest(include_snapshots: bool) -> Result<VersionManifest, LauncherError> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -8664,6 +8696,7 @@ pub fn run() {
             delete_instance_to_backup,
             fetch_version_manifest,
             fetch_version_details,
+            fetch_remote_changelog,
             detect_java_runtimes,
             install_managed_java,
             get_settings,

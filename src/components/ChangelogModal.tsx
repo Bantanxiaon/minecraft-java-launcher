@@ -1,8 +1,40 @@
+import { useEffect, useState } from "react";
 import { X } from "lucide-react";
-import { changelogEntries } from "../changelog";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { changelogEntries, type ChangelogEntry } from "../changelog";
 
 export function ChangelogModal({ onClose }: { onClose: () => void }) {
-  const entries = changelogEntries();
+  const [entries, setEntries] = useState<ChangelogEntry[]>(changelogEntries());
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    void invoke<Array<{ version: string; label?: string; items?: string[] }>>(
+      "fetch_remote_changelog",
+    )
+      .then((remote) => {
+        if (cancelled || !Array.isArray(remote)) return;
+        const merged = new Map<string, ChangelogEntry>();
+        for (const entry of remote) {
+          if (entry?.version && Array.isArray(entry.items)) {
+            merged.set(entry.version, {
+              version: entry.version,
+              label: entry.label || `v${entry.version}`,
+              items: entry.items.filter(Boolean),
+            });
+          }
+        }
+        for (const entry of changelogEntries()) {
+          if (!merged.has(entry.version)) merged.set(entry.version, entry);
+        }
+        setEntries([...merged.values()]);
+      })
+      .catch(() => {
+        // 拉取失败时保留本地日志
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   return (
     <div
       className="update-modal-backdrop"
