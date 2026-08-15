@@ -1896,12 +1896,11 @@ async fn search_modrinth_projects(
         .collect())
 }
 
-async fn modrinth_primary_file(
+async fn fetch_project_versions(
     project_id: &str,
     game_version: Option<&str>,
     loader: Option<&str>,
-    extension: &str,
-) -> Result<(String, String, String, u64), LauncherError> {
+) -> Result<Vec<serde_json::Value>, LauncherError> {
     validate_modrinth_project_id(project_id)?;
     let mut url = reqwest::Url::parse(&format!(
         "https://api.modrinth.com/v2/project/{project_id}/version"
@@ -1924,14 +1923,86 @@ async fn modrinth_primary_file(
         }
     }
     let versions = fetch_modrinth_json(url).await?;
-    let versions = versions
+    versions
         .as_array()
-        .ok_or_else(|| LauncherError::storage("Modrinth 版本结果无效。"))?;
-    let selected = versions
-        .iter()
-        .find(|value| value.get("version_type").and_then(|value| value.as_str()) == Some("release"))
-        .or_else(|| versions.first())
-        .ok_or_else(|| LauncherError::validation("没有找到与实例兼容的 Modrinth 文件。"))?;
+        .cloned()
+        .ok_or_else(|| LauncherError::storage("Modrinth 版本结果无效。"))
+}
+
+fn pick_best_modrinth_version(
+    versions: &[serde_json::Value],
+) -> Option<serde_json::Value> {
+    let mut best: Option<&serde_json::Value> = None;
+    for candidate in versions {
+        let candidate_release =
+            candidate.get("version_type").and_then(|value| value.as_str()) == Some("release");
+        let candidate_date = candidate
+            .get("date_published")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        let candidate_number = candidate
+            .get("version_number")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        let better = match best {
+            None => true,
+            Some(current) => {
+                let current_release =
+                    current.get("version_type").and_then(|value| value.as_str()) == Some("release");
+                let current_date = current
+                    .get("date_published")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default();
+                let current_number = current
+                    .get("version_number")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default();
+                if candidate_release != current_release {
+                    candidate_release
+                } else if candidate_date != current_date {
+                    candidate_date > current_date
+                } else {
+                    candidate_number > current_number
+                }
+            }
+        };
+        if better {
+            best = Some(candidate);
+        }
+    }
+    best.cloned()
+}
+
+/// 按“当前版本 + 当前加载器”优先逐级放宽匹配，尽量找到可用的 Modrinth 版本。
+async fn modrinth_best_version(
+    project_id: &str,
+    game_version: Option<&str>,
+    loader: Option<&str>,
+) -> Result<serde_json::Value, LauncherError> {
+    validate_modrinth_project_id(project_id)?;
+    let mut attempts = vec![(game_version, loader)];
+    if game_version.is_some() {
+        attempts.push((game_version, None));
+    }
+    attempts.push((None, None));
+    for (version, loaders) in attempts {
+        let versions = fetch_project_versions(project_id, version, loaders).await?;
+        if let Some(best) = pick_best_modrinth_version(&versions) {
+            return Ok(best);
+        }
+    }
+    Err(LauncherError::validation(format!(
+        "{project_id} 没有与当前实例兼容的版本。"
+    )))
+}
+
+async fn modrinth_primary_file(
+    project_id: &str,
+    game_version: Option<&str>,
+    loader: Option<&str>,
+    extension: &str,
+) -> Result<(String, String, String, u64), LauncherError> {
+    let selected = modrinth_best_version(project_id, game_version, loader).await?;
     let files = selected
         .get("files")
         .and_then(|value| value.as_array())
@@ -1978,33 +2049,9 @@ async fn modrinth_compatible_version(
     game_version: &str,
     loader: &str,
 ) -> Result<serde_json::Value, LauncherError> {
-    validate_modrinth_project_id(project_id)?;
-    let mut url = reqwest::Url::parse(&format!(
-        "https://api.modrinth.com/v2/project/{project_id}/version"
-    ))
-    .map_err(|error| LauncherError::storage(error.to_string()))?;
-    url.query_pairs_mut()
-        .append_pair(
-            "game_versions",
-            &serde_json::to_string(&[game_version]).unwrap_or_default(),
-        )
-        .append_pair(
-            "loaders",
-            &serde_json::to_string(&[loader]).unwrap_or_default(),
-        );
-    let versions = fetch_modrinth_json(url).await?;
-    let versions = versions
-        .as_array()
-        .ok_or_else(|| LauncherError::storage("Modrinth 版本结果无效。"))?;
-    versions
-        .iter()
-        .find(|value| value.get("version_type").and_then(|value| value.as_str()) == Some("release"))
-        .or_else(|| versions.first())
-        .cloned()
-        .ok_or_else(|| {
-            LauncherError::validation(format!("{project_id} 没有与当前实例兼容的版本。"))
-        })
+    modrinth_best_version(project_id, Some(game_version), Some(loader)).await
 }
+
 
 fn collect_modrinth_dependency_order<'a>(
     project_id: String,
@@ -2019,9 +2066,9 @@ fn collect_modrinth_dependency_order<'a>(
             return Ok(());
         }
         if !visiting.insert(project_id.clone()) {
-            return Err(LauncherError::validation(format!(
-                "检测到 Modrinth 循环依赖：{project_id}"
-            )));
+            // 出现循环依赖（例如 A 依赖 B、B 又依赖 A）时，A 已经在展开队列中，
+            // 直接跳过即可，避免把“互相依赖”误判为致命错误。
+            return Ok(());
         }
         let version = modrinth_compatible_version(&project_id, game_version, loader).await?;
         if let Some(dependencies) = version

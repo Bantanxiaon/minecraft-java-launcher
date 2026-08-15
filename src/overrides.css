@@ -1131,8 +1131,8 @@ nav button.active svg { color:#3b8d40; }
   display: grid;
   place-items: center;
   overflow: hidden;
-  background: radial-gradient(1200px 700px at 50% -10%, #1d3327 0%, #12201a 42%, #0b1412 100%);
-  color: #eef5ef;
+  background: radial-gradient(1100px 650px at 50% -8%, #eaf5ec 0%, #f7faf8 45%, #f1f5f2 100%);
+  color: #17202b;
   user-select: none;
   transition: opacity .5s ease;
 }
@@ -1145,34 +1145,33 @@ nav button.active svg { color:#3b8d40; }
 .splash-glow {
   position: absolute;
   border-radius: 50%;
-  filter: blur(70px);
-  opacity: .55;
+  filter: blur(80px);
   pointer-events: none;
 }
 
 .splash-glow-a {
-  width: 460px;
-  height: 460px;
+  width: 520px;
+  height: 520px;
   left: 50%;
-  top: 12%;
+  top: 8%;
   transform: translateX(-50%);
-  background: radial-gradient(circle, rgba(94, 167, 105, .55) 0%, rgba(94, 167, 105, 0) 70%);
+  background: radial-gradient(circle, rgba(111, 174, 118, .28) 0%, rgba(111, 174, 118, 0) 70%);
   animation: splash-breathe 3.4s ease-in-out infinite;
 }
 
 .splash-glow-b {
-  width: 380px;
-  height: 380px;
+  width: 420px;
+  height: 420px;
   left: 50%;
-  bottom: -8%;
+  bottom: -10%;
   transform: translateX(-50%);
-  background: radial-gradient(circle, rgba(62, 118, 221, .38) 0%, rgba(62, 118, 221, 0) 70%);
+  background: radial-gradient(circle, rgba(91, 143, 205, .18) 0%, rgba(91, 143, 205, 0) 70%);
   animation: splash-breathe 4.4s ease-in-out infinite reverse;
 }
 
 @keyframes splash-breathe {
-  0%, 100% { opacity: .42; transform: translateX(-50%) scale(1); }
-  50% { opacity: .72; transform: translateX(-50%) scale(1.12); }
+  0%, 100% { opacity: .5; transform: translateX(-50%) scale(1); }
+  50% { opacity: .9; transform: translateX(-50%) scale(1.08); }
 }
 
 .splash-particles {
@@ -1184,11 +1183,11 @@ nav button.active svg { color:#3b8d40; }
 .splash-particles span {
   position: absolute;
   bottom: -24px;
-  width: 10px;
-  height: 10px;
+  width: 9px;
+  height: 9px;
   border-radius: 3px;
-  background: rgba(148, 211, 158, .55);
-  box-shadow: 0 0 12px rgba(148, 211, 158, .35);
+  background: rgba(111, 174, 118, .38);
+  box-shadow: 0 0 10px rgba(111, 174, 118, .22);
   left: calc(4% + var(--i) * 6.8%);
   opacity: 0;
   animation: splash-rise 4.6s ease-in infinite;
@@ -1196,24 +1195,24 @@ nav button.active svg { color:#3b8d40; }
 }
 
 .splash-particles span:nth-child(3n) {
-  width: 7px;
-  height: 7px;
-  background: rgba(180, 200, 235, .5);
-  box-shadow: 0 0 10px rgba(180, 200, 235, .3);
+  width: 6px;
+  height: 6px;
+  background: rgba(91, 143, 205, .32);
+  box-shadow: 0 0 8px rgba(91, 143, 205, .2);
 }
 
 .splash-particles span:nth-child(4n) {
   width: 5px;
   height: 5px;
-  background: rgba(255, 216, 133, .5);
-  box-shadow: 0 0 10px rgba(255, 216, 133, .3);
+  background: rgba(230, 170, 72, .38);
+  box-shadow: 0 0 8px rgba(230, 170, 72, .22);
 }
 
 @keyframes splash-rise {
   0% { transform: translateY(0) translateX(0) rotate(0deg); opacity: 0; }
-  12% { opacity: .85; }
-  55% { opacity: .6; }
-  100% { transform: translateY(-620px) translateX(38px) rotate(240deg); opacity: 0; }
+  12% { opacity: .75; }
+  55% { opacity: .45; }
+  100% { transform: translateY(-600px) translateX(30px) rotate(240deg); opacity: 0; }
 }
 
 .splash-inner {
@@ -1232,6 +1231,7 @@ nav button.active svg { color:#3b8d40; }
   gap: 11px;
   font-size: 21px;
   letter-spacing: .4px;
+  color: #17202b;
 }
 
 .splash-brand-mark {
@@ -1241,8 +1241,8 @@ nav button.active svg { color:#3b8d40; }
   height: 38px;
   border-radius: 11px;
   color: #eaf7ec;
-  background: linear-gradient(145deg, #6fae76, #3f7c49);
-  box-shadow: 0 6px 18px rgba(94, 167, 105, .45), inset 0 1px 0 rgba(255, 255, 255, .25);
+  background: linear-gradient(145deg, #7fbb88, #4c9a4a);
+  box-shadow: 0 6px 16px rgba(76, 154, 74, .32), inset 0 1px 0 rgba(255, 255, 255, .35);
 }
 
 .splash-stage {
@@ -1255,19 +1255,19 @@ nav button.active svg { color:#3b8d40; }
 
 .splash-halo {
   position: absolute;
-  inset: 8px;
+  inset: 10px;
   border-radius: 50%;
-  border: 1px solid rgba(148, 211, 158, .28);
+  border: 1px solid rgba(76, 154, 74, .22);
   box-shadow:
-    0 0 0 12px rgba(148, 211, 158, .05),
-    0 0 46px rgba(94, 167, 105, .35),
-    inset 0 0 30px rgba(94, 167, 105, .12);
+    0 0 0 12px rgba(76, 154, 74, .05),
+    0 8px 30px rgba(76, 154, 74, .12),
+    inset 0 0 26px rgba(76, 154, 74, .08);
   animation: splash-ring 2.8s ease-in-out infinite;
 }
 
 @keyframes splash-ring {
   0%, 100% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(1.06); opacity: .72; }
+  50% { transform: scale(1.05); opacity: .75; }
 }
 
 .splash-anim {
@@ -1279,7 +1279,7 @@ nav button.active svg { color:#3b8d40; }
 .splash-anim svg {
   width: 100%;
   height: 100%;
-  filter: drop-shadow(0 6px 18px rgba(94, 167, 105, .35));
+  filter: drop-shadow(0 6px 14px rgba(76, 154, 74, .2));
 }
 
 .splash-anim-fallback {
@@ -1291,8 +1291,8 @@ nav button.active svg { color:#3b8d40; }
   width: 58px;
   height: 58px;
   border-radius: 50%;
-  border: 4px solid rgba(148, 211, 158, .22);
-  border-top-color: #7ec389;
+  border: 4px solid rgba(76, 154, 74, .18);
+  border-top-color: #4c9a4a;
   animation: splash-spin 1s linear infinite;
 }
 
@@ -1304,7 +1304,7 @@ nav button.active svg { color:#3b8d40; }
   margin: 0;
   font-size: 15px;
   letter-spacing: 2px;
-  color: #cfe3d3;
+  color: #5d6b64;
   font-weight: 500;
 }
 
@@ -1318,8 +1318,8 @@ nav button.active svg { color:#3b8d40; }
   position: relative;
   height: 8px;
   border-radius: 99px;
-  background: rgba(255, 255, 255, .09);
-  box-shadow: inset 0 1px 3px rgba(0, 0, 0, .4);
+  background: #e6ece7;
+  box-shadow: inset 0 1px 2px rgba(20, 35, 50, .08);
   overflow: hidden;
 }
 
@@ -1328,8 +1328,8 @@ nav button.active svg { color:#3b8d40; }
   height: 100%;
   min-width: 12px;
   border-radius: 99px;
-  background: linear-gradient(90deg, #4f9a5c, #7ec389, #a8dbb0);
-  box-shadow: 0 0 14px rgba(126, 195, 137, .65);
+  background: linear-gradient(90deg, #4c9a4a, #6fae76, #a3d1a8);
+  box-shadow: 0 0 12px rgba(76, 154, 74, .4);
   transition: width .45s cubic-bezier(.4, 0, .2, 1);
 }
 
@@ -1338,7 +1338,7 @@ nav button.active svg { color:#3b8d40; }
   position: absolute;
   inset: 0;
   border-radius: 99px;
-  background: linear-gradient(110deg, transparent 20%, rgba(255, 255, 255, .55) 50%, transparent 80%);
+  background: linear-gradient(110deg, transparent 20%, rgba(255, 255, 255, .65) 50%, transparent 80%);
   background-size: 220% 100%;
   animation: splash-shimmer 1.7s linear infinite;
 }
@@ -1352,12 +1352,12 @@ nav button.active svg { color:#3b8d40; }
   display: flex;
   justify-content: space-between;
   font-size: 12px;
-  color: #9db8a5;
+  color: #7d8794;
   letter-spacing: .5px;
 }
 
 .splash-progress-meta span:first-child {
-  color: #d9efe0;
+  color: #2f7c35;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
 }
@@ -1378,11 +1378,12 @@ nav button.active svg { color:#3b8d40; }
   min-height: 30px;
   padding: 7px 12px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, .045);
-  border: 1px solid rgba(255, 255, 255, .07);
+  background: #fff;
+  border: 1px solid #e7ece8;
+  box-shadow: 0 1px 3px rgba(20, 35, 50, .04);
   font-size: 12.5px;
-  opacity: .55;
-  transition: opacity .3s ease, background .3s ease;
+  opacity: .6;
+  transition: opacity .3s ease, background .3s ease, border-color .3s ease;
 }
 
 .splash-checks li[data-state="running"],
@@ -1393,8 +1394,8 @@ nav button.active svg { color:#3b8d40; }
 }
 
 .splash-checks li[data-state="running"] {
-  background: rgba(148, 211, 158, .08);
-  border-color: rgba(148, 211, 158, .22);
+  background: #eef7ef;
+  border-color: #cfe6d2;
 }
 
 .splash-step-icon {
@@ -1402,19 +1403,19 @@ nav button.active svg { color:#3b8d40; }
 }
 
 .splash-step-ok {
-  color: #8fd49b;
+  color: #4c9a4a;
 }
 
 .splash-step-warn {
-  color: #f0c674;
+  color: #c98a1f;
 }
 
 .splash-step-error {
-  color: #ef8b80;
+  color: #cf5544;
 }
 
 .splash-step-spin {
-  color: #a8dbb0;
+  color: #4c9a4a;
   animation: splash-spin 1s linear infinite;
 }
 
@@ -1422,18 +1423,18 @@ nav button.active svg { color:#3b8d40; }
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, .25);
+  background: #c4ccc6;
 }
 
 .splash-check-label {
   font-weight: 550;
-  color: #dcebe0;
+  color: #2b3a31;
 }
 
 .splash-check-detail {
   margin-left: auto;
   text-align: right;
-  color: #93ab9c;
+  color: #87938c;
   font-size: 11.5px;
   max-width: 60%;
   overflow: hidden;
@@ -1443,8 +1444,8 @@ nav button.active svg { color:#3b8d40; }
 
 .splash-version {
   margin: 6px 0 0;
-  font-size: 11.5px;
-  color: #799284;
+  font-size: 12px;
+  color: #8a948e;
   letter-spacing: .4px;
 }
 

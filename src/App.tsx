@@ -1809,8 +1809,8 @@ export default function App() {
         <div className="brand">
           <img className="brand-art" src={grassBlock} alt="Minecraft grass block" />
           <span className="brand-copy">
-            <strong>Launcher</strong>
-            <small>{RELEASE_CHANNEL_LABEL} · Minecraft Java Edition</small>
+            <strong>SH启动器</strong>
+            <small>v{APP_VERSION} · {RELEASE_CHANNEL_LABEL}</small>
           </span>
         </div>
         <nav>
