@@ -68,13 +68,14 @@ jobs:
           git config user.name "SH Launcher Bot"
           git config user.email "actions@users.noreply.github.com"
           git fetch origin main --depth=1
-          git checkout -b dist-update origin/main
+          git checkout -f -b dist-update origin/main
           mkdir -p release-assets
           cp "$EXE_FILE" release-assets/SHLauncher-setup.exe
           cp "$EXE_FILE" release-assets/SHLauncher-setup.zip
           git add release-assets
           git commit -m "release-assets: update installer to v${VERSION}"
           git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main
+          echo "DIST_SHA=$(git rev-parse HEAD)" >> "${GITHUB_ENV}"
 
       - name: 生成并上传 latest.json
         shell: bash
@@ -86,8 +87,8 @@ jobs:
           VERSION="$(node -p "require('./package.json').version")"
           SIG_FILE="$(ls src-tauri/target/release/bundle/nsis/*.sig | head -n1)"
           SIGNATURE="$(cat "$SIG_FILE")"
-          # jsDelivr 国内 CDN 稳定分发；签名校验保证内容安全
-          URL="https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/release-assets/SHLauncher-setup.zip"
+          # jsDelivr 国内 CDN 稳定分发（提交号固定，避免 CDN 缓存旧包）；签名校验保证内容安全
+          URL="https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@${DIST_SHA}/release-assets/SHLauncher-setup.zip"
           jq -n --arg version "$VERSION" --arg sig "$SIGNATURE" --arg url "$URL" \
             '{version:$version, notes:"SH启动器 " + $version, pub_date:(now|todateiso8601), platforms:{"windows-x86_64":{signature:$sig, url:$url}}}' \
             > latest.json

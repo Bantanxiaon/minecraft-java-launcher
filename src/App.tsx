@@ -216,6 +216,8 @@ export default function App() {
     lines: string[];
     actionLabel?: string;
     action?: () => void;
+    secondaryLabel?: string;
+    onSecondary?: () => void;
   } | null>(null);
   const bootCancelledRef = useRef(false);
   const [activeNav, setActiveNav] = useState("主页");
@@ -1583,7 +1585,7 @@ export default function App() {
     return updated;
   }
 
-  async function launchSelectedInstance(targetInstance?: Instance) {
+  async function launchSelectedInstance(targetInstance?: Instance, force = false) {
     const requestedInstance = targetInstance ?? selectedInstance;
     if (!requestedInstance) {
       setMessage("还没有游戏配置，请先新建一套游戏配置。");
@@ -1631,6 +1633,7 @@ export default function App() {
           instanceId: readyInstance.id,
           accountId: launchAccount.id,
           javaPath: selectedJava.path,
+          force,
         },
       );
       setMessage(
@@ -1656,6 +1659,11 @@ export default function App() {
                 setErrorModal(null);
                 setActiveNav("模组");
                 setModInstanceId(requestedInstance.id);
+              },
+              secondaryLabel: "仍要启动",
+              onSecondary: () => {
+                setErrorModal(null);
+                void launchSelectedInstance(requestedInstance, true);
               },
             }
           : {}),
@@ -2560,6 +2568,8 @@ export default function App() {
           lines={errorModal.lines}
           actionLabel={errorModal.actionLabel}
           onAction={errorModal.action}
+          secondaryLabel={errorModal.secondaryLabel}
+          onSecondary={errorModal.onSecondary}
           onClose={() => setErrorModal(null)}
         />
       ) : null}

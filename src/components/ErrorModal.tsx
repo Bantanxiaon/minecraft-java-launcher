@@ -5,6 +5,8 @@ type ErrorModalProps = {
   lines: string[];
   actionLabel?: string;
   onAction?: () => void;
+  secondaryLabel?: string;
+  onSecondary?: () => void;
   onClose: () => void;
 };
 
@@ -13,6 +15,8 @@ export function ErrorModal({
   lines,
   actionLabel,
   onAction,
+  secondaryLabel,
+  onSecondary,
   onClose,
 }: ErrorModalProps) {
   return (
@@ -44,6 +48,11 @@ export function ErrorModal({
           {actionLabel && onAction ? (
             <button className="primary" type="button" onClick={onAction}>
               {actionLabel}
+            </button>
+          ) : null}
+          {secondaryLabel && onSecondary ? (
+            <button type="button" onClick={onSecondary}>
+              {secondaryLabel}
             </button>
           ) : null}
           <button type="button" onClick={onClose}>

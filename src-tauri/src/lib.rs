@@ -7561,6 +7561,7 @@ async fn launch_instance(
     instance_id: i64,
     account_id: i64,
     java_path: String,
+    force: Option<bool>,
 ) -> Result<LaunchResult, LauncherError> {
     let _ = app.emit(
         "game-preparing",
@@ -7580,8 +7581,18 @@ async fn launch_instance(
     if status != "ready" {
         return Err(LauncherError::validation("实例尚未完成安装或校验。"));
     }
-    auto_install_missing_mod_dependencies(&app, instance_id, &root_path, &loader).await?;
-    validate_instance_mods(&root_path, &version, &loader)?;
+    let force = force.unwrap_or(false);
+    if let Err(error) =
+        auto_install_missing_mod_dependencies(&app, instance_id, &root_path, &loader).await
+    {
+        if !force {
+            return Err(error);
+        }
+        // 用户选择“仍要启动”：保留未补齐状态继续启动，由用户自行承担风险
+    }
+    if !force {
+        validate_instance_mods(&root_path, &version, &loader)?;
+    }
     let (player_name, account_type, secret_ref): (String, String, Option<String>) = connection
         .query_row(
             "SELECT display_name, account_type, safe_secret_ref FROM accounts WHERE id=?1",
