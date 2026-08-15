@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "SH启动器",
-  "version": "0.5.14",
+  "version": "0.5.15",
   "identifier": "com.shlauncher.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -58,10 +58,10 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://cdn.jsdelivr.net/gh/Bantanxiaon/minecraft-java-launcher@main/release-assets/latest.json",
-        "https://gh-proxy.com/https://github.com/Bantanxiaon/minecraft-java-launcher/releases/latest/download/latest.json",
         "https://ghproxy.net/https://github.com/Bantanxiaon/minecraft-java-launcher/releases/latest/download/latest.json",
-        "https://github.com/Bantanxiaon/minecraft-java-launcher/releases/latest/download/latest.json"
+        "https://gh-proxy.com/https://github.com/Bantanxiaon/minecraft-java-launcher/releases/latest/download/latest.json",
+        "https://github.com/Bantanxiaon/minecraft-java-launcher/releases/latest/download/latest.json",
+        "https://cdn.jsdelivr.net/gh/Bantanxiaon/minecraft-java-launcher@main/release-assets/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDkwOTFFMzIyRDI3MDQzM0EKUldRNlEzRFNJdU9Sa09WdW9NbUlLY1BKckNyeC9FTE4xc3F5Nll6L1k1S3R3ejlsSEdMcXV4V1QK",
       "windows": {

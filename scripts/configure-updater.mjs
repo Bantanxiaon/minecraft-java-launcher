@@ -11,10 +11,10 @@ config.plugins ??= {};
 config.plugins.updater ??= {};
 const base = "https://github.com/" + repository;
 config.plugins.updater.endpoints = [
-  "https://cdn.jsdelivr.net/gh/" + repository + "@main/release-assets/latest.json",
-  "https://gh-proxy.com/" + base + "/releases/latest/download/latest.json",
   "https://ghproxy.net/" + base + "/releases/latest/download/latest.json",
+  "https://gh-proxy.com/" + base + "/releases/latest/download/latest.json",
   base + "/releases/latest/download/latest.json",
+  "https://cdn.jsdelivr.net/gh/" + repository + "@main/release-assets/latest.json",
 ];
 await writeFile(configPath, JSON.stringify(config, null, 2) + "\n", "utf8");
 console.log("Updater endpoint configured for " + repository);
