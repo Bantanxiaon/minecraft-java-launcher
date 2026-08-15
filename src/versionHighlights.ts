@@ -1,4 +1,8 @@
 const HIGHLIGHTS_BY_VERSION: Record<string, string[]> = {
+  "0.5.6": [
+    "启动不再被前置自动补齐拖住：补齐每个依赖最多 10 秒、整轮最多 20 秒，超时先启动游戏",
+    "启动参数加入 G1GC 优化，Forge 启动更快更稳",
+  ],
   "0.5.5": [
     "下载强制走 HTTP/1.1，修复“error decoding response body”这类传输错误",
     "大模组（16MB 以上）自动 4 段并行下载，速度更快",

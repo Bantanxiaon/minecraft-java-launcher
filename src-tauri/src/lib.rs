@@ -2684,13 +2684,26 @@ async fn auto_install_missing_mod_dependencies(
         }
     }
     let mut failures = Vec::new();
+    let auto_fill_started = std::time::Instant::now();
     for missing_id in missing {
+        if auto_fill_started.elapsed().as_secs() >= 20 {
+            failures.push(
+                "自动补齐超过 20 秒时间预算，已停止尝试；可先启动游戏，稍后重试补齐。"
+                    .to_string(),
+            );
+            break;
+        }
         let dependent_mods = dependents
             .get(&missing_id)
             .map(|names| names.join("、"))
             .unwrap_or_default();
-        match resolve_missing_mod_dependency(app, instance_id, &missing_id).await {
-            Ok(item) => {
+        let resolved = tokio::time::timeout(
+            Duration::from_secs(10),
+            resolve_missing_mod_dependency(app, instance_id, &missing_id),
+        )
+        .await;
+        match resolved {
+            Ok(Ok(item)) => {
                 if let Some(metadata_json) = item.metadata_json.as_deref() {
                     if let Ok(metadata) = serde_json::from_str::<serde_json::Value>(metadata_json) {
                         if let Some(mod_id) = metadata.get("modId").and_then(|value| value.as_str()) {
@@ -2699,10 +2712,20 @@ async fn auto_install_missing_mod_dependencies(
                     }
                 }
             }
-            Err(error) => {
+            Ok(Err(error)) => {
                 failures.push(format!(
                     "{missing_id}：{}{}",
                     error.message,
+                    if dependent_mods.is_empty() {
+                        String::new()
+                    } else {
+                        format!("\n  需要它的模组：{dependent_mods}")
+                    }
+                ));
+            }
+            Err(_) => {
+                failures.push(format!(
+                    "{missing_id}：自动补齐超时（网络较慢），可稍后重试。{}",
                     if dependent_mods.is_empty() {
                         String::new()
                     } else {
@@ -8140,6 +8163,17 @@ fn build_vanilla_launch_arguments(
     fs::create_dir_all(&java_temp).map_err(|error| LauncherError::storage(error.to_string()))?;
     let mut arguments = vec![
         format!("-Xmx{memory_mb}M"),
+        "-XX:+UseG1GC".into(),
+        "-XX:+ParallelRefProcEnabled".into(),
+        "-XX:MaxGCPauseMillis=200".into(),
+        "-XX:+DisableExplicitGC".into(),
+        "-XX:G1NewSizePercent=30".into(),
+        "-XX:G1MaxNewSizePercent=40".into(),
+        "-XX:G1ReservePercent=20".into(),
+        "-XX:InitiatingHeapOccupancyPercent=15".into(),
+        "-XX:SurvivorRatio=32".into(),
+        "-XX:MaxTenuringThreshold=1".into(),
+        "-XX:+PerfDisableSharedMem".into(),
         "-Dfile.encoding=UTF-8".into(),
         format!("-Djava.io.tmpdir={}", java_temp.display()),
     ];
