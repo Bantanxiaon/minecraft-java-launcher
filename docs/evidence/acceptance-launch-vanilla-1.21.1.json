@@ -1,0 +1,11 @@
+{
+  "completedAt": "1786716995",
+  "gameVersion": "1.21.1",
+  "javaVersion": "21.0.12",
+  "loaderType": "vanilla",
+  "logPath": "D:\\MinecraftLauncherData-E2E-Current\\instances\\1\\.minecraft\\logs\\launch-acceptance-1786716965761012000.log",
+  "observedSeconds": 30,
+  "processId": 103712,
+  "status": "passed",
+  "terminatedByAcceptance": true
+}

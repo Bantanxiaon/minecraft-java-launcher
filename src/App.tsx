@@ -1,0 +1,1988 @@
+import { useEffect, useRef, useState } from "react";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import type {
+  Account,
+  BackupItem,
+  ContentItem,
+  DownloadProgress,
+  ImportedLocalPack,
+  ImportedModpack,
+  Instance,
+  JavaRuntime,
+  LauncherSettings,
+  ModInspection,
+  ModUpdateInfo,
+  ModpackInspection,
+  RemovedContent,
+  VersionManifest,
+  VersionSummary,
+  DownloadJob,
+  CrashReport,
+  ExportResult,
+  GameLog,
+  OnlineProject,
+} from "./types";
+import { DiagnosticsPage } from "./pages/DiagnosticsPage";
+import { ServersPage } from "./pages/ServersPage";
+import { SettingsPage } from "./pages/SettingsPage";
+import { InstanceLibraryPage } from "./pages/InstanceLibraryPage";
+import {
+  ArchiveContentPage,
+  ComingSoonPage,
+  ModpacksPage,
+  ModsPage,
+  WorldsPage,
+} from "./pages/ContentPages";
+import {
+  errorText,
+  inspectionSupportsGame,
+  loaderLabel,
+  loaderOptions,
+  navItems,
+} from "./ui";
+import grassBlock from "./assets/grass-block.png";
+import {
+  Archive,
+  Box,
+  CircleUserRound,
+  Download,
+  FolderOpen,
+  Gamepad2,
+  House,
+  Image as ImageIcon,
+  LibraryBig,
+  Package,
+  Play,
+  Puzzle,
+  Server,
+  Settings,
+  ShieldCheck,
+  Sun,
+  Coffee,
+  CheckCircle2,
+  Minus,
+  Square,
+  X,
+} from "lucide-react";
+import "./App.css";
+import "./overrides.css";
+
+function DesktopTitleBar() {
+  const runWindowAction = async (
+    action: "minimize" | "maximize" | "close",
+  ) => {
+    if (!isTauri()) return;
+    const window = getCurrentWindow();
+    if (action === "minimize") await window.minimize();
+    if (action === "maximize") await window.toggleMaximize();
+    if (action === "close") {
+      try {
+        await window.close();
+      } catch {
+        await invoke("exit_launcher");
+      }
+    }
+  };
+
+  return (
+    <div
+      className="desktop-titlebar"
+      data-tauri-drag-region
+      onDoubleClick={() => void runWindowAction("maximize")}
+    >
+      <span className="desktop-title" data-tauri-drag-region>
+        SH启动器
+      </span>
+      <div className="window-controls">
+        <button
+          aria-label="最小化"
+          title="最小化"
+          onClick={() => void runWindowAction("minimize")}
+        >
+          <Minus size={16} />
+        </button>
+        <button
+          aria-label="最大化或还原"
+          title="最大化或还原"
+          onClick={() => void runWindowAction("maximize")}
+        >
+          <Square size={13} />
+        </button>
+        <button
+          className="window-close"
+          aria-label="关闭"
+          title="关闭"
+          onClick={() => void runWindowAction("close")}
+        >
+          <X size={17} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export default function App() {
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState<number>();
+  const [instances, setInstances] = useState<Instance[]>([]);
+  const [selectedInstanceId, setSelectedInstanceId] = useState<number>();
+  const [versions, setVersions] = useState<VersionSummary[]>([]);
+  const [javaRuntimes, setJavaRuntimes] = useState<JavaRuntime[]>([]);
+  const [selectedJavaPath, setSelectedJavaPath] = useState<string>();
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [activeNav, setActiveNav] = useState("主页");
+  const activeNavRef = useRef(activeNav);
+  const [showInstanceForm, setShowInstanceForm] = useState(false);
+  const [instanceName, setInstanceName] = useState("");
+  const [gameVersion, setGameVersion] = useState("");
+  const [instanceLoader, setInstanceLoader] = useState("vanilla");
+  const [downloadProgress, setDownloadProgress] = useState<
+    Record<number, number>
+  >({});
+  const [clientReady, setClientReady] = useState<Record<number, boolean>>({});
+  const [loaderVersions, setLoaderVersions] = useState<
+    Record<number, string[]>
+  >({});
+  const [loaderSelections, setLoaderSelections] = useState<
+    Record<number, string>
+  >({});
+  const [modInspection, setModInspection] = useState<ModInspection>();
+  const [modSourcePath, setModSourcePath] = useState("");
+  const [modQueue, setModQueue] = useState<
+    Array<{ path: string; inspection: ModInspection }>
+  >([]);
+  const [modInstanceId, setModInstanceId] = useState<number>();
+  const [modItems, setModItems] = useState<ContentItem[]>([]);
+  const [modUpdates, setModUpdates] = useState<ModUpdateInfo[]>([]);
+  const [removedBackups, setRemovedBackups] = useState<BackupItem[]>([]);
+  const [packInspection, setPackInspection] = useState<ModpackInspection>();
+  const [packSourcePath, setPackSourcePath] = useState("");
+  const [dragging, setDragging] = useState(false);
+  const [settings, setSettings] = useState<LauncherSettings>({
+    downloadConcurrency: 8,
+    closeLauncherAfterGameStart: false,
+    language: "zh-CN",
+    defaultMemoryMb: 4096,
+    microsoftClientId: "",
+    backupWorldsBeforeLaunch: false,
+  });
+  const [archiveItems, setArchiveItems] = useState<ContentItem[]>([]);
+  const [worldItems, setWorldItems] = useState<ContentItem[]>([]);
+  const [downloadJobs, setDownloadJobs] = useState<DownloadJob[]>([]);
+  const [crashReports, setCrashReports] = useState<CrashReport[]>([]);
+  const [gameLogs, setGameLogs] = useState<GameLog[]>([]);
+  const [gameLogText, setGameLogText] = useState("");
+  const [onlineModQuery, setOnlineModQuery] = useState("");
+  const [onlinePackQuery, setOnlinePackQuery] = useState("");
+  const [onlineModProjects, setOnlineModProjects] = useState<OnlineProject[]>([]);
+  const [onlinePackProjects, setOnlinePackProjects] = useState<OnlineProject[]>([]);
+  const [microsoftLoginAvailable, setMicrosoftLoginAvailable] = useState(false);
+  const [gameRunning, setGameRunning] = useState(false);
+  const current = accounts.find((account) => account.id === selectedAccountId) ?? accounts[0];
+
+  useEffect(() => {
+    activeNavRef.current = activeNav;
+  }, [activeNav]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    Promise.all([
+      invoke<Account[]>("list_accounts"),
+      invoke<Instance[]>("list_instances"),
+      invoke<JavaRuntime[]>("detect_java_runtimes"),
+      invoke<LauncherSettings>("get_settings"),
+      invoke<boolean>("microsoft_login_available"),
+    ])
+      .then(([savedAccounts, savedInstances, detectedJava, savedSettings, loginAvailable]) => {
+        setAccounts(savedAccounts);
+        setSelectedAccountId(savedAccounts[0]?.id);
+        setInstances(savedInstances);
+        setJavaRuntimes(detectedJava);
+        setSelectedJavaPath(
+          detectedJava.find((runtime) => runtime.is64Bit)?.path,
+        );
+        setSettings(savedSettings);
+        setMicrosoftLoginAvailable(loginAvailable);
+        setModInstanceId(savedInstances[0]?.id);
+        setSelectedInstanceId(
+          savedInstances.find((instance) => instance.status === "ready")?.id ??
+            savedInstances[0]?.id,
+        );
+      })
+      .catch((error: unknown) =>
+        setMessage(errorText(error, "无法读取本地数据。")),
+      );
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let cancelled = false;
+    const disposers: Array<() => void> = [];
+    const register = async () => {
+      disposers.push(await listen("game-preparing", () => {
+        setMessage("正在准备 Minecraft…");
+      }));
+      disposers.push(await listen("game-running", () => {
+        setGameRunning(true);
+        document.documentElement.dataset.gameRunning = "true";
+      }));
+      disposers.push(await listen<{ exitCode?: number }>("game-exited", (event) => {
+        setGameRunning(false);
+        delete document.documentElement.dataset.gameRunning;
+        setMessage(`Minecraft 已正常退出${event.payload.exitCode == null ? "" : `（代码 ${event.payload.exitCode}）`}。`);
+      }));
+      disposers.push(await listen<{ exitCode?: number }>("game-crashed", (event) => {
+        setGameRunning(false);
+        delete document.documentElement.dataset.gameRunning;
+        setMessage(`Minecraft 异常退出（代码 ${event.payload.exitCode ?? "未知"}），可在“下载”页查看崩溃建议。`);
+      }));
+      if (cancelled) disposers.splice(0).forEach((dispose) => dispose());
+    };
+    void register();
+    return () => {
+      cancelled = true;
+      disposers.splice(0).forEach((dispose) => dispose());
+    };
+  }, []);
+
+  useEffect(() => {
+    setModUpdates([]);
+    if (!isTauri() || !modInstanceId) {
+      setModItems([]);
+      return;
+    }
+    invoke<ContentItem[]>("list_content_items", {
+      instanceId: modInstanceId,
+      kind: "mod",
+    })
+      .then(setModItems)
+      .catch((error: unknown) =>
+        setMessage(errorText(error, "无法读取模组列表。")),
+      );
+  }, [modInstanceId]);
+
+  useEffect(() => {
+    const kind =
+      activeNav === "资源包"
+        ? "resourcepack"
+        : activeNav === "光影"
+          ? "shaderpack"
+          : undefined;
+    if (!isTauri() || !modInstanceId || !kind) {
+      setArchiveItems([]);
+      return;
+    }
+    invoke<ContentItem[]>("list_content_items", {
+      instanceId: modInstanceId,
+      kind,
+    })
+      .then(setArchiveItems)
+      .catch((error: unknown) =>
+        setMessage(errorText(error, "无法读取内容列表。")),
+      );
+  }, [activeNav, modInstanceId]);
+
+  useEffect(() => {
+    const kind = activeNav === "模组" ? "mod"
+      : activeNav === "资源包" ? "resourcepack"
+      : activeNav === "光影" ? "shaderpack"
+      : activeNav === "存档" ? "world" : undefined;
+    if (!isTauri() || !modInstanceId || !kind) {
+      setRemovedBackups([]);
+      return;
+    }
+    invoke<BackupItem[]>("list_removed_backups", { instanceId: modInstanceId, kind })
+      .then(setRemovedBackups)
+      .catch((error: unknown) => setMessage(errorText(error, "无法读取可恢复备份。")));
+  }, [activeNav, modInstanceId]);
+
+  useEffect(() => {
+    if (!isTauri() || !modInstanceId || activeNav !== "存档") {
+      setWorldItems([]);
+      return;
+    }
+    invoke<ContentItem[]>("list_content_items", {
+      instanceId: modInstanceId,
+      kind: "world",
+    })
+      .then(setWorldItems)
+      .catch((error: unknown) =>
+        setMessage(errorText(error, "无法读取存档列表。")),
+      );
+  }, [activeNav, modInstanceId]);
+
+  useEffect(() => {
+    if (activeNav === "下载" && isTauri()) void refreshDiagnostics();
+  }, [activeNav]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let dispose: (() => void) | undefined;
+    let cancelled = false;
+    void listen<DownloadProgress>("download-progress", (event) => {
+      if (!["主页", "下载"].includes(activeNavRef.current)) return;
+      const { instanceId, downloadedBytes, totalBytes } = event.payload;
+      const percent = totalBytes
+        ? Math.min(100, Math.round((downloadedBytes * 100) / totalBytes))
+        : 0;
+      setDownloadProgress((existing) => ({
+        ...existing,
+        [instanceId]: percent,
+      }));
+    }).then((unlisten) => {
+      if (cancelled) unlisten();
+      else dispose = unlisten;
+    });
+    return () => {
+      cancelled = true;
+      dispose?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let dispose: (() => void) | undefined;
+    let cancelled = false;
+    void getCurrentWebviewWindow()
+      .onDragDropEvent((event) => {
+        if (
+          event.payload.type === "enter" &&
+          ["模组", "整合包", "资源包", "光影", "存档"].includes(activeNav)
+        )
+          setDragging(true);
+        if (event.payload.type === "leave") setDragging(false);
+        if (event.payload.type !== "drop") return;
+        setDragging(false);
+        const path = event.payload.paths[0];
+        if (!path) return;
+        setBusy(true);
+        setMessage("");
+        if (activeNav === "模组") {
+          Promise.all(
+            event.payload.paths.map(async (candidate) => ({
+              path: candidate,
+              inspection: await invoke<ModInspection>("inspect_mod_jar", {
+                path: candidate,
+              }),
+            })),
+          )
+            .then((queue) => {
+              setModQueue(queue);
+              setModInspection(queue[0]?.inspection);
+              setModSourcePath(queue[0]?.path ?? "");
+              if (queue.length > 1)
+                setMessage(`已安全预检 ${queue.length} 个模组。`);
+            })
+            .catch((error: unknown) =>
+              setMessage(errorText(error, "拖入的模组无法通过预检。")),
+            )
+            .finally(() => setBusy(false));
+        } else if (activeNav === "整合包") {
+          invoke<ModpackInspection>("inspect_modpack", { path })
+            .then((inspection) => {
+              setPackInspection(inspection);
+              setPackSourcePath(path);
+            })
+            .catch((error: unknown) =>
+              setMessage(errorText(error, "拖入的整合包无法通过预检。")),
+            )
+            .finally(() => setBusy(false));
+        } else if (["资源包", "光影"].includes(activeNav) && modInstanceId) {
+          const kind = activeNav === "资源包" ? "resourcepack" : "shaderpack";
+          Promise.all(
+            event.payload.paths.map((sourcePath) =>
+              invoke<ContentItem>("install_content_archive", {
+                instanceId: modInstanceId,
+                kind,
+                sourcePath,
+              }),
+            ),
+          )
+            .then((items) => {
+              setArchiveItems((existing) => [
+                ...items.filter(
+                  (item) =>
+                    !existing.some((candidate) => candidate.id === item.id),
+                ),
+                ...existing,
+              ]);
+              setMessage(`已导入 ${items.length} 个${activeNav}。`);
+            })
+            .catch((error: unknown) =>
+              setMessage(errorText(error, `${activeNav}导入失败。`)),
+            )
+            .finally(() => setBusy(false));
+        } else if (activeNav === "存档" && modInstanceId) {
+          invoke<ContentItem>("import_world", {
+            instanceId: modInstanceId,
+            sourcePath: path,
+          })
+            .then((item) => {
+              setWorldItems((existing) =>
+                existing.some((candidate) => candidate.id === item.id)
+                  ? existing
+                  : [item, ...existing],
+              );
+              setMessage(`存档 ${item.fileName} 已导入。`);
+            })
+            .catch((error: unknown) =>
+              setMessage(errorText(error, "存档导入失败。")),
+            )
+            .finally(() => setBusy(false));
+        } else {
+          setBusy(false);
+        }
+      })
+      .then((unlisten) => {
+        if (cancelled) unlisten();
+        else dispose = unlisten;
+      });
+    return () => {
+      cancelled = true;
+      dispose?.();
+    };
+  }, [activeNav, modInstanceId]);
+
+  async function createProfile() {
+    const displayName = draft.trim();
+    if (!/^[A-Za-z0-9_]{3,16}$/.test(displayName)) {
+      setMessage("名称须为 3–16 位 ASCII 字母、数字或下划线。");
+      return;
+    }
+    if (!isTauri()) {
+      setMessage("请在桌面应用中创建档案。");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      const account = await invoke<Account>("create_offline_account", {
+        displayName,
+      });
+      setAccounts((existing) => [account, ...existing]);
+      setSelectedAccountId(account.id);
+      setDraft("");
+    } catch (error) {
+      setMessage(errorText(error, "创建档案失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loginMicrosoft() {
+    if (!isTauri()) {
+      setMessage("请在桌面应用中登录 Microsoft。.");
+      return;
+    }
+    setBusy(true);
+    setMessage("正在打开系统浏览器完成 Microsoft 登录…");
+    try {
+      const account = await invoke<Account>("login_microsoft", {
+        clientId: settings.microsoftClientId?.trim() ?? "",
+      });
+      setAccounts((existing) => [
+        account,
+        ...existing.filter((candidate) => candidate.id !== account.id),
+      ]);
+      setSelectedAccountId(account.id);
+      setMessage("Microsoft 账户已安全保存到 Windows 凭据存储。 ");
+    } catch (error) {
+      setMessage(errorText(error, "Microsoft 登录失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeAccount(account: Account) {
+    if (!window.confirm(`确定移除账户“${account.displayName}”吗？`)) return;
+    setBusy(true);
+    setMessage("正在安全移除账户…");
+    try {
+      await invoke("remove_account", { accountId: account.id });
+      setAccounts((existing) => existing.filter((candidate) => candidate.id !== account.id));
+      setSelectedAccountId((selected) => selected === account.id ? undefined : selected);
+      setMessage("账户已移除；Microsoft 凭据也已从 Windows 凭据管理器清理。 ");
+    } catch (error) {
+      setMessage(errorText(error, "移除账户失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveLauncherSettings() {
+    setBusy(true);
+    setMessage("");
+    try {
+      setSettings(
+        await invoke<LauncherSettings>("save_settings", { settings }),
+      );
+      setMessage("设置已保存到 D 盘数据库。");
+    } catch (error) {
+      setMessage(errorText(error, "设置保存失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function installManagedJava(major: number) {
+    if (!isTauri()) return;
+    setBusy(true);
+    setMessage(`正在下载并校验官方 OpenJDK ${major}…`);
+    try {
+      const runtime = await invoke<JavaRuntime>("install_managed_java", {
+        major,
+      });
+      setJavaRuntimes((existing) => [
+        runtime,
+        ...existing.filter((candidate) => candidate.path !== runtime.path),
+      ]);
+      setSelectedJavaPath(runtime.path);
+      setMessage(
+        `Java ${runtime.version} 已安装到 D 盘受管理目录并通过 64 位运行自检。`,
+      );
+    } catch (error) {
+      setMessage(errorText(error, "Java 安装失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function checkEnvironment() {
+    if (!isTauri()) return;
+    setBusy(true);
+    setMessage("正在检测运行环境…");
+    try {
+      const detected = await invoke<JavaRuntime[]>("detect_java_runtimes");
+      setJavaRuntimes(detected);
+      const compatible = detected.filter((runtime) => runtime.is64Bit);
+      if (compatible.length === 0) {
+        setSelectedJavaPath(undefined);
+        setMessage("未检测到可用的 64 位 Java。请点击“一键安装并验证 Java 21”。");
+        return;
+      }
+      const preferred =
+        compatible.find((runtime) => runtime.majorVersion === 21) ?? compatible[0];
+      setSelectedJavaPath(preferred.path);
+      setMessage(
+        `环境检查通过：界面组件正常，并找到 ${compatible.length} 个 64 位 Java；已选择 Java ${preferred.majorVersion ?? preferred.version}。`,
+      );
+    } catch (error) {
+      setMessage(errorText(error, "运行环境检查失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function searchOnline(projectType: "mod" | "modpack") {
+    if (!isTauri()) return;
+    const target = instances.find((instance) => instance.id === modInstanceId);
+    if (projectType === "mod" && (!target || target.loaderType === "vanilla")) {
+      setMessage("请先选择一套已经启用模组功能的游戏配置。");
+      return;
+    }
+    setBusy(true);
+    setMessage("正在连接模组下载平台 Modrinth…");
+    try {
+      const projects = await invoke<OnlineProject[]>("search_modrinth_projects", {
+        query: projectType === "mod" ? onlineModQuery : onlinePackQuery,
+        projectType,
+        ...(projectType === "mod" && target
+          ? { gameVersion: target.gameVersion, loader: target.loaderType }
+          : {}),
+      });
+      if (projectType === "mod") setOnlineModProjects(projects);
+      else setOnlinePackProjects(projects);
+      setMessage(projects.length ? `找到 ${projects.length} 个兼容项目。` : "没有找到兼容项目，请换个关键词。");
+    } catch (error) {
+      setMessage(errorText(error, "在线搜索失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function installOnlineMod(project: OnlineProject) {
+    if (!isTauri() || !modInstanceId) return;
+    setBusy(true);
+    setMessage(`正在下载、校验并安装 ${project.title}…`);
+    try {
+      const item = await invoke<ContentItem>("install_modrinth_mod", {
+        instanceId: modInstanceId,
+        projectId: project.projectId,
+      });
+      setModItems((existing) => [item, ...existing.filter((value) => value.id !== item.id)]);
+      setMessage(`${project.title} 已下载完成，文件完整且适合当前模组环境。`);
+    } catch (error) {
+      setMessage(errorText(error, "在线模组安装失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function installOnlinePack(project: OnlineProject) {
+    if (!isTauri()) return;
+    setBusy(true);
+    setMessage(`正在下载、校验并导入 ${project.title}…`);
+    try {
+      const result = await invoke<ImportedModpack>("install_modrinth_modpack", {
+        projectId: project.projectId,
+      });
+      setInstances((existing) => [result.instance, ...existing.filter((value) => value.id !== result.instance.id)]);
+      setSelectedInstanceId(result.instance.id);
+      setModInstanceId(result.instance.id);
+      setMessage(`${project.title} 已创建为一套独立游戏配置，共下载 ${result.downloadedFiles} 个文件，并加入 ${result.overrideFiles} 个整合包自带设置文件。`);
+    } catch (error) {
+      setMessage(errorText(error, "在线整合包安装失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function refreshDiagnostics() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const [jobs, crashes, logs] = await Promise.all([
+        invoke<DownloadJob[]>("list_download_jobs"),
+        invoke<CrashReport[]>("list_crash_reports"),
+        invoke<GameLog[]>("list_game_logs"),
+      ]);
+      setDownloadJobs(jobs);
+      setCrashReports(crashes);
+      setGameLogs(logs);
+    } catch (error) {
+      setMessage(errorText(error, "无法读取诊断信息。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function readGameLog(log: GameLog, level: string, query: string) {
+    setBusy(true);
+    try {
+      setGameLogText(await invoke<string>("read_game_log", {
+        instanceId: log.instanceId,
+        fileName: log.fileName,
+        level,
+        query,
+      }));
+    } catch (error) {
+      setMessage(errorText(error, "无法读取游戏日志。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function exportDiagnostics() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const path = await invoke<string>("export_diagnostic_report");
+      setMessage(`脱敏诊断报告已导出：${path}`);
+    } catch (error) {
+      setMessage(errorText(error, "诊断报告导出失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelDownloads() {
+    if (!isTauri()) return;
+    await invoke("cancel_active_downloads");
+    setMessage("已请求取消；正在写入的分块完成后会停止，临时文件可断点续传。");
+  }
+
+  async function importArchives(kind: "resourcepack" | "shaderpack") {
+    if (!modInstanceId) {
+      setMessage("请先选择要使用哪套游戏配置。");
+      return;
+    }
+    const selected = await open({
+      multiple: true,
+      directory: false,
+      filters: [
+        {
+          name:
+            kind === "resourcepack"
+              ? "Minecraft Resource Pack"
+              : "Minecraft Shader Pack",
+          extensions: ["zip"],
+        },
+      ],
+    });
+    const paths = typeof selected === "string" ? [selected] : selected;
+    if (!paths?.length) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const items: ContentItem[] = [];
+      for (const sourcePath of paths)
+        items.push(
+          await invoke<ContentItem>("install_content_archive", {
+            instanceId: modInstanceId,
+            kind,
+            sourcePath,
+          }),
+        );
+      setArchiveItems((existing) => [
+        ...items.filter(
+          (item) => !existing.some((candidate) => candidate.id === item.id),
+        ),
+        ...existing,
+      ]);
+      setMessage(`已安全导入 ${items.length} 个文件。`);
+    } catch (error) {
+      setMessage(errorText(error, "内容导入失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleArchive(item: ContentItem) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const updated = await invoke<ContentItem>("set_content_enabled", {
+        contentId: item.id,
+        enabled: !item.enabled,
+      });
+      setArchiveItems((existing) =>
+        existing.map((candidate) =>
+          candidate.id === updated.id ? updated : candidate,
+        ),
+      );
+    } catch (error) {
+      setMessage(errorText(error, "无法更改内容状态。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeArchive(item: ContentItem) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const removed = await invoke<RemovedContent>("remove_content_to_backup", {
+        contentId: item.id,
+      });
+      setArchiveItems((existing) =>
+        existing.filter((candidate) => candidate.id !== item.id),
+      );
+      if (modInstanceId) setRemovedBackups(await invoke<BackupItem[]>("list_removed_backups", { instanceId: modInstanceId, kind: item.kind }));
+      setMessage(`已移至可恢复备份：${removed.backupPath}`);
+    } catch (error) {
+      setMessage(errorText(error, "无法移除内容。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function chooseAndImportWorld(directory: boolean) {
+    if (!modInstanceId) {
+      setMessage("请先选择要使用哪套游戏配置。");
+      return;
+    }
+    const selected = await open(
+      directory
+        ? { multiple: false, directory: true }
+        : {
+            multiple: false,
+            directory: false,
+            filters: [{ name: "Minecraft World", extensions: ["zip"] }],
+          },
+    );
+    if (typeof selected !== "string") return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const item = await invoke<ContentItem>("import_world", {
+        instanceId: modInstanceId,
+        sourcePath: selected,
+      });
+      setWorldItems((existing) => [item, ...existing]);
+      setMessage(`存档 ${item.fileName} 已安全导入。`);
+    } catch (error) {
+      setMessage(errorText(error, "存档导入失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeWorld(item: ContentItem) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const removed = await invoke<RemovedContent>("remove_world_to_backup", {
+        contentId: item.id,
+      });
+      setWorldItems((existing) =>
+        existing.filter((candidate) => candidate.id !== item.id),
+      );
+      if (modInstanceId) setRemovedBackups(await invoke<BackupItem[]>("list_removed_backups", { instanceId: modInstanceId, kind: "world" }));
+      setMessage(`存档已移至可恢复备份：${removed.backupPath}`);
+    } catch (error) {
+      setMessage(errorText(error, "无法移除存档。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function backupWorld(item: ContentItem) {
+    setBusy(true);
+    setMessage("正在备份存档…");
+    try {
+      const result = await invoke<RemovedContent>("backup_world", { contentId: item.id });
+      setMessage(`存档备份完成：${result.backupPath}`);
+    } catch (error) {
+      setMessage(errorText(error, "存档备份失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function duplicateWorld(item: ContentItem) {
+    setBusy(true);
+    setMessage("正在复制存档…");
+    try {
+      const duplicate = await invoke<ContentItem>("duplicate_world", { contentId: item.id });
+      setWorldItems((existing) => [duplicate, ...existing]);
+      setMessage(`存档副本已创建：${duplicate.fileName}`);
+    } catch (error) {
+      setMessage(errorText(error, "复制存档失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function exportWorld(item: ContentItem) {
+    if (!isTauri()) return;
+    const destination = await save({
+      defaultPath: `${item.fileName}.zip`,
+      filters: [{ name: "Minecraft 存档", extensions: ["zip"] }],
+    });
+    if (!destination) return;
+    setBusy(true);
+    setMessage("正在导出存档…");
+    try {
+      const result = await invoke<ExportResult>("export_world", { contentId: item.id, destination });
+      setMessage(`存档已导出：${result.path}（${result.files} 个文件）`);
+    } catch (error) {
+      setMessage(errorText(error, "导出存档失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openInstanceDirectory(instanceId: number | undefined, section: string) {
+    if (!isTauri() || !instanceId) {
+      setMessage("请先选择一套游戏配置。");
+      return;
+    }
+    try {
+      const path = await invoke<string>("open_instance_directory", { instanceId, section });
+      setMessage(`已打开：${path}`);
+    } catch (error) {
+      setMessage(errorText(error, "无法打开文件夹。"));
+    }
+  }
+
+  async function openInstanceForm() {
+    setShowInstanceForm(true);
+    setMessage("");
+    if (!isTauri() || versions.length) return;
+    setBusy(true);
+    try {
+      const manifest = await invoke<VersionManifest>("fetch_version_manifest", {
+        includeSnapshots: false,
+      });
+      setVersions(manifest.versions);
+      setGameVersion(manifest.latest.release);
+    } catch (error) {
+      setMessage(errorText(error, "无法读取官方版本清单。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createInstance() {
+    if (!isTauri()) {
+      setMessage("请在桌面程序中创建游戏配置。");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      const instance = await invoke<Instance>("create_instance_profile", {
+        name: instanceName.trim(),
+        gameVersion: gameVersion.trim(),
+        loaderType: instanceLoader,
+      });
+      setInstances((existing) => [instance, ...existing]);
+      setSelectedInstanceId(instance.id);
+      setModInstanceId(instance.id);
+      setInstanceName("");
+      setShowInstanceForm(false);
+    } catch (error) {
+      setMessage(errorText(error, "创建游戏配置失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cloneInstance(instance: Instance) {
+    setBusy(true);
+    setMessage("正在复制实例…");
+    try {
+      const cloned = await invoke<Instance>("clone_instance", {
+        instanceId: instance.id,
+        name: `${instance.name} 副本`,
+      });
+      setInstances((existing) => [cloned, ...existing]);
+      setMessage(`实例已复制：${cloned.name}`);
+    } catch (error) {
+      setMessage(errorText(error, "复制实例失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function renameInstance(instance: Instance) {
+    const name = window.prompt("新的实例名称", instance.name)?.trim();
+    if (!name || name === instance.name) return;
+    setBusy(true);
+    setMessage("正在重命名实例…");
+    try {
+      const updated = await invoke<Instance>("rename_instance", { instanceId: instance.id, name });
+      setInstances((existing) => existing.map((candidate) => candidate.id === updated.id ? updated : candidate));
+      setMessage(`实例已重命名为 ${updated.name}`);
+    } catch (error) {
+      setMessage(errorText(error, "重命名实例失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteInstance(instance: Instance) {
+    if (!window.confirm(`确定移除实例“${instance.name}”吗？实例会先进入可恢复备份。`)) return;
+    if (!window.confirm("请再次确认：存档、模组和配置都会从实例列表移除。")) return;
+    setBusy(true);
+    setMessage("正在安全移除实例…");
+    try {
+      const removed = await invoke<RemovedContent>("delete_instance_to_backup", { instanceId: instance.id });
+      setInstances((existing) => existing.filter((candidate) => candidate.id !== instance.id));
+      setSelectedInstanceId((selected) => selected === instance.id ? undefined : selected);
+      setMessage(`实例已移至备份：${removed.backupPath}`);
+    } catch (error) {
+      setMessage(errorText(error, "移除实例失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function repairInstance(instance: Instance) {
+    setBusy(true);
+    setMessage("正在校验并修复实例文件…");
+    try {
+      let repaired = await installClientFiles(instance);
+      if (repaired.loaderType !== "vanilla") {
+        repaired = await installInstanceLoaderFiles(repaired);
+      }
+      setMessage(`实例 ${repaired.name} 已完成校验和修复。`);
+    } catch (error) {
+      setMessage(errorText(error, "实例修复失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function installClientFiles(instance: Instance): Promise<Instance> {
+    setDownloadProgress((existing) => ({ ...existing, [instance.id]: 0 }));
+    let available = versions;
+    if (!available.length) {
+      const manifest = await invoke<VersionManifest>(
+        "fetch_version_manifest",
+        { includeSnapshots: true },
+      );
+      available = manifest.versions;
+      setVersions(available);
+    }
+    const version = available.find(
+      (candidate) => candidate.id === instance.gameVersion,
+    );
+    if (!version) throw new Error("官方版本列表中没有找到这套游戏所选的版本。");
+    await invoke("install_vanilla_client", {
+      instanceId: instance.id,
+      versionUrl: version.url,
+      versionSha1: version.sha1,
+    });
+    const updated: Instance = {
+      ...instance,
+      status: instance.loaderType === "vanilla" ? "ready" : "loader_missing",
+    };
+    setClientReady((existing) => ({ ...existing, [instance.id]: true }));
+    setInstances((existing) =>
+      existing.map((candidate) =>
+        candidate.id === instance.id ? updated : candidate,
+      ),
+    );
+    return updated;
+  }
+
+  async function installClient(instance: Instance) {
+    if (!isTauri()) return;
+    setBusy(true);
+    setMessage("正在查找电脑里已有的游戏文件，并检查缺少的部分…");
+    try {
+      await installClientFiles(instance);
+      setMessage("游戏文件已经检查完成，可以继续启动。");
+    } catch (error) {
+      setDownloadProgress((existing) => {
+        const next = { ...existing };
+        delete next[instance.id];
+        return next;
+      });
+      setMessage(errorText(error, "游戏安装失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function terminateRunningGame() {
+    if (!selectedInstance) return;
+    if (!window.confirm("游戏窗口没有响应时才需要强制结束。确定继续吗？")) return;
+    setMessage("正在结束没有响应的游戏…");
+    try {
+      await invoke("terminate_game", { instanceId: selectedInstance.id });
+      setMessage("已请求系统结束游戏进程。存档中的未保存进度可能丢失。");
+    } catch (error) {
+      setMessage(errorText(error, "无法结束游戏。"));
+    }
+  }
+
+  async function chooseExistingGameDirectory() {
+    const selected = await open({ directory: true, multiple: false });
+    if (typeof selected !== "string") return;
+    setSettings((currentSettings) => ({
+      ...currentSettings,
+      gameDirectory: selected,
+    }));
+    setMessage("已选择已有游戏目录，保存设置后安装时会优先复用其中的文件。");
+  }
+
+  async function installInstanceLoaderFiles(
+    instance: Instance,
+  ): Promise<Instance> {
+    let available = loaderVersions[instance.id];
+    if (!available?.length) {
+      available = await invoke<string[]>("list_loader_versions", {
+        loaderType: instance.loaderType,
+        gameVersion: instance.gameVersion,
+      });
+      if (!available.length) {
+        throw new Error("没有找到与当前游戏版本兼容的模组运行环境。");
+      }
+      setLoaderVersions((existing) => ({
+        ...existing,
+        [instance.id]: available,
+      }));
+    }
+    const loaderVersion = loaderSelections[instance.id] ?? available[0];
+    setLoaderSelections((existing) => ({
+      ...existing,
+      [instance.id]: loaderVersion,
+    }));
+    if (["forge", "neoforge"].includes(instance.loaderType) && !selectedJava) {
+      throw new Error("安装 Forge/NeoForge 前需要可用的 64 位 Java。");
+    }
+    const updated = await invoke<Instance>(
+      ["forge", "neoforge"].includes(instance.loaderType)
+        ? "install_java_loader"
+        : "install_profile_loader",
+      {
+        instanceId: instance.id,
+        loaderVersion,
+        ...(selectedJava ? { javaPath: selectedJava.path } : {}),
+      },
+    );
+    setInstances((existing) =>
+      existing.map((candidate) =>
+        candidate.id === updated.id ? updated : candidate,
+      ),
+    );
+    return updated;
+  }
+
+  async function launchSelectedInstance(targetInstance?: Instance) {
+    const requestedInstance = targetInstance ?? selectedInstance;
+    if (!requestedInstance) {
+      setMessage("还没有游戏配置，请先新建一套游戏配置。");
+      return;
+    }
+    if (!selectedJava) {
+      setMessage("没有找到可用的 64 位 Java，请先到设置里点击“一键检查并安装”。");
+      return;
+    }
+    setBusy(true);
+    setMessage("正在准备游戏…");
+    try {
+      let launchAccount = current;
+      if (!launchAccount) {
+        setMessage("正在创建本机测试档案…");
+        launchAccount = await invoke<Account>("create_offline_account", {
+          displayName: "Player",
+        });
+        setAccounts((existing) => [
+          launchAccount as Account,
+          ...existing.filter((account) => account.id !== launchAccount?.id),
+        ]);
+      }
+      let readyInstance = requestedInstance;
+      if (["missing", "base_missing"].includes(readyInstance.status)) {
+        setMessage("正在自动检查并补齐游戏文件…");
+        readyInstance = await installClientFiles(readyInstance);
+      }
+      if (
+        readyInstance.loaderType !== "vanilla" &&
+        readyInstance.status !== "ready"
+      ) {
+        setMessage(
+          `正在自动安装兼容的 ${loaderLabel(readyInstance.loaderType)} 模组环境…`,
+        );
+        readyInstance = await installInstanceLoaderFiles(readyInstance);
+      }
+      if (readyInstance.status !== "ready") {
+        throw new Error("这套游戏配置还没有准备完成。");
+      }
+      setMessage("文件和 Java 已就绪，正在启动 Minecraft…");
+      const result = await invoke<{ processId: number; logPath: string }>(
+        "launch_instance",
+        {
+          instanceId: readyInstance.id,
+          accountId: launchAccount.id,
+          javaPath: selectedJava.path,
+        },
+      );
+      setMessage(
+        `游戏进程已启动（PID ${result.processId}），日志：${result.logPath}`,
+      );
+      if (settings.closeLauncherAfterGameStart) {
+        await invoke("exit_launcher");
+      }
+    } catch (error) {
+      setMessage(errorText(error, "游戏启动失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function installInstanceLoader(instance: Instance) {
+    setBusy(true);
+    setMessage(`正在自动选择并安装 ${loaderLabel(instance.loaderType)}…`);
+    try {
+      const updated = await installInstanceLoaderFiles(instance);
+      setMessage(`${loaderLabel(updated.loaderType)} 模组环境已安装并校验。`);
+    } catch (error) {
+      setMessage(errorText(error, "模组运行环境安装失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function inspectMod() {
+    if (!isTauri()) {
+      setMessage("请在桌面应用中选择模组文件。");
+      return;
+    }
+    const selected = await open({
+      multiple: true,
+      directory: false,
+      filters: [{ name: "Minecraft Mod", extensions: ["jar"] }],
+    });
+    const paths = typeof selected === "string" ? [selected] : selected;
+    if (!paths?.length) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const queue = await Promise.all(
+        paths.map(async (path) => ({
+          path,
+          inspection: await invoke<ModInspection>("inspect_mod_jar", { path }),
+        })),
+      );
+      setModQueue(queue);
+      setModInspection(queue[0]?.inspection);
+      setModSourcePath(queue[0]?.path ?? "");
+      if (queue.length > 1) setMessage(`已安全预检 ${queue.length} 个模组。`);
+    } catch (error) {
+      setModInspection(undefined);
+      setModSourcePath("");
+      setModQueue([]);
+      setMessage(errorText(error, "模组预检失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function inspectPack() {
+    if (!isTauri()) {
+      setMessage("请在桌面应用中选择整合包。");
+      return;
+    }
+    const selected = await open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: "Minecraft Modpack", extensions: ["mrpack", "zip"] }],
+    });
+    if (typeof selected !== "string") return;
+    setBusy(true);
+    setMessage("");
+    try {
+      setPackInspection(
+        await invoke<ModpackInspection>("inspect_modpack", { path: selected }),
+      );
+      setPackSourcePath(selected);
+    } catch (error) {
+      setPackInspection(undefined);
+      setPackSourcePath("");
+      setMessage(errorText(error, "整合包预检失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function importPack() {
+    if (!packSourcePath || !packInspection) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      if (packInspection.format === "modrinth") {
+        const imported = await invoke<ImportedModpack>("import_modrinth_pack", {
+          sourcePath: packSourcePath,
+        });
+        setInstances((existing) => [imported.instance, ...existing]);
+        setSelectedInstanceId(imported.instance.id);
+        setModInstanceId(imported.instance.id);
+        setMessage(
+          `整合包已导入一套独立游戏配置：下载 ${imported.downloadedFiles} 个文件，加入 ${imported.overrideFiles} 个整合包自带设置文件。下一步请安装基础游戏和模组运行环境。`,
+        );
+      } else {
+        if (!modInstanceId) throw new Error("请先选择要导入到哪套游戏。");
+        const imported = await invoke<ImportedLocalPack>("import_local_pack", {
+          instanceId: modInstanceId,
+          sourcePath: packSourcePath,
+        });
+        const unresolved = imported.unresolvedRemoteFiles
+          ? `；另有 ${imported.unresolvedRemoteFiles} 个远程项目因无公开下载地址未导入`
+          : "";
+        setMessage(
+          `已导入 ${imported.importedFiles} 个本地文件，其中 ${imported.importedMods} 个模组${unresolved}。`,
+        );
+      }
+    } catch (error) {
+      setMessage(
+        errorText(error, "整合包导入失败；已经下载的内容仍保留在单独目录中，可以稍后继续。"),
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function exportPack(instanceId: number, includeSaves: boolean) {
+    if (!isTauri()) return;
+    const instance = instances.find((candidate) => candidate.id === instanceId);
+    if (!instance) {
+      setMessage("请选择要导出的游戏配置。");
+      return;
+    }
+    const destination = await save({
+      defaultPath: `${instance.name}-SH整合包.zip`,
+      filters: [{ name: "ZIP 整合包", extensions: ["zip"] }],
+    });
+    if (!destination) return;
+    setBusy(true);
+    setMessage("正在打包实例；账户和登录凭据不会写入整合包…");
+    try {
+      const result = await invoke<ExportResult>("export_instance_modpack", {
+        instanceId,
+        destination,
+        includeSaves,
+      });
+      setMessage(`整合包已导出：${result.path}（${result.files} 个文件）`);
+    } catch (error) {
+      setMessage(errorText(error, "整合包导出失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function installMod() {
+    if (!modInstanceId || (!modSourcePath && !modQueue.length)) return;
+    const target = instances.find((instance) => instance.id === modInstanceId);
+    if (
+      !target ||
+      modQueue.some(
+        (candidate) =>
+          candidate.inspection.loaderType !== target.loaderType ||
+          !inspectionSupportsGame(
+            candidate.inspection.gameVersionRequirements,
+            target.gameVersion,
+          ),
+      )
+    ) {
+      setMessage("所选模组中有内容不适合当前游戏版本或模组运行环境，因此没有安装。 ");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      const queue = modQueue.length
+        ? modQueue
+        : [{ path: modSourcePath, inspection: modInspection! }];
+      const provided = new Set([
+        "minecraft",
+        "java",
+        "fabricloader",
+        "fabric-loader",
+        "quilt_loader",
+        "quilt-loader",
+        "forge",
+        "neoforge",
+      ]);
+      const installedIds = new Set(
+        modItems.flatMap((item) => {
+          try {
+            const metadata = JSON.parse(item.metadataJson ?? "{}") as {
+              modId?: string;
+            };
+            return metadata.modId ? [metadata.modId.toLowerCase()] : [];
+          } catch {
+            return [];
+          }
+        }),
+      );
+      const incomingIds = new Set(
+        queue
+          .map((candidate) => candidate.inspection.modId?.toLowerCase())
+          .filter((value): value is string => Boolean(value)),
+      );
+      const missing = new Set(
+        queue
+          .flatMap((candidate) => candidate.inspection.dependencies)
+          .map((dependency) => dependency.toLowerCase())
+          .filter(
+            (dependency) =>
+              !provided.has(dependency) &&
+              !installedIds.has(dependency) &&
+              !incomingIds.has(dependency),
+          ),
+      );
+      if (missing.size) {
+        setMessage(
+          `没有安装：还缺少这些前置模组：${[...missing].join("、")}。请把前置一起拖进来，或先从在线搜索安装。`,
+        );
+        return;
+      }
+      const installed: ContentItem[] = [];
+      for (const candidate of queue)
+        installed.push(
+          await invoke<ContentItem>("install_mod", {
+            instanceId: modInstanceId,
+            sourcePath: candidate.path,
+          }),
+        );
+      setModItems((existing) => [
+        ...installed.filter(
+          (item) => !existing.some((candidate) => candidate.id === item.id),
+        ),
+        ...existing,
+      ]);
+      setMessage(`已校验并安装 ${installed.length} 个模组。`);
+    } catch (error) {
+      setMessage(errorText(error, "模组安装失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleMod(item: ContentItem) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const updated = await invoke<ContentItem>("set_mod_enabled", {
+        contentId: item.id,
+        enabled: !item.enabled,
+      });
+      setModItems((existing) =>
+        existing.map((candidate) =>
+          candidate.id === updated.id ? updated : candidate,
+        ),
+      );
+      setMessage(
+        updated.enabled ? "模组已启用。" : "模组已停用并移出加载目录。",
+      );
+    } catch (error) {
+      setMessage(errorText(error, "无法更改模组状态。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeMod(item: ContentItem) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const removed = await invoke<RemovedContent>("remove_mod_to_backup", {
+        contentId: item.id,
+      });
+      setModItems((existing) =>
+        existing.filter((candidate) => candidate.id !== item.id),
+      );
+      if (modInstanceId) setRemovedBackups(await invoke<BackupItem[]>("list_removed_backups", { instanceId: modInstanceId, kind: "mod" }));
+      setMessage(`模组已移至可恢复备份：${removed.backupPath}`);
+    } catch (error) {
+      setMessage(errorText(error, "无法移除模组。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function restoreBackup(item: BackupItem) {
+    if (!modInstanceId) return;
+    setBusy(true);
+    setMessage(`正在恢复 ${item.originalName}…`);
+    try {
+      const restored = await invoke<ContentItem>("restore_removed_backup", {
+        instanceId: modInstanceId,
+        kind: item.kind,
+        backupName: item.backupName,
+      });
+      setRemovedBackups((existing) => existing.filter((candidate) => candidate.backupName !== item.backupName));
+      if (item.kind === "mod") setModItems((existing) => [restored, ...existing]);
+      else if (item.kind === "world") setWorldItems((existing) => [restored, ...existing]);
+      else setArchiveItems((existing) => [restored, ...existing]);
+      setMessage(`${item.originalName} 已恢复。`);
+    } catch (error) {
+      setMessage(errorText(error, "恢复备份失败，备份文件仍然保留。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function checkModUpdates() {
+    if (!isTauri() || !modInstanceId) return;
+    setBusy(true);
+    setMessage("正在检查与当前游戏版本兼容的模组更新…");
+    try {
+      const updates = await invoke<ModUpdateInfo[]>("check_mod_updates", {
+        instanceId: modInstanceId,
+      });
+      setModUpdates(updates);
+      const count = updates.filter((item) => item.updateAvailable).length;
+      setMessage(count ? `找到 ${count} 个兼容更新。` : "已是当前实例可用的最新版本。");
+    } catch (error) {
+      setMessage(errorText(error, "检查模组更新失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function updateMod(item: ContentItem) {
+    setBusy(true);
+    setMessage(`正在安全更新 ${item.fileName}…`);
+    try {
+      const updated = await invoke<ContentItem>("update_modrinth_mod", {
+        contentId: item.id,
+      });
+      setModItems((existing) => existing.map((candidate) => candidate.id === updated.id ? updated : candidate));
+      setModUpdates((existing) => existing.map((candidate) => candidate.contentId === updated.id
+        ? { ...candidate, installedVersion: candidate.latestVersion, updateAvailable: false }
+        : candidate));
+      setMessage("模组已更新，旧文件已放入可恢复备份。 ");
+    } catch (error) {
+      setMessage(errorText(error, "模组更新失败，原文件没有被覆盖。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function updateAllMods() {
+    const pending = modUpdates.filter((item) => item.updateAvailable);
+    if (!pending.length) return;
+    setBusy(true);
+    setMessage(`正在更新 ${pending.length} 个模组…`);
+    try {
+      const updatedItems: ContentItem[] = [];
+      for (const update of pending) {
+        updatedItems.push(await invoke<ContentItem>("update_modrinth_mod", { contentId: update.contentId }));
+      }
+      setModItems((existing) => existing.map((candidate) => updatedItems.find((item) => item.id === candidate.id) ?? candidate));
+      setModUpdates((existing) => existing.map((candidate) => pending.some((item) => item.contentId === candidate.contentId)
+        ? { ...candidate, installedVersion: candidate.latestVersion, updateAvailable: false }
+        : candidate));
+      setMessage(`已更新 ${updatedItems.length} 个模组，旧文件均已备份。`);
+    } catch (error) {
+      setMessage(errorText(error, "批量更新中断；已完成的更新保留，未完成的原文件未变。"));
+      if (modInstanceId) {
+        const refreshed = await invoke<ContentItem[]>("list_content_items", { instanceId: modInstanceId, kind: "mod" });
+        setModItems(refreshed);
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const profileName = current?.displayName ?? "尚未创建档案";
+  const selectedInstance =
+    instances.find((instance) => instance.id === selectedInstanceId) ??
+    instances[0];
+  const selectedJava =
+    javaRuntimes.find((runtime) => runtime.path === selectedJavaPath) ??
+    javaRuntimes.find((runtime) => runtime.is64Bit);
+  const navIcons = [House, LibraryBig, Box, Puzzle, Package, ImageIcon, Sun, Server, Download, Settings, Archive];
+  return (
+    <div className="app-frame">
+      <DesktopTitleBar />
+      <main className="shell">
+      <aside>
+        <div className="brand">
+          <img className="brand-art" src={grassBlock} alt="Minecraft grass block" />
+          <span className="brand-copy"><strong>Launcher</strong><small>Minecraft Java Edition</small></span>
+        </div>
+        <nav>
+          {navItems.map((item, index) => {
+            const Icon = navIcons[index] ?? Gamepad2;
+            return (
+            <button
+              className={item === activeNav ? "active" : ""}
+              onClick={() => {
+                setActiveNav(item);
+                setMessage("");
+              }}
+              key={item}
+            >
+              <Icon size={20} strokeWidth={1.8} />
+              <span>{item}</span>
+            </button>
+            );
+          })}
+        </nav>
+        <section className="account">
+          <div className="avatar">
+            {current ? profileName[0].toUpperCase() : <CircleUserRound size={22} />}
+          </div>
+          <div>
+            <strong>{profileName}</strong>
+            <small>{current ? "本地玩家名称" : "需要设置"}</small>
+          </div>
+          {accounts.length > 1 ? (
+            <select className="account-switcher" aria-label="切换账户" value={current?.id ?? ""} onChange={(event) => setSelectedAccountId(Number(event.target.value))}>
+              {accounts.map((account) => <option key={account.id} value={account.id}>{account.displayName} · {account.accountType}</option>)}
+            </select>
+          ) : null}
+        </section>
+      </aside>
+      <section className="content">
+        {activeNav === "主页" ? (
+          <>
+            <header>
+              <div>
+                <h1>
+                  {current ? `你好，${profileName}` : "欢迎使用 SH启动器"}
+                </h1>
+                <p>本地数据仅保存在此设备上。</p>
+              </div>
+              <button className="quiet">管理档案</button>
+            </header>
+            <section className="distribution-note" role="note">
+              <strong>启动器不包含 Minecraft 游戏本体</strong>
+              <span>
+                创建游戏配置并确认后，启动器才会从 Mojang 官方网站下载游戏文件，
+                并检查文件是否完整；请使用你合法取得的游戏许可。
+              </span>
+            </section>
+            <div className="layout">
+              <section className="hero">
+                <div className="instance-icon"><img src={grassBlock} alt="" /></div>
+                <div className="hero-copy">
+                  <p className="eyebrow">当前游戏配置</p>
+                  <h2>{selectedInstance?.name ?? "尚未安装游戏"}</h2>
+                  {instances.length > 1 ? (
+                    <select
+                      aria-label="当前游戏配置"
+                      value={selectedInstance?.id ?? ""}
+                      onChange={(event) =>
+                        setSelectedInstanceId(Number(event.target.value))
+                      }
+                    >
+                      {instances.map((instance) => (
+                        <option key={instance.id} value={instance.id}>
+                          {instance.name} · {loaderLabel(instance.loaderType)}
+                        </option>
+                      ))}
+                    </select>
+                  ) : null}
+                  <div className="facts">
+                    <span>
+                      {selectedInstance
+                        ? `${loaderLabel(selectedInstance.loaderType)} ${selectedInstance.gameVersion}`
+                        : "选择 Minecraft 版本后开始安装"}
+                    </span>
+                    <span>
+                      {selectedJava
+                        ? `Java ${selectedJava.majorVersion ?? selectedJava.version} · 64 位`
+                        : "未检测到兼容的 64 位 Java"}
+                    </span>
+                  </div>
+                  <div className="hero-status-list">
+                    <div><ShieldCheck size={18} /><span>完整性</span><strong>{selectedInstance?.status === "ready" ? "已验证" : "等待安装"}</strong><CheckCircle2 size={17} /></div>
+                    <div><Coffee size={18} /><span>Java</span><strong>{selectedJava ? `Java ${selectedJava.majorVersion ?? selectedJava.version}` : "未检测"}</strong><CheckCircle2 size={17} /></div>
+                    <div><FolderOpen size={18} /><span>游戏目录</span><strong>.minecraft</strong></div>
+                  </div>
+                </div>
+                <div className="hero-actions">
+                  <button
+                    className="play"
+                    disabled={busy || gameRunning}
+                    onClick={() => void launchSelectedInstance()}
+                  >
+                    <Play size={20} fill="currentColor" />{gameRunning ? "游戏运行中" : "开始游戏"}
+                  </button>
+                  {gameRunning ? (
+                    <button className="force-stop" onClick={() => void terminateRunningGame()}>
+                      强制结束游戏
+                    </button>
+                  ) : null}
+                </div>
+                <p className="notice">
+                  本软件仅是启动器，不捆绑游戏；联机功能暂缓开通。
+                </p>
+              </section>
+              <aside className="activity">
+                <section className="download-card">
+                  <div className="side-card-title"><h3>下载任务</h3><span>⌃</span></div>
+                  <strong className="download-state">{downloadJobs.some((job) => job.status === "downloading") ? "正在下载" : "下载任务"}</strong>
+                  <p>{downloadJobs[0]?.targetPath?.split("\\").pop() ?? "暂无进行中的任务"}</p>
+                  <div className="side-progress"><span style={{ width: `${selectedInstanceId ? (downloadProgress[selectedInstanceId] ?? 0) : 0}%` }} /></div>
+                  <div className="side-progress-meta"><span>{selectedInstanceId ? `${downloadProgress[selectedInstanceId] ?? 0}%` : "—"}</span><span>{downloadJobs.length} 个任务</span></div>
+                  <div className="side-actions"><button disabled={!busy}>Ⅱ</button><button disabled={!busy}>×</button></div>
+                </section>
+                <section className="recent-card">
+                  <div className="side-card-title"><h3>最近活动</h3><button className="link-button">查看全部</button></div>
+                  <div className="recent-item"><Download size={20} /><span><strong>启动器已就绪</strong><small>{selectedInstance?.name ?? "尚未创建实例"}</small></span><time>刚刚</time></div>
+                  <div className="recent-item"><Play size={20} /><span><strong>开始游戏</strong><small>{selectedInstance?.gameVersion ?? "等待配置"}</small></span><time>—</time></div>
+                  <div className="recent-item"><Puzzle size={20} /><span><strong>模组管理</strong><small>支持拖拽导入</small></span><time>—</time></div>
+                </section>
+              </aside>
+            </div>
+            <section className="instances">
+              <div>
+                <h2>我的游戏配置</h2>
+                <p>每一套版本、模组和存档分开保存，不会互相影响。</p>
+              </div>
+              <button
+                className="new"
+                onClick={() =>
+                  showInstanceForm
+                    ? setShowInstanceForm(false)
+                    : void openInstanceForm()
+                }
+              >
+                + 新建游戏配置
+              </button>
+            </section>
+            {showInstanceForm ? (
+              <section className="instance-form">
+                <input
+                  value={instanceName}
+                  onChange={(event) => setInstanceName(event.target.value)}
+                  placeholder="给这套游戏起个名字"
+                />
+                <select
+                  aria-label="模组运行环境"
+                  value={instanceLoader}
+                  onChange={(event) => setInstanceLoader(event.target.value)}
+                >
+                  {loaderOptions.map((loader) => (
+                    <option key={loader} value={loader}>
+                      {loaderLabel(loader)}
+                    </option>
+                  ))}
+                </select>
+                {versions.length ? (
+                  <select
+                    aria-label="Minecraft 版本"
+                    value={gameVersion}
+                    onChange={(event) => setGameVersion(event.target.value)}
+                  >
+                    {versions.map((version) => (
+                      <option key={version.id} value={version.id}>
+                        {version.id}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    value={gameVersion}
+                    onChange={(event) => setGameVersion(event.target.value)}
+                    placeholder={busy ? "正在读取官方版本…" : "Minecraft 版本"}
+                  />
+                )}
+                <button
+                  disabled={busy || !instanceName.trim() || !gameVersion}
+                  onClick={() => void createInstance()}
+                >
+                  创建游戏配置
+                </button>
+                <small>
+                  {instanceLoader === "vanilla"
+                    ? "Vanilla 是纯原版，不使用模组运行环境。"
+                    : `${loaderLabel(instanceLoader)} 是模组运行环境，创建后还需要点击安装。`}
+                </small>
+              </section>
+            ) : null}
+            <div className="rows">
+              {instances.length ? (
+                instances.map((instance) => (
+                  <div key={instance.id}>
+                    <span className="cube">◆</span>
+                    <strong>{instance.name}</strong>
+                    <small>
+                      {loaderLabel(instance.loaderType)} {instance.gameVersion}{" "}
+                      · {instance.memoryMb} MB
+                    </small>
+                    <em className="pending">
+                      {instance.status === "loader_missing"
+                        ? "模组环境待安装"
+                        : instance.status === "ready"
+                          ? "游戏文件已校验"
+                          : downloadProgress[instance.id]
+                            ? `${downloadProgress[instance.id]}%`
+                            : "基础游戏待安装"}
+                    </em>
+                    <div className="instance-row-actions">
+                      {loaderVersions[instance.id]?.length ? (
+                        <select
+                          className="loader-version"
+                          aria-label={`${instance.name} 模组运行环境版本`}
+                          value={loaderSelections[instance.id]}
+                          onChange={(event) =>
+                            setLoaderSelections((existing) => ({
+                              ...existing,
+                              [instance.id]: event.target.value,
+                            }))
+                          }
+                        >
+                          {loaderVersions[instance.id].map((version) => (
+                            <option value={version} key={version}>
+                              {version}
+                            </option>
+                          ))}
+                        </select>
+                      ) : null}
+                      <button
+                        className="install-client"
+                        disabled={busy}
+                        onClick={() => void installClient(instance)}
+                      >
+                        {instance.status === "ready"
+                          ? "校验 / 修复"
+                          : instance.status === "loader_missing" ||
+                              clientReady[instance.id]
+                            ? "校验基础游戏"
+                            : "检查并补齐游戏"}
+                      </button>
+                      {instance.loaderType !== "vanilla" &&
+                      (instance.status === "loader_missing" ||
+                        clientReady[instance.id]) ? (
+                        <button
+                          className="install-loader"
+                          disabled={busy}
+                          onClick={() => void installInstanceLoader(instance)}
+                        >
+                          {loaderVersions[instance.id]?.length
+                            ? "安装模组环境"
+                            : "选择环境版本"}
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div>
+                  <span className="cube muted">◆</span>
+                  <strong>还没有游戏配置</strong>
+                  <small>选择游戏版本和模组运行环境后创建</small>
+                  <em className="pending">待配置</em>
+                </div>
+              )}
+            </div>
+            <section className="onboard">
+              <label htmlFor="profile">创建本地玩家名称</label>
+              <div>
+                <input
+                  id="profile"
+                  value={draft}
+                  onChange={(event) => setDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void createProfile();
+                  }}
+                  placeholder="3–16 位：字母、数字或下划线"
+                />
+                <button disabled={busy} onClick={() => void createProfile()}>
+                  {busy ? "保存中…" : "保存"}
+                </button>
+              </div>
+              {message ? (
+                <p className="form-message" role="alert">
+                  {message}
+                </p>
+              ) : null}
+            </section>
+          </>
+        ) : activeNav === "服务器" ? (
+          <ServersPage />
+        ) : activeNav === "游戏库" || activeNav === "实例" ? (
+          <InstanceLibraryPage
+            instances={instances}
+            onCreate={() => { setActiveNav("主页"); setShowInstanceForm(true); }}
+            onPlay={(instance) => { setSelectedInstanceId(instance.id); void launchSelectedInstance(instance); }}
+            onClone={(instance) => void cloneInstance(instance)}
+            onRename={(instance) => void renameInstance(instance)}
+            onRepair={(instance) => void repairInstance(instance)}
+            onDelete={(instance) => void deleteInstance(instance)}
+            onOpen={(instance) => void openInstanceDirectory(instance.id, "game")}
+          />
+        ) : activeNav === "模组" ? (
+          <ModsPage
+            instances={instances}
+            selectedId={modInstanceId}
+            onSelect={setModInstanceId}
+            items={modItems}
+            inspection={modInspection}
+            busy={busy}
+            message={message}
+            onPick={() => void inspectMod()}
+            onInstall={() => void installMod()}
+            onToggle={(item) => void toggleMod(item)}
+            onRemove={(item) => void removeMod(item)}
+            queuedCount={modQueue.length}
+            dragging={dragging}
+            onlineQuery={onlineModQuery}
+            onlineProjects={onlineModProjects}
+            onOnlineQuery={setOnlineModQuery}
+            onOnlineSearch={() => void searchOnline("mod")}
+            onOnlineInstall={(project) => void installOnlineMod(project)}
+            updates={modUpdates}
+            onCheckUpdates={() => void checkModUpdates()}
+            onUpdate={(item) => void updateMod(item)}
+            onUpdateAll={() => void updateAllMods()}
+            backups={removedBackups}
+            onRestore={(item) => void restoreBackup(item)}
+            onOpenFolder={() => void openInstanceDirectory(modInstanceId, "mods")}
+          />
+        ) : activeNav === "整合包" ? (
+          <ModpacksPage
+            inspection={packInspection}
+            busy={busy}
+            message={message}
+            dragging={dragging}
+            onPick={() => void inspectPack()}
+            onImport={() => void importPack()}
+            instances={instances}
+            targetId={modInstanceId}
+            onTarget={setModInstanceId}
+            onlineQuery={onlinePackQuery}
+            onlineProjects={onlinePackProjects}
+            onOnlineQuery={setOnlinePackQuery}
+            onOnlineSearch={() => void searchOnline("modpack")}
+            onOnlineInstall={(project) => void installOnlinePack(project)}
+            onExport={(instanceId, includeSaves) => void exportPack(instanceId, includeSaves)}
+          />
+        ) : activeNav === "设置" ? (
+          <SettingsPage
+            settings={settings}
+            busy={busy}
+            message={message}
+            onChange={setSettings}
+            onSave={() => void saveLauncherSettings()}
+            onChooseExistingGameDirectory={() => void chooseExistingGameDirectory()}
+            javaRuntimes={javaRuntimes}
+            selectedJavaPath={selectedJava?.path}
+            onSelectJava={setSelectedJavaPath}
+            onInstallJava={(major) => void installManagedJava(major)}
+            onCheckEnvironment={() => void checkEnvironment()}
+            onSetupRecommended={() => void installManagedJava(21)}
+            onLoginMicrosoft={() => void loginMicrosoft()}
+            microsoftLoginAvailable={microsoftLoginAvailable}
+            accounts={accounts}
+            selectedAccountId={current?.id}
+            onSelectAccount={setSelectedAccountId}
+            onRemoveAccount={(account) => void removeAccount(account)}
+          />
+        ) : activeNav === "下载" ? (
+          <DiagnosticsPage
+            jobs={downloadJobs}
+            crashes={crashReports}
+            busy={busy}
+            message={message}
+            onRefresh={() => void refreshDiagnostics()}
+            onExport={() => void exportDiagnostics()}
+            onCancel={() => void cancelDownloads()}
+            logs={gameLogs}
+            logText={gameLogText}
+            onReadLog={(log, level, query) => void readGameLog(log, level, query)}
+          />
+        ) : activeNav === "资源包" || activeNav === "光影" ? (
+          <ArchiveContentPage
+            title={activeNav}
+            kind={activeNav === "资源包" ? "resourcepack" : "shaderpack"}
+            instances={instances}
+            targetId={modInstanceId}
+            items={archiveItems}
+            busy={busy}
+            message={message}
+            dragging={dragging}
+            onTarget={setModInstanceId}
+            onImport={() =>
+              void importArchives(
+                activeNav === "资源包" ? "resourcepack" : "shaderpack",
+              )
+            }
+            onToggle={(item) => void toggleArchive(item)}
+            onRemove={(item) => void removeArchive(item)}
+            backups={removedBackups}
+            onRestore={(item) => void restoreBackup(item)}
+            onOpenFolder={() => void openInstanceDirectory(modInstanceId, activeNav === "资源包" ? "resourcepacks" : "shaderpacks")}
+          />
+        ) : activeNav === "存档" ? (
+          <WorldsPage
+            instances={instances}
+            targetId={modInstanceId}
+            items={worldItems}
+            busy={busy}
+            message={message}
+            dragging={dragging}
+            onTarget={setModInstanceId}
+            onFolder={() => void chooseAndImportWorld(true)}
+            onZip={() => void chooseAndImportWorld(false)}
+            onBackup={(item) => void backupWorld(item)}
+            onDuplicate={(item) => void duplicateWorld(item)}
+            onExport={(item) => void exportWorld(item)}
+            onRemove={(item) => void removeWorld(item)}
+            backups={removedBackups}
+            onRestore={(item) => void restoreBackup(item)}
+            onOpenFolder={() => void openInstanceDirectory(modInstanceId, "saves")}
+          />
+        ) : (
+          <ComingSoonPage title={activeNav} />
+        )}
+      </section>
+      </main>
+    </div>
+  );
+}

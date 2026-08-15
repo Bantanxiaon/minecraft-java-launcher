@@ -1,0 +1,50 @@
+name: 发布 SH启动器
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 写入当前 GitHub 仓库的免费更新地址
+        run: node scripts/configure-updater.mjs
+
+      - name: 构建、签名并创建草稿发布
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VITE_SH_UPDATES_ENABLED: "true"
+        with:
+          tagName: v__VERSION__
+          releaseName: "SH启动器 v__VERSION__"
+          releaseBody: "请先在草稿中填写更新内容并完成测试，再点击发布。"
+          releaseDraft: true
+          prerelease: false
+          updaterJsonPreferNsis: true
+          uploadUpdaterJson: true
+          uploadUpdaterSignatures: true

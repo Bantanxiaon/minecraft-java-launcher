@@ -1,0 +1,11 @@
+{
+  "version": "0.1.3",
+  "notes": "本次更新内容",
+  "pub_date": "2026-08-15T00:00:00Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "粘贴 .sig 文件的完整内容",
+      "url": "https://github.com/你的账号/你的仓库/releases/download/v0.1.3/SH启动器-setup.exe"
+    }
+  }
+}
