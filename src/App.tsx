@@ -32,6 +32,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { InstanceLibraryPage } from "./pages/InstanceLibraryPage";
 import { HomeUpdateCard } from "./components/HomeUpdateCard";
 import { SplashScreen } from "./components/SplashScreen";
+import { VersionHighlightsCard } from "./components/VersionHighlightsCard";
 import { checkForUpdate, updaterEnabled } from "./updater";
 import type { Update } from "./updater";
 import type {
@@ -1869,6 +1870,7 @@ export default function App() {
               checking={updateChecking}
               checkError={updateCheckError}
             />
+            <VersionHighlightsCard />
             <div className="layout">
               <section className="hero">
                 <div className="instance-icon"><img src={grassBlock} alt="" /></div>

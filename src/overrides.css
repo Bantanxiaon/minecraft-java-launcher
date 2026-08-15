@@ -1427,3 +1427,54 @@ nav button.active svg { color:#3b8d40; }
   color: #799284;
   letter-spacing: .4px;
 }
+
+/* ============ 版本亮点 ============ */
+.version-highlights {
+  margin-bottom: 20px;
+  border: 1px solid #e2e9e3;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #f6fbf7, #eef6ef);
+  padding: 15px 18px 13px;
+}
+
+.version-highlights-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #2f7c35;
+  margin-bottom: 9px;
+}
+
+.version-highlights-head strong {
+  font-size: 13.5px;
+  letter-spacing: .2px;
+}
+
+.version-highlights ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 6px 18px;
+}
+
+.version-highlights li {
+  position: relative;
+  padding-left: 15px;
+  color: #4d5c55;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.version-highlights li::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 7px;
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+  background: #6fae76;
+  box-shadow: 0 0 5px rgba(111, 174, 118, .55);
+}
