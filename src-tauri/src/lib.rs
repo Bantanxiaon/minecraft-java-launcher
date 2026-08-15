@@ -1748,6 +1748,131 @@ fn inspect_modpack_path(path: &Path) -> Result<ModpackInspection, LauncherError>
             warnings: vec!["MultiMC 整合包：导入后会创建对应实例，仍需安装基础游戏和加载器。".into()],
         });
     }
+    if let Some(bytes) = read_descriptor(&mut archive, "modpack.json")? {
+        let value: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|error| LauncherError::validation(format!("HMCL modpack.json 无效：{error}")))?;
+        let loader_type = value
+            .get("addons")
+            .and_then(|entry| entry.as_array())
+            .and_then(|addons| {
+                addons.iter().find_map(|addon| {
+                    let id = addon
+                        .get("id")
+                        .and_then(|entry| entry.as_str())
+                        .unwrap_or_default()
+                        .to_ascii_lowercase();
+                    match id.as_str() {
+                        "forge" | "minecraftforge" => Some("forge".to_string()),
+                        "neoforge" | "net.neoforge" => Some("neoforge".to_string()),
+                        "fabric" | "fabric-loader" => Some("fabric".to_string()),
+                        "quilt" | "quilt-loader" => Some("quilt".to_string()),
+                        _ => None,
+                    }
+                })
+            });
+        let mut hmcl_mods = 0usize;
+        let mut hmcl_files = 0usize;
+        for index in 0..archive.len() {
+            let entry = archive
+                .by_index(index)
+                .map_err(|error| LauncherError::validation(error.to_string()))?;
+            if entry.is_dir() {
+                continue;
+            }
+            let normalized = entry.name().replace('\\', "/").to_ascii_lowercase();
+            if normalized.starts_with("minecraft/") {
+                hmcl_files += 1;
+                if normalized.starts_with("minecraft/mods/") && normalized.ends_with(".jar") {
+                    hmcl_mods += 1;
+                }
+            }
+        }
+        return Ok(ModpackInspection {
+            file_name,
+            format: "hmcl".into(),
+            name: value
+                .get("name")
+                .and_then(|entry| entry.as_str())
+                .map(str::to_string),
+            version: value
+                .get("version")
+                .and_then(|entry| entry.as_str())
+                .map(str::to_string),
+            game_version: value
+                .get("gameVersion")
+                .and_then(|entry| entry.as_str())
+                .map(str::to_string),
+            loader_type,
+            mod_count: hmcl_mods,
+            override_count: hmcl_files,
+            warnings: vec!["HMCL 整合包：导入后会创建对应实例并自动安装游戏与加载器。".into()],
+        });
+    }
+    if read_descriptor(&mut archive, "mcbbs.packmeta")?.is_some() {
+        let bytes = read_descriptor(&mut archive, "mcbbs.packmeta")?
+            .or_else(|| read_descriptor(&mut archive, "manifest.json").ok().flatten())
+            .ok_or_else(|| LauncherError::validation("MCBBS 整合包元数据缺失。"))?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|error| LauncherError::validation(format!("MCBBS 元数据无效：{error}")))?;
+        let game_version = value
+            .pointer("/minecraft/version")
+            .and_then(|entry| entry.as_str())
+            .map(str::to_string)
+            .or_else(|| {
+                value
+                    .get("addons")
+                    .and_then(|entry| entry.as_array())
+                    .and_then(|addons| {
+                        addons
+                            .iter()
+                            .find(|addon| {
+                                addon.get("id").and_then(|v| v.as_str()) == Some("game")
+                            })
+                            .and_then(|addon| addon.get("version").and_then(|v| v.as_str()))
+                    })
+                    .map(str::to_string)
+            });
+        let loader_id = value
+            .pointer("/minecraft/modLoaders/0/id")
+            .and_then(|entry| entry.as_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let loader_type = ["neoforge", "fabric", "quilt", "forge"]
+            .into_iter()
+            .find(|loader| loader_id.starts_with(loader))
+            .map(str::to_string);
+        let mut mcbbs_mods = 0usize;
+        let mut mcbbs_files = 0usize;
+        for index in 0..archive.len() {
+            let entry = archive
+                .by_index(index)
+                .map_err(|error| LauncherError::validation(error.to_string()))?;
+            if entry.is_dir() {
+                continue;
+            }
+            let normalized = entry.name().replace('\\', "/").to_ascii_lowercase();
+            if normalized.starts_with("overrides/") {
+                mcbbs_files += 1;
+                if normalized.starts_with("overrides/mods/") && normalized.ends_with(".jar") {
+                    mcbbs_mods += 1;
+                }
+            }
+        }
+        return Ok(ModpackInspection {
+            file_name,
+            format: "mcbbs".into(),
+            name: value
+                .get("name")
+                .and_then(|entry| entry.as_str())
+                .map(str::to_string),
+            version: None,
+            game_version,
+            loader_type,
+            mod_count: mcbbs_mods,
+            override_count: mcbbs_files,
+            warnings: vec!["MCBBS 整合包：导入后会创建对应实例并自动安装游戏与加载器。".into()],
+        });
+    }
     if let Some(bytes) = read_descriptor(&mut archive, "manifest.json")? {
         let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
             LauncherError::validation(format!("CurseForge manifest 无效：{error}"))
@@ -3914,6 +4039,129 @@ async fn import_mmc_pack(
                             .unwrap_or("mod.jar"),
                         info.sha256,
                         metadata,
+                        chrono_like_timestamp()
+                    ],
+                )
+                .map_err(|error| LauncherError::storage(error.to_string()))?;
+        } else {
+            if output.exists() {
+                move_pack_collision_to_backup(&game, &output)?;
+            }
+            fs::rename(&temporary, &output)
+                .map_err(|error| LauncherError::storage(error.to_string()))?;
+        }
+        imported_files += 1;
+    }
+    Ok(ImportedModpack {
+        instance,
+        downloaded_files: 0,
+        override_files: imported_files,
+    })
+}
+
+#[tauri::command]
+async fn import_override_pack(
+    app: AppHandle,
+    source_path: String,
+) -> Result<ImportedModpack, LauncherError> {
+    let source = PathBuf::from(&source_path);
+    let inspection = inspect_modpack_path(&source)?;
+    if !matches!(inspection.format.as_str(), "hmcl" | "mcbbs") {
+        return Err(LauncherError::validation("该整合包格式暂不支持此导入方式。"));
+    }
+    let game_version = inspection
+        .game_version
+        .clone()
+        .ok_or_else(|| LauncherError::validation("整合包未声明 Minecraft 版本。"))?;
+    let loader_type = inspection.loader_type.clone().unwrap_or_else(|| "vanilla".to_string());
+    validate_loader_type(&loader_type)?;
+    let prefix = if inspection.format == "hmcl" {
+        "minecraft/"
+    } else {
+        "overrides/"
+    };
+    let instance = create_instance_profile(
+        app.clone(),
+        inspection
+            .name
+            .clone()
+            .unwrap_or_else(|| "Imported Pack".into()),
+        game_version.clone(),
+        loader_type.clone(),
+    )?;
+    let file =
+        fs::File::open(&source).map_err(|error| LauncherError::storage(error.to_string()))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|error| LauncherError::validation(error.to_string()))?;
+    let game = PathBuf::from(&instance.root_path).join(".minecraft");
+    let mut imported_files = 0usize;
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| LauncherError::validation(error.to_string()))?;
+        if entry.is_dir() {
+            continue;
+        }
+        if entry
+            .unix_mode()
+            .is_some_and(|mode| mode & 0o170000 == 0o120000)
+        {
+            return Err(LauncherError::validation("整合包包含不允许的符号链接。"));
+        }
+        let normalized = entry.name().replace('\\', "/");
+        let Some(relative) = normalized.strip_prefix(prefix) else {
+            continue;
+        };
+        if relative.is_empty() {
+            continue;
+        }
+        let output = pack_target_path(&game, relative)?;
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| LauncherError::storage(error.to_string()))?;
+        }
+        let is_mod = loader_type != "vanilla"
+            && relative.to_ascii_lowercase().starts_with("mods/")
+            && relative.to_ascii_lowercase().ends_with(".jar");
+        let temporary = if is_mod {
+            game.join("mods")
+                .join(format!(".incoming-{}.jar", unique_timestamp()))
+        } else {
+            output.with_extension(format!("part-{}", unique_timestamp()))
+        };
+        let mut temporary_file = fs::File::create(&temporary)
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        std::io::copy(&mut entry, &mut temporary_file)
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        drop(temporary_file);
+        if is_mod {
+            let info = inspect_mod_jar_path(&temporary)?;
+            if let Err(error) = ensure_loader_compatible(&loader_type, &info.loader_type)
+                .and_then(|_| ensure_game_version_compatible(&game_version, &info))
+            {
+                let _ = fs::remove_file(&temporary);
+                return Err(error);
+            }
+            if output.exists() {
+                move_pack_collision_to_backup(&game, &output)?;
+            }
+            fs::rename(&temporary, &output)
+                .map_err(|error| LauncherError::storage(error.to_string()))?;
+            let metadata = serde_json::to_string(&info)
+                .map_err(|error| LauncherError::storage(error.to_string()))?;
+            let connection = open_database(&app)?;
+            connection
+                .execute(
+                    "INSERT OR IGNORE INTO content_items(instance_id,kind,file_name,hash,metadata_json,enabled,source,installed_at) VALUES(?1,'mod',?2,?3,?4,1,?5,?6)",
+                    params![
+                        instance.id,
+                        output
+                            .file_name()
+                            .and_then(|value| value.to_str())
+                            .unwrap_or("mod.jar"),
+                        info.sha256,
+                        metadata,
+                        inspection.format,
                         chrono_like_timestamp()
                     ],
                 )
@@ -8291,6 +8539,7 @@ pub fn run() {
             import_modrinth_pack,
             import_local_pack,
             import_mmc_pack,
+            import_override_pack,
             list_content_items,
             install_mod,
             set_mod_enabled,

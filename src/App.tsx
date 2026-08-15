@@ -1753,11 +1753,14 @@ export default function App() {
     setBusy(true);
     setMessage("");
     try {
-      if (packInspection.format === "modrinth" || packInspection.format === "mmc") {
-        const command =
-          packInspection.format === "modrinth"
-            ? "import_modrinth_pack"
-            : "import_mmc_pack";
+      if (
+        ["modrinth", "mmc", "hmcl", "mcbbs"].includes(packInspection.format)
+      ) {
+        const command = packInspection.format === "modrinth"
+          ? "import_modrinth_pack"
+          : packInspection.format === "mmc"
+            ? "import_mmc_pack"
+            : "import_override_pack";
         const imported = await invoke<ImportedModpack>(command, {
           sourcePath: packSourcePath,
         });

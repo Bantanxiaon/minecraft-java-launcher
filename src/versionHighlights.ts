@@ -1,4 +1,9 @@
 const HIGHLIGHTS_BY_VERSION: Record<string, string[]> = {
+  "0.5.1": [
+    "新增 HMCL 整合包导入：自动识别版本和加载器，一键创建实例并解压覆盖文件",
+    "新增 MCBBS 整合包导入",
+    "五种主流整合包格式全覆盖：CurseForge / Modrinth / HMCL / MultiMC / MCBBS",
+  ],
   "0.5.0": [
     "新增 MultiMC 整合包导入：自动识别版本和加载器，一键创建实例并解压覆盖文件",
     "Modrinth / MultiMC 整合包导入后自动接着安装游戏和加载器，一条龙完成，直接可玩",

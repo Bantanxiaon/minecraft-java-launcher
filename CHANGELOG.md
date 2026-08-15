@@ -2,6 +2,13 @@
 
 版本号固定三位：主版本.次版本.补丁版本。最右一位是小补丁/Bug 修复，中间一位是稍大补丁更新，最左一位是包含 UI 与新增内容的大型更新。每个版本在 `src/versionHighlights.ts` 维护“版本亮点”，软件首页自动展示。
 
+## SH启动器 0.5.1 Beta - 2026-08-15
+
+- 新增 HMCL 整合包导入：自动解析 modpack.json 的游戏版本与加载器，一键创建实例、解压 minecraft 覆盖文件并安装内置模组。
+- 新增 MCBBS 整合包导入：识别 mcbbs.packmeta / manifest.json，解析版本与加载器，解压 overrides 覆盖文件。
+- 主流整合包格式至此全部覆盖：CurseForge、Modrinth、HMCL、MultiMC、MCBBS。
+- 以上格式导入后均自动接上基础游戏和加载器安装，一条龙完成。
+
 ## SH启动器 0.5.0 Beta - 2026-08-15
 
 - 新增 MultiMC 整合包导入：自动解析 mmc-pack.json 的 Minecraft 版本和 Forge/NeoForge/Fabric/Quilt 加载器，一键创建实例并解压 .minecraft 覆盖文件。
