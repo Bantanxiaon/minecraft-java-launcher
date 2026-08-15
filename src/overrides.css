@@ -2422,6 +2422,76 @@ button.global-progress-bar:hover {
   color: #44515b;
 }
 
+/* 开始游戏引导 */
+.onboarding-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.onboarding-head h2 {
+  margin: 0 0 4px;
+}
+
+.onboarding-skip {
+  border: 1px solid #dfe4e8;
+  border-radius: 8px;
+  background: #fff;
+  color: #7b8592;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.onboarding-track {
+  height: 6px;
+  border-radius: 99px;
+  background: #e6ece7;
+  overflow: hidden;
+  margin: 2px 0 16px;
+}
+
+.onboarding-track-fill {
+  height: 100%;
+  background: #4c9a4a;
+  border-radius: 99px;
+  transition: width .25s ease;
+}
+
+.onboarding-body {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.onboarding-body p {
+  margin: 0;
+  color: #44515b;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.onboarding-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.onboarding-actions button {
+  border: 1px solid #dfe4e8;
+  border-radius: 9px;
+  background: #fff;
+  color: #44505c;
+  padding: 10px 16px;
+  font-size: 13px;
+}
+
+.onboarding-actions button.primary {
+  border-color: #4c9a4a;
+  background: #4c9a4a;
+  color: #fff;
+}
+
 @media (max-width: 900px) {
   .download-detail-grid {
     grid-template-columns: 1fr;

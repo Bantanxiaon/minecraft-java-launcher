@@ -37,6 +37,7 @@ import { SplashScreen } from "./components/SplashScreen";
 import { VersionHighlightsModal } from "./components/VersionHighlightsModal";
 import { ChangelogModal } from "./components/ChangelogModal";
 import { TutorialModal } from "./components/TutorialModal";
+import { OnboardingGuide } from "./components/OnboardingGuide";
 import { ErrorModal } from "./components/ErrorModal";
 import { IncompatibleModsModal } from "./components/IncompatibleModsModal";
 import { GlobalProgressBar } from "./components/GlobalProgressBar";
@@ -278,6 +279,7 @@ export default function App() {
   >({});
   const [showChangelog, setShowChangelog] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const [showHighlights, setShowHighlights] = useState(false);
   const [errorModal, setErrorModal] = useState<{
     title: string;
@@ -409,6 +411,13 @@ export default function App() {
         setSplashFinishing(true);
         await wait(480);
         if (cancelled) return;
+        try {
+          if (localStorage.getItem("sh-onboarding-seen") !== "1") {
+            setShowOnboarding(true);
+          }
+        } catch {
+          setShowOnboarding(true);
+        }
         const HIGHLIGHTS_SEEN_KEY = "sh-launcher-highlights-seen";
         try {
           if (
@@ -2744,7 +2753,22 @@ export default function App() {
                 </h1>
                 <p>本地数据仅保存在此设备上。</p>
               </div>
-              <button className="quiet">管理档案</button>
+              <div className="header-actions">
+                <button
+                  className="quiet"
+                  type="button"
+                  onClick={() => setShowOnboarding(true)}
+                >
+                  开始游戏引导
+                </button>
+                <button
+                  className="quiet"
+                  type="button"
+                  onClick={() => setShowTutorial(true)}
+                >
+                  使用教程
+                </button>
+              </div>
             </header>
             <section className="distribution-note" role="note">
               <strong>启动器不包含 Minecraft 游戏本体</strong>
@@ -3036,6 +3060,18 @@ export default function App() {
             ) : null}
             {showTutorial ? (
               <TutorialModal onClose={() => setShowTutorial(false)} />
+            ) : null}
+            {showOnboarding ? (
+              <OnboardingGuide
+                onClose={() => {
+                  setShowOnboarding(false);
+                  try {
+                    localStorage.setItem("sh-onboarding-seen", "1");
+                  } catch {
+                    // 忽略存储失败
+                  }
+                }}
+              />
             ) : null}
           </>
         ) : activeNav === "服务器" ? (
