@@ -61,33 +61,50 @@ export function HomeUpdateCard({
     setInstalling(true);
     let downloaded = 0;
     let total: number | undefined;
-    try {
-      await target.downloadAndInstall((event) => {
-        if (event.event === "Started") {
-          total = event.data.contentLength;
-          setProgress(total ? 0 : undefined);
-        } else if (event.event === "Progress") {
-          downloaded += event.data.chunkLength;
-          if (total)
-            setProgress(
-              Math.min(100, Math.round((downloaded * 100) / total)),
-            );
-        } else {
-          setProgress(100);
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        await target.downloadAndInstall((event) => {
+          if (event.event === "Started") {
+            total = event.data.contentLength;
+            setProgress(total ? 0 : undefined);
+          } else if (event.event === "Progress") {
+            downloaded += event.data.chunkLength;
+            if (total)
+              setProgress(
+                Math.min(100, Math.round((downloaded * 100) / total)),
+              );
+          } else {
+            setProgress(100);
+          }
+        }, { timeout: 300_000 });
+        localStorage.setItem(
+          LAST_UPDATE_KEY,
+          JSON.stringify({
+            version: target.version,
+            notes: target.body ?? "",
+            at: new Date().toISOString(),
+          } satisfies LastUpdate),
+        );
+        await relaunch();
+        return;
+      } catch (error) {
+        lastError = error;
+        if (attempt < 3) {
+          downloaded = 0;
+          total = undefined;
+          setProgress(undefined);
+          await new Promise((resolve) => setTimeout(resolve, 1200 * attempt));
         }
-      }, { timeout: 120_000 });
-      localStorage.setItem(
-        LAST_UPDATE_KEY,
-        JSON.stringify({
-          version: target.version,
-          notes: target.body ?? "",
-          at: new Date().toISOString(),
-        } satisfies LastUpdate),
-      );
-      await relaunch();
-    } catch {
-      setInstalling(false);
+      }
     }
+    if (lastError !== undefined) {
+      localStorage.setItem(
+        "sh-launcher-update-error",
+        String(lastError),
+      );
+    }
+    setInstalling(false);
   }
 
   function dismissChangelog() {

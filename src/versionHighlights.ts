@@ -1,4 +1,8 @@
 const HIGHLIGHTS_BY_VERSION: Record<string, string[]> = {
+  "0.4.9": [
+    "更新下载改用 jsDelivr 国内 CDN，稳定不再断；失败自动重试 3 次",
+    "安装包同步托管在仓库，更新不走不稳定代理",
+  ],
   "0.4.8": [
     "前置自动补齐全面升级：Modrinth 找不到时自动从 CurseForge 索引匹配并下载",
     "所有 CurseForge 整合包导入的索引会合并为全局索引，手动创建的实例也能自动匹配",

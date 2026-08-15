@@ -57,6 +57,25 @@ jobs:
           includeUpdaterJson: false
           args: --bundles nsis
 
+      - name: 推送安装包到仓库（jsDelivr CDN 分发）
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          EXE_FILE="$(ls src-tauri/target/release/bundle/nsis/*.exe | head -n1)"
+          git config user.name "SH Launcher Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git fetch origin main --depth=1
+          git checkout -b dist-update origin/main
+          mkdir -p release-assets
+          cp "$EXE_FILE" release-assets/SHLauncher-setup.exe
+          cp "$EXE_FILE" release-assets/SHLauncher-setup.zip
+          git add release-assets
+          git commit -m "release-assets: update installer to v${VERSION}"
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:main
+
       - name: 生成并上传 latest.json
         shell: bash
         env:
@@ -67,9 +86,8 @@ jobs:
           VERSION="$(node -p "require('./package.json').version")"
           SIG_FILE="$(ls src-tauri/target/release/bundle/nsis/*.sig | head -n1)"
           SIGNATURE="$(cat "$SIG_FILE")"
-          ASSET_NAME="$(curl -fsS -H "Authorization: Bearer ${GITHUB_TOKEN}" "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" | jq -r '.assets[] | select(.name | endswith("_x64-setup.exe")) | .name' | head -n1)"
-          # 国内网络直连 GitHub 不稳：下载地址走 gh-proxy 镜像，签名校验保证内容安全
-          URL="https://gh-proxy.com/https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/${ASSET_NAME}"
+          # jsDelivr 国内 CDN 稳定分发；签名校验保证内容安全
+          URL="https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@main/release-assets/SHLauncher-setup.zip"
           jq -n --arg version "$VERSION" --arg sig "$SIGNATURE" --arg url "$URL" \
             '{version:$version, notes:"SH启动器 " + $version, pub_date:(now|todateiso8601), platforms:{"windows-x86_64":{signature:$sig, url:$url}}}' \
             > latest.json
@@ -78,3 +96,11 @@ jobs:
             -H "Content-Type: application/json" \
             --data-binary @latest.json \
             "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?name=latest.json"
+      - name: 生成并上传 latest.json
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          RELEASE_ID: ${{ steps.tauri.outputs.releaseId }}
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
