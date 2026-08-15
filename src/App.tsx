@@ -33,6 +33,7 @@ import { InstanceLibraryPage } from "./pages/InstanceLibraryPage";
 import { HomeUpdateCard } from "./components/HomeUpdateCard";
 import { SplashScreen } from "./components/SplashScreen";
 import { VersionHighlightsCard } from "./components/VersionHighlightsCard";
+import { ChangelogModal } from "./components/ChangelogModal";
 import { checkForUpdate, updaterEnabled } from "./updater";
 import type { Update } from "./updater";
 import type {
@@ -75,6 +76,7 @@ import {
   Sun,
   Coffee,
   CheckCircle2,
+  CircleAlert,
   Minus,
   Square,
   X,
@@ -100,6 +102,12 @@ function formatBytes(value: number): string {
   if (value >= 1024) return `${Math.round(value / 1024)} KB`;
   return `${value} B`;
 }
+
+type BootProblem = {
+  instanceName?: string;
+  severity: "warn" | "error";
+  text: string;
+};
 
 function DesktopTitleBar() {
   const runWindowAction = async (
@@ -187,6 +195,8 @@ export default function App() {
   );
   const [updateChecking, setUpdateChecking] = useState(false);
   const [updateCheckError, setUpdateCheckError] = useState(false);
+  const [bootProblems, setBootProblems] = useState<BootProblem[]>([]);
+  const [showChangelog, setShowChangelog] = useState(false);
   const bootCancelledRef = useRef(false);
   const [activeNav, setActiveNav] = useState("主页");
   const activeNavRef = useRef(activeNav);
@@ -365,12 +375,18 @@ export default function App() {
         (sum, item) => sum + item.missingDependencies.length,
         0,
       );
+      const incompatibleCount = report.mods.reduce(
+        (sum, item) => sum + item.incompatibleMods.length,
+        0,
+      );
       applyStep("mods", {
-        state: missingCount > 0 ? "warn" : "done",
+        state: missingCount > 0 || incompatibleCount > 0 ? "warn" : "done",
         detail:
-          missingCount > 0
-            ? `共 ${modCount} 个模组 · ${missingCount} 个缺失前置`
-            : `共 ${modCount} 个模组 · 前置完整`,
+          incompatibleCount > 0
+            ? `共 ${modCount} 个模组 · ${missingCount} 个缺失前置 · ${incompatibleCount} 个加载器不兼容`
+            : missingCount > 0
+              ? `共 ${modCount} 个模组 · ${missingCount} 个缺失前置`
+              : `共 ${modCount} 个模组 · 前置完整`,
       });
       applyStep("java", {
         state: report.java.has64Bit ? "done" : "warn",
@@ -378,6 +394,33 @@ export default function App() {
           ? `已找到 64 位 Java${report.java.recommendedMajor ? ` ${report.java.recommendedMajor}` : ""}`
           : "未找到 64 位 Java，可在设置安装",
       });
+      const nameById = new Map(
+        report.instances.map((item) => [item.id, item.name]),
+      );
+      const problems: BootProblem[] = [];
+      for (const summary of report.mods) {
+        const instanceName =
+          nameById.get(summary.instanceId) ?? `实例 ${summary.instanceId}`;
+        if (summary.missingDependencies.length) {
+          problems.push({
+            instanceName,
+            severity: "warn",
+            text: `缺少前置模组：${summary.missingDependencies
+              .slice(0, 5)
+              .join("、")}（启动时会自动补齐）`,
+          });
+        }
+        if (summary.incompatibleMods.length) {
+          problems.push({
+            instanceName,
+            severity: "error",
+            text: `${summary.incompatibleMods.length} 个模组与当前加载器/游戏版本不兼容：${summary.incompatibleMods
+              .slice(0, 4)
+              .join("；")}。请到模组页删除后重新检查。`,
+          });
+        }
+      }
+      setBootProblems(problems);
     } else {
       for (const key of ["game", "instances", "mods", "java"] as BootStepKey[]) {
         applyStep(key, { state: "error", detail: "检查失败" });
@@ -1870,6 +1913,13 @@ export default function App() {
             <small>v{APP_VERSION} · {RELEASE_CHANNEL_LABEL}</small>
           </span>
         </div>
+        <button
+          className="changelog-sidebar-button"
+          type="button"
+          onClick={() => setShowChangelog(true)}
+        >
+          更新日志
+        </button>
         <nav>
           {navItems.map((item, index) => {
             const Icon = navIcons[index] ?? Gamepad2;
@@ -1927,7 +1977,28 @@ export default function App() {
               checking={updateChecking}
               checkError={updateCheckError}
             />
-            <VersionHighlightsCard />
+            <VersionHighlightsCard
+              onOpenChangelog={() => setShowChangelog(true)}
+            />
+            {bootProblems.length ? (
+              <section className="boot-problems-card" role="alert">
+                <div className="boot-problems-head">
+                  <CircleAlert size={17} />
+                  <strong>启动前发现问题</strong>
+                </div>
+                <ul>
+                  {bootProblems.slice(0, 8).map((problem, index) => (
+                    <li key={index} data-severity={problem.severity}>
+                      {problem.instanceName ? (
+                        <b>{problem.instanceName}：</b>
+                      ) : null}
+                      {problem.text}
+                    </li>
+                  ))}
+                </ul>
+                <p>建议先处理以上问题再开始游戏，避免启动失败。</p>
+              </section>
+            ) : null}
             <div className="layout">
               <section className="hero">
                 <div className="instance-icon"><img src={grassBlock} alt="" /></div>
@@ -2166,6 +2237,9 @@ export default function App() {
                 </p>
               ) : null}
             </section>
+            {showChangelog ? (
+              <ChangelogModal onClose={() => setShowChangelog(false)} />
+            ) : null}
           </>
         ) : activeNav === "服务器" ? (
           <ServersPage />

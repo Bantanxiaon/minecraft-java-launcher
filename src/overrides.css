@@ -1497,6 +1497,44 @@ nav button.active svg { color:#3b8d40; }
   letter-spacing: .2px;
 }
 
+.version-highlights-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.version-highlights-actions button {
+  border: 1px solid #d5e3d7;
+  border-radius: 8px;
+  background: #fff;
+  color: #4c7a52;
+  font-size: 12px;
+  padding: 4px 9px;
+  cursor: pointer;
+}
+
+.version-highlights-actions button:hover {
+  background: #f0f8f1;
+}
+
+.changelog-sidebar-button {
+  width: calc(100% - 20px);
+  margin: 0 10px 14px;
+  border: 1px solid #e2e8e3;
+  border-radius: 10px;
+  background: #f7faf7;
+  color: #4c7a52;
+  font-size: 12.5px;
+  padding: 8px 0;
+  cursor: pointer;
+}
+
+.changelog-sidebar-button:hover {
+  background: #eef7ef;
+  border-color: #cfe6d2;
+}
+
 .version-highlights ul {
   margin: 0;
   padding: 0;
@@ -1524,6 +1562,144 @@ nav button.active svg { color:#3b8d40; }
   border-radius: 2px;
   background: #6fae76;
   box-shadow: 0 0 5px rgba(111, 174, 118, .55);
+}
+
+/* ============ 启动前问题提示 ============ */
+.boot-problems-card {
+  margin-bottom: 20px;
+  border: 1px solid #ecd9bd;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #fdf9f1, #faf3e7);
+  padding: 15px 18px 13px;
+}
+
+.boot-problems-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #a86a12;
+  margin-bottom: 9px;
+}
+
+.boot-problems-head strong {
+  font-size: 13.5px;
+  letter-spacing: .2px;
+}
+
+.boot-problems-card ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 7px;
+}
+
+.boot-problems-card li {
+  position: relative;
+  padding-left: 14px;
+  color: #6d5a3a;
+  font-size: 12.5px;
+  line-height: 1.55;
+  word-break: break-all;
+}
+
+.boot-problems-card li::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 7px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #d99a2b;
+}
+
+.boot-problems-card li[data-severity="error"] {
+  color: #8a4a42;
+}
+
+.boot-problems-card li[data-severity="error"]::before {
+  background: #cf5544;
+}
+
+.boot-problems-card p {
+  margin: 10px 0 0;
+  color: #8a7a5f;
+  font-size: 12px;
+}
+
+/* ============ 更新日志弹窗 ============ */
+.changelog-modal {
+  width: min(680px, calc(100vw - 64px));
+  max-height: calc(100vh - 90px);
+  overflow-y: auto;
+  position: relative;
+  padding: 26px 28px 24px;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 24px 70px rgba(20, 35, 50, .25);
+  text-align: left;
+}
+
+.changelog-modal h2 {
+  margin: 0 0 4px;
+  font-size: 22px;
+}
+
+.changelog-subtitle {
+  margin: 0 0 16px;
+  color: #7b8592;
+  font-size: 12.5px;
+}
+
+.changelog-list {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.changelog-list section {
+  padding: 14px 16px;
+  border: 1px solid #e7ece8;
+  border-radius: 12px;
+  background: #fafcfa;
+}
+
+.changelog-list h3 {
+  margin: 0 0 8px;
+  color: #2f7c35;
+  font-size: 14px;
+}
+
+.changelog-list ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.changelog-list li {
+  position: relative;
+  padding-left: 14px;
+  color: #44515b;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.changelog-list li::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 7px;
+  width: 5px;
+  height: 5px;
+  border-radius: 2px;
+  background: #6fae76;
+}
+
+.changelog-modal > button.primary {
+  min-width: 140px;
 }
 
 /* ============ 下载详情弹窗 ============ */

@@ -1981,6 +1981,9 @@ async fn modrinth_best_version(
 ) -> Result<serde_json::Value, LauncherError> {
     validate_modrinth_project_id(project_id)?;
     let mut attempts = vec![(game_version, loader)];
+    if loader.is_some() {
+        attempts.push((None, loader));
+    }
     if game_version.is_some() {
         attempts.push((game_version, None));
     }
@@ -1996,13 +1999,23 @@ async fn modrinth_best_version(
     )))
 }
 
-async fn modrinth_primary_file(
+async fn modrinth_primary_file_with_loaders(
     project_id: &str,
     game_version: Option<&str>,
     loader: Option<&str>,
     extension: &str,
-) -> Result<(String, String, String, u64), LauncherError> {
+) -> Result<(String, String, String, u64, Vec<String>), LauncherError> {
     let selected = modrinth_best_version(project_id, game_version, loader).await?;
+    let loaders = selected
+        .get("loaders")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     let files = selected
         .get("files")
         .and_then(|value| value.as_array())
@@ -2041,7 +2054,19 @@ async fn modrinth_primary_file(
         sha1.to_string(),
         filename.to_string(),
         size,
+        loaders,
     ))
+}
+
+async fn modrinth_primary_file(
+    project_id: &str,
+    game_version: Option<&str>,
+    loader: Option<&str>,
+    extension: &str,
+) -> Result<(String, String, String, u64), LauncherError> {
+    let (url, sha1, filename, size, _) =
+        modrinth_primary_file_with_loaders(project_id, game_version, loader, extension).await?;
+    Ok((url, sha1, filename, size))
 }
 
 async fn modrinth_compatible_version(
@@ -2348,6 +2373,16 @@ async fn auto_install_missing_mod_dependencies(
     if loader == "vanilla" {
         return Ok(());
     }
+    let game_version: String = {
+        let connection = open_database(app)?;
+        connection
+            .query_row(
+                "SELECT game_version FROM instances WHERE id=?1",
+                [instance_id],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(|_| LauncherError::validation("目标实例不存在。"))?
+    };
     let mods = PathBuf::from(root_path).join(".minecraft").join("mods");
     if !mods.is_dir() {
         return Ok(());
@@ -2405,6 +2440,31 @@ async fn auto_install_missing_mod_dependencies(
                 continue;
             }
         };
+        // 安装前先筛查加载器兼容性：不匹配就不安装，避免装完才报错。
+        match modrinth_primary_file_with_loaders(
+            &project_id,
+            Some(&game_version),
+            Some(loader),
+            ".jar",
+        )
+        .await
+        {
+            Ok((_, _, _, _, loaders)) => {
+                if !loaders.is_empty()
+                    && !loaders.iter().any(|item| item.eq_ignore_ascii_case(loader))
+                {
+                    failures.push(format!(
+                        "{missing_id}：加载器不兼容（该模组仅支持 {}，当前实例为 {loader}）。请删除依赖它的模组，或改用对应加载器。",
+                        loaders.join("/")
+                    ));
+                    continue;
+                }
+            }
+            Err(error) => {
+                failures.push(format!("{missing_id}：{}", error.message));
+                continue;
+            }
+        }
         match install_modrinth_mod(app.clone(), instance_id, project_id).await {
             Ok(item) => {
                 if let Some(metadata_json) = item.metadata_json.as_deref() {
@@ -2430,7 +2490,7 @@ async fn auto_install_missing_mod_dependencies(
     }
     if !failures.is_empty() {
         return Err(LauncherError::validation(format!(
-            "自动补齐前置模组失败：\n- {}\n请检查网络后重试，或手动安装这些前置模组。",
+            "自动补齐前置模组未完成：\n- {}\n请检查网络后重试，或在模组页删除需要这些前置的模组。",
             failures.join("\n- ")
         )));
     }
@@ -4053,6 +4113,15 @@ struct BootModsSummary {
     instance_id: i64,
     mod_count: usize,
     missing_dependencies: Vec<String>,
+    incompatible_mods: Vec<String>,
+}
+
+fn loaders_compatible(instance_loader: &str, mod_loader: &str) -> bool {
+    if instance_loader.eq_ignore_ascii_case(mod_loader) {
+        return true;
+    }
+    // Quilt 可以运行绝大多数 Fabric 模组，不算不兼容。
+    instance_loader.eq_ignore_ascii_case("quilt") && mod_loader.eq_ignore_ascii_case("fabric")
 }
 
 #[derive(Serialize)]
@@ -4067,6 +4136,7 @@ fn scan_boot_mods(
     instance_id: i64,
     root_path: &str,
     loader_type: &str,
+    game_version: &str,
 ) -> BootModsSummary {
     let mut inspections = Vec::new();
     if loader_type != "vanilla" {
@@ -4108,10 +4178,26 @@ fn scan_boot_mods(
         .map(|id| id.to_ascii_lowercase())
         .filter(|id| !provided.contains(&id.as_str()) && !installed_ids.contains(id))
         .collect::<BTreeSet<_>>();
+    let mut incompatible_mods = Vec::new();
+    for inspection in &inspections {
+        if inspection.loader_type != "unknown"
+            && !loaders_compatible(loader_type, &inspection.loader_type)
+        {
+            incompatible_mods.push(format!(
+                "{}（需要 {}，当前实例为 {loader_type}）",
+                inspection.file_name, inspection.loader_type
+            ));
+        } else if let Err(error) =
+            ensure_game_version_compatible(game_version, inspection)
+        {
+            incompatible_mods.push(format!("{}：{}", inspection.file_name, error.message));
+        }
+    }
     BootModsSummary {
         instance_id,
         mod_count,
         missing_dependencies: missing.into_iter().collect(),
+        incompatible_mods,
     }
 }
 
@@ -4147,7 +4233,7 @@ fn boot_health_check(app: AppHandle) -> Result<BootHealthReport, LauncherError> 
             loader_type: loader_type.clone(),
             status,
         });
-        mods.push(scan_boot_mods(id, &root_path, &loader_type));
+        mods.push(scan_boot_mods(id, &root_path, &loader_type, &game_version));
     }
     let runtimes = detect_java_runtimes();
     let has_64_bit = runtimes.iter().any(|runtime| runtime.is_64_bit);
@@ -7272,11 +7358,11 @@ mod tests {
 
     #[test]
     fn boot_mods_scan_is_quiet_for_missing_folders() {
-        let vanilla = scan_boot_mods(1, "C:/definitely/missing/instance", "vanilla");
+        let vanilla = scan_boot_mods(1, "C:/definitely/missing/instance", "vanilla", "1.21.1");
         assert_eq!(vanilla.mod_count, 0);
         assert!(vanilla.missing_dependencies.is_empty());
 
-        let fabric = scan_boot_mods(2, "C:/definitely/missing/instance", "fabric");
+        let fabric = scan_boot_mods(2, "C:/definitely/missing/instance", "fabric", "1.21.1");
         assert_eq!(fabric.mod_count, 0);
         assert!(fabric.missing_dependencies.is_empty());
     }

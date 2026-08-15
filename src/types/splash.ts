@@ -32,5 +32,6 @@ export type BootHealthReport = {
     instanceId: number;
     modCount: number;
     missingDependencies: string[];
+    incompatibleMods: string[];
   }>;
 };
