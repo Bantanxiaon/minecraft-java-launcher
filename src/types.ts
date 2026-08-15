@@ -102,6 +102,7 @@ export type ImportedLocalPack = {
   instanceId: number;
   importedFiles: number;
   importedMods: number;
+  downloadedRemoteFiles: number;
   unresolvedRemoteFiles: number;
   skippedMods: string[];
 };

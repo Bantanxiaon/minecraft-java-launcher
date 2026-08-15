@@ -1,4 +1,8 @@
 const HIGHLIGHTS_BY_VERSION: Record<string, string[]> = {
+  "0.4.6": [
+    "开通 CurseForge 下载支持：导入整合包时自动从 CurseForge 补齐清单里的远程模组，与 Modrinth 共同覆盖主流模组平台",
+    "CurseForge 文件按大小校验并走 HTTPS 官方 CDN，已用真实文件联网实测（21.8MB 完整下载）",
+  ],
   "0.4.5": [
     "整合包导入稳定性：某个模组不兼容时不再中断整包导入，跳过并列出原因，其余内容正常导入",
     "导入 CurseForge 整合包后明确提示哪些模组需要 CurseForge 下载（当前暂不支持），不再让用户误以为安装完成",

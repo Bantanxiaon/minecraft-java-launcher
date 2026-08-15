@@ -1761,6 +1761,7 @@ struct ImportedLocalPack {
     instance_id: i64,
     imported_files: usize,
     imported_mods: usize,
+    downloaded_remote_files: usize,
     unresolved_remote_files: usize,
     skipped_mods: Vec<String>,
 }
@@ -2932,8 +2933,79 @@ async fn import_modrinth_pack(
     })
 }
 
+const CURSEFORGE_API_BASE: &str = "https://www.curseforge.com/api/v1";
+
+async fn curseforge_file_info(
+    client: &reqwest::Client,
+    project_id: i64,
+    file_id: i64,
+) -> Result<(String, u64), LauncherError> {
+    if project_id <= 0 || file_id <= 0 {
+        return Err(LauncherError::validation("CurseForge 项目或文件编号无效。"));
+    }
+    let url = format!("{CURSEFORGE_API_BASE}/mods/{project_id}/files/{file_id}");
+    let parsed = reqwest::Url::parse(&url)
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    if parsed.host_str() != Some("www.curseforge.com") {
+        return Err(LauncherError::validation("CurseForge 信息地址不受信任。"));
+    }
+    let response = send_download_request(client, &parsed, None)
+        .await?
+        .error_for_status()
+        .map_err(|error| LauncherError::storage(format!("CurseForge 文件信息返回错误：{error}")))?;
+    if response
+        .content_length()
+        .is_some_and(|length| length > 2 * 1024 * 1024)
+    {
+        return Err(LauncherError::validation("CurseForge 文件信息超过安全限制。"));
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    if bytes.len() > 2 * 1024 * 1024 {
+        return Err(LauncherError::validation("CurseForge 文件信息超过安全限制。"));
+    }
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|error| LauncherError::storage(format!("CurseForge 文件信息无效：{error}")))?;
+    let data = value
+        .get("data")
+        .ok_or_else(|| LauncherError::validation("CurseForge 文件信息缺少 data。"))?;
+    let file_name = data
+        .get("fileName")
+        .and_then(|entry| entry.as_str())
+        .ok_or_else(|| LauncherError::validation("CurseForge 文件缺少文件名。"))?;
+    validate_instance_field(file_name, 240)?;
+    let size = data
+        .get("fileLength")
+        .and_then(|entry| entry.as_u64())
+        .ok_or_else(|| LauncherError::validation("CurseForge 文件缺少大小。"))?;
+    if size > 2 * 1024 * 1024 * 1024 {
+        return Err(LauncherError::validation("CurseForge 文件超过安全大小限制。"));
+    }
+    Ok((file_name.to_string(), size))
+}
+
+async fn download_curseforge_file(
+    app: &AppHandle,
+    instance_id: i64,
+    project_id: i64,
+    file_id: i64,
+    size: u64,
+    target: &Path,
+) -> Result<u64, LauncherError> {
+    let download_url = format!("{CURSEFORGE_API_BASE}/mods/{project_id}/files/{file_id}/download");
+    let parsed = reqwest::Url::parse(&download_url)
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    if parsed.host_str() != Some("www.curseforge.com") {
+        return Err(LauncherError::validation("CurseForge 下载地址不受信任。"));
+    }
+    // CurseForge 不提供 SHA-1，仅按大小校验；文件仍来自 HTTPS 官方 CDN。
+    download_verified_file(app, instance_id, &download_url, "", Some(size), target).await
+}
+
 #[tauri::command]
-fn import_local_pack(
+async fn import_local_pack(
     app: AppHandle,
     instance_id: i64,
     source_path: String,
@@ -2970,6 +3042,7 @@ fn import_local_pack(
     let mut imported_files = 0usize;
     let mut imported_mods = 0usize;
     let mut skipped_mods = Vec::new();
+    let mut installed_mod_names = HashSet::new();
     for index in 0..archive.len() {
         let mut entry = archive
             .by_index(index)
@@ -3041,6 +3114,9 @@ fn import_local_pack(
         fs::rename(&temporary, &output)
             .map_err(|error| LauncherError::storage(error.to_string()))?;
         if let Some(info) = mod_info {
+            if let Some(name) = output.file_name().and_then(|value| value.to_str()) {
+                installed_mod_names.insert(name.to_ascii_lowercase());
+            }
             let metadata = serde_json::to_string(&info)
                 .map_err(|error| LauncherError::storage(error.to_string()))?;
             connection.execute("INSERT OR IGNORE INTO content_items(instance_id,kind,file_name,hash,metadata_json,enabled,source,installed_at) VALUES(?1,'mod',?2,?3,?4,1,'local-pack',?5)", params![instance_id, output.file_name().and_then(|value| value.to_str()).unwrap_or("mod.jar"), info.sha256, metadata, chrono_like_timestamp()]).map_err(|error| LauncherError::storage(error.to_string()))?;
@@ -3048,15 +3124,118 @@ fn import_local_pack(
         }
         imported_files += 1;
     }
-    let unresolved_remote_files = if inspection.format == "curseforge" {
-        inspection.mod_count.saturating_sub(imported_mods)
-    } else {
-        0
-    };
+    let mut downloaded_remote_files = 0usize;
+    let mut unresolved_remote_files = 0usize;
+    if inspection.format == "curseforge" {
+        let bytes = read_descriptor(&mut archive, "manifest.json")?
+            .ok_or_else(|| LauncherError::validation("CurseForge manifest 缺失。"))?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|error| LauncherError::validation(format!("CurseForge manifest 无效：{error}")))?;
+        let files = value
+            .get("files")
+            .and_then(|entry| entry.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let client = shared_download_client()?;
+        let cache_dir = launcher_data_directory()?.join("cache").join("curseforge");
+        let mods_dir = game.join("mods");
+        let tasks = files
+            .into_iter()
+            .filter(|file| file.get("required").and_then(|v| v.as_bool()).unwrap_or(true))
+            .map(|file| {
+                let project_id = file.get("projectID").and_then(|v| v.as_i64()).unwrap_or(0);
+                let file_id = file.get("fileID").and_then(|v| v.as_i64()).unwrap_or(0);
+                (
+                    project_id,
+                    file_id,
+                    app.clone(),
+                    client.clone(),
+                    cache_dir.clone(),
+                    mods_dir.clone(),
+                    loader_type.clone(),
+                    game_version.clone(),
+                    installed_mod_names.clone(),
+                    instance_id,
+                )
+            });
+        let results: Vec<Result<(), String>> = futures_util::stream::iter(tasks)
+            .map(
+                |(project_id, file_id, app, client, cache_dir, mods_dir, loader_type, game_version, installed_mod_names, instance_id)| async move {
+                    let (file_name, size) = curseforge_file_info(&client, project_id, file_id)
+                        .await
+                        .map_err(|error| format!("项目 {project_id}/文件 {file_id}：{}", error.message))?;
+                    if installed_mod_names.contains(&file_name.to_ascii_lowercase()) {
+                        return Ok(());
+                    }
+                    let cache_target = cache_dir
+                        .join(format!("{project_id}-{file_id}"))
+                        .join(&file_name);
+                    download_curseforge_file(&app, instance_id, project_id, file_id, size, &cache_target)
+                        .await
+                        .map_err(|error| format!("{file_name}：{}", error.message))?;
+                    let info = inspect_mod_jar_path(&cache_target)
+                        .map_err(|error| format!("{file_name}：{}", error.message))?;
+                    ensure_loader_compatible(&loader_type, &info.loader_type)
+                        .map_err(|error| format!("{file_name}：{}", error.message))?;
+                    ensure_game_version_compatible(&game_version, &info)
+                        .map_err(|error| format!("{file_name}：{}", error.message))?;
+                    fs::create_dir_all(&mods_dir)
+                        .map_err(|error| format!("{file_name}：无法创建模组目录 {error}"))?;
+                    let output = mods_dir.join(&file_name);
+                    let final_path = if output.exists() {
+                        mods_dir.join(format!(
+                            "{}-{}",
+                            unique_timestamp(),
+                            output
+                                .file_name()
+                                .and_then(|value| value.to_str())
+                                .unwrap_or("mod.jar")
+                        ))
+                    } else {
+                        output
+                    };
+                    fs::copy(&cache_target, &final_path)
+                        .map_err(|error| format!("{file_name}：写入模组文件夹失败 {error}"))?;
+                    let metadata = serde_json::to_string(&info)
+                        .map_err(|error| format!("{file_name}：元数据写入失败 {error}"))?;
+                    let connection = open_database(&app)
+                        .map_err(|error| format!("{file_name}：数据库打开失败 {}", error.message))?;
+                    connection
+                        .execute(
+                            "INSERT OR IGNORE INTO content_items(instance_id,kind,file_name,hash,metadata_json,enabled,source,installed_at) VALUES(?1,'mod',?2,?3,?4,1,'curseforge',?5)",
+                            params![
+                                instance_id,
+                                final_path
+                                    .file_name()
+                                    .and_then(|value| value.to_str())
+                                    .unwrap_or("mod.jar"),
+                                info.sha256,
+                                metadata,
+                                chrono_like_timestamp()
+                            ],
+                        )
+                        .map_err(|error| format!("{file_name}：记录写入失败 {error}"))?;
+                    Ok(())
+                },
+            )
+            .buffer_unordered(4)
+            .collect::<Vec<_>>()
+            .await;
+        for result in results {
+            match result {
+                Ok(()) => downloaded_remote_files += 1,
+                Err(reason) => {
+                    unresolved_remote_files += 1;
+                    skipped_mods.push(reason);
+                }
+            }
+        }
+    }
     Ok(ImportedLocalPack {
         instance_id,
         imported_files,
         imported_mods,
+        downloaded_remote_files,
         unresolved_remote_files,
         skipped_mods,
     })
@@ -4614,6 +4793,8 @@ fn validate_resource_url(value: &str) -> Result<reqwest::Url, LauncherError> {
             | Some("maven.neoforged.net")
             | Some("cdn.modrinth.com")
             | Some("bmclapi2.bangbang93.com")
+            | Some("www.curseforge.com")
+            | Some("edge.forgecdn.net")
     );
     if url.scheme() != "https" || !allowed_host {
         return Err(LauncherError::validation(
@@ -5663,6 +5844,12 @@ async fn send_download_request(
     let mut last_error = String::new();
     for attempt in 0..=3u32 {
         let mut request = client.get(url.clone());
+        if url.host_str() == Some("www.curseforge.com") {
+            request = request.header(
+                reqwest::header::REFERER,
+                "https://www.curseforge.com/",
+            );
+        }
         if let Some(offset) = resume_from.filter(|offset| *offset > 0) {
             request = request.header(reqwest::header::RANGE, format!("bytes={offset}-"));
         }
@@ -5840,11 +6027,29 @@ async fn download_verified_file_attempt(
     emit_file_progress: bool,
     allow_resume: bool,
 ) -> Result<u64, LauncherError> {
-    if expected_sha1.len() != 40 || !expected_sha1.chars().all(|value| value.is_ascii_hexdigit()) {
+    if !expected_sha1.is_empty()
+        && (expected_sha1.len() != 40
+            || !expected_sha1.chars().all(|value| value.is_ascii_hexdigit()))
+    {
         return Err(LauncherError::validation("下载文件 SHA-1 无效。"));
     }
     let url = validate_resource_url(url)?;
-    if tokio::fs::try_exists(target)
+    if expected_sha1.is_empty() {
+        if let Some(size) = expected_size {
+            if tokio::fs::try_exists(target)
+                .await
+                .map_err(|error| LauncherError::storage(error.to_string()))?
+            {
+                let existing = tokio::fs::metadata(target)
+                    .await
+                    .map_err(|error| LauncherError::storage(error.to_string()))?
+                    .len();
+                if existing == size {
+                    return Ok(existing);
+                }
+            }
+        }
+    } else if tokio::fs::try_exists(target)
         .await
         .map_err(|error| LauncherError::storage(error.to_string()))?
         && sha1_file(target).await?.eq_ignore_ascii_case(expected_sha1)
@@ -5856,11 +6061,15 @@ async fn download_verified_file_attempt(
     }
     // Content-addressed cache lets different instances and repeated installs reuse
     // an already verified file instead of downloading it again.
-    let cache_target = launcher_data_directory().ok().map(|root| {
-        root.join("cache")
-            .join("sha1")
-            .join(expected_sha1.to_ascii_lowercase())
-    });
+    let cache_target = if expected_sha1.is_empty() {
+        None
+    } else {
+        launcher_data_directory().ok().map(|root| {
+            root.join("cache")
+                .join("sha1")
+                .join(expected_sha1.to_ascii_lowercase())
+        })
+    };
     if let Some(cache_target) = cache_target.as_ref() {
         if tokio::fs::try_exists(cache_target).await.unwrap_or(false)
             && sha1_file(cache_target)
@@ -6022,9 +6231,9 @@ async fn download_verified_file_attempt(
         file.flush()
             .await
             .map_err(|error| LauncherError::storage(error.to_string()))?;
-        if expected_size.is_some_and(|size| size != downloaded)
-            || format!("{:x}", hasher.finalize()) != expected_sha1.to_ascii_lowercase()
-        {
+        let hash_matches = expected_sha1.is_empty()
+            || format!("{:x}", hasher.finalize()) == expected_sha1.to_ascii_lowercase();
+        if expected_size.is_some_and(|size| size != downloaded) || !hash_matches {
             let _ = tokio::fs::remove_file(&part).await;
             return Err(LauncherError::validation("下载文件大小或 SHA-1 校验失败。"));
         }
@@ -6078,7 +6287,7 @@ fn shared_download_client() -> Result<reqwest::Client, LauncherError> {
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(30))
         .timeout(Duration::from_secs(30 * 60))
-        .user_agent("SHLauncher/0.1")
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
         .pool_max_idle_per_host(32)
         .build()
         .map_err(|error| LauncherError::storage(error.to_string()))?;
@@ -7749,6 +7958,30 @@ side="BOTH"
             started.elapsed().as_secs() < 60,
             "整合包检查耗时过长，影响流畅性"
         );
+    }
+
+    #[test]
+    #[ignore = "联网测试 CurseForge 公开下载"]
+    fn curseforge_download_endpoint_live() {
+        tauri::async_runtime::block_on(async {
+            let client = shared_download_client().expect("client");
+            let (name, size) = curseforge_file_info(&client, 264231, 5633453)
+                .await
+                .expect("file info");
+            println!("file={name} size={size}");
+            assert!(size > 0);
+            let url = reqwest::Url::parse(
+                "https://www.curseforge.com/api/v1/mods/264231/files/5633453/download",
+            )
+            .expect("url");
+            let response = send_download_request(&client, &url, None)
+                .await
+                .expect("download request");
+            assert_eq!(response.status(), reqwest::StatusCode::OK);
+            let bytes = response.bytes().await.expect("body");
+            println!("downloaded {} bytes", bytes.len());
+            assert!(bytes.len() > 1000);
+        });
     }
     #[test]
     fn validates_resource_and_shader_archive_structure() {

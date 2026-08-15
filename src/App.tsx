@@ -1680,7 +1680,12 @@ export default function App() {
         }
         if (imported.unresolvedRemoteFiles) {
           notes.push(
-            `${imported.unresolvedRemoteFiles} 个模组需要 CurseForge 下载，当前启动器暂不支持，请使用完整解压包或手动补齐`,
+            `${imported.unresolvedRemoteFiles} 个模组下载失败（网络或已下架），可在“下载与诊断”查看原因`,
+          );
+        }
+        if (imported.downloadedRemoteFiles) {
+          notes.unshift(
+            `已从 CurseForge 自动补齐 ${imported.downloadedRemoteFiles} 个模组`,
           );
         }
         setMessage(
