@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { Account, JavaRuntime, LauncherSettings } from "../types";
 import { UpdaterCard } from "../components/UpdaterCard";
 
@@ -15,6 +16,11 @@ type SettingsPageProps = {
   onCheckEnvironment: () => void;
   onSetupRecommended: () => void;
   onLoginMicrosoft: () => void;
+  onLoginExternal: (
+    apiRoot: string,
+    username: string,
+    password: string,
+  ) => Promise<void>;
   microsoftLoginAvailable: boolean;
   accounts: Account[];
   selectedAccountId?: number;
@@ -37,6 +43,7 @@ export function SettingsPage({
   onCheckEnvironment,
   onSetupRecommended,
   onLoginMicrosoft,
+  onLoginExternal,
   microsoftLoginAvailable,
   accounts,
   selectedAccountId,
@@ -44,6 +51,34 @@ export function SettingsPage({
   onRemoveAccount,
   onCleanCache,
 }: SettingsPageProps) {
+  const [externalOpen, setExternalOpen] = useState(false);
+  const [externalApiRoot, setExternalApiRoot] = useState("");
+  const [externalUsername, setExternalUsername] = useState("");
+  const [externalPassword, setExternalPassword] = useState("");
+  const [externalBusy, setExternalBusy] = useState(false);
+
+  async function submitExternalLogin() {
+    if (!externalApiRoot.trim() || !externalUsername.trim() || !externalPassword) {
+      return;
+    }
+    setExternalBusy(true);
+    try {
+      await onLoginExternal(
+        externalApiRoot.trim(),
+        externalUsername.trim(),
+        externalPassword,
+      );
+      setExternalOpen(false);
+      setExternalApiRoot("");
+      setExternalUsername("");
+      setExternalPassword("");
+    } catch {
+      // 错误信息由 App 统一显示
+    } finally {
+      setExternalBusy(false);
+    }
+  }
+
   return (
     <>
       <header>
@@ -59,11 +94,69 @@ export function SettingsPage({
           {accounts.length ? accounts.map((account) => (
             <div className="settings-account-row" key={account.id}>
               <button className={account.id === selectedAccountId ? "selected" : ""} onClick={() => onSelectAccount(account.id)}>
-                <span>{account.displayName}</span><small>{account.accountType === "MICROSOFT" ? "Microsoft 正版账户" : "本地离线账户"}</small>
+                <span>{account.displayName}</span><small>{account.accountType === "MICROSOFT" ? "Microsoft 正版账户" : account.accountType === "EXTERNAL" ? "外置登录账户（authlib-injector）" : "本地离线账户"}</small>
               </button>
               <button className="danger" disabled={busy} onClick={() => onRemoveAccount(account)}>移除</button>
             </div>
           )) : <p>还没有账户。</p>}
+        </div>
+        <div className="microsoft-login-card">
+          <div>
+            <strong>外置登录（联机）</strong>
+            <small>
+              支持 LittleSkin、自建皮肤站等 authlib-injector 登录，可加入外置登录服务器。
+              登录后自动缓存 authlib-injector 组件，首次需要联网下载一次。
+            </small>
+          </div>
+          {externalOpen ? (
+            <div className="external-login-form">
+              <input
+                value={externalApiRoot}
+                onChange={(event) => setExternalApiRoot(event.target.value)}
+                placeholder="外置登录地址，如 https://littleskin.cn/api/yggdrasil"
+              />
+              <input
+                value={externalUsername}
+                onChange={(event) => setExternalUsername(event.target.value)}
+                placeholder="用户名"
+              />
+              <input
+                type="password"
+                value={externalPassword}
+                onChange={(event) => setExternalPassword(event.target.value)}
+                placeholder="密码"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void submitExternalLogin();
+                }}
+              />
+              <div className="external-login-actions">
+                <button
+                  className="primary"
+                  type="button"
+                  disabled={externalBusy || busy}
+                  onClick={() => void submitExternalLogin()}
+                >
+                  {externalBusy ? "登录中…" : "登录"}
+                </button>
+                <button
+                  type="button"
+                  disabled={externalBusy}
+                  onClick={() => setExternalOpen(false)}
+                >
+                  取消
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              className="primary"
+              type="button"
+              disabled={busy}
+              onClick={() => setExternalOpen(true)}
+            >
+              添加外置登录
+            </button>
+          )}
         </div>
         <div className="environment-check" role="region" aria-label="运行环境检查">
           <div>

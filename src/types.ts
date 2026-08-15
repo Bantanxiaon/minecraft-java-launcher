@@ -1,9 +1,23 @@
 export type Account = {
   id: number;
-  accountType: "OFFLINE" | "MICROSOFT";
+  accountType: "OFFLINE" | "MICROSOFT" | "EXTERNAL";
   displayName: string;
   createdAt: string;
   lastUsedAt?: string;
+};
+export type ServerEntry = {
+  id: number;
+  name: string;
+  address: string;
+  port: number;
+  description: string;
+  createdAt: string;
+  lastConnectedAt?: string;
+};
+export type ServerPing = {
+  reachable: boolean;
+  latencyMs?: number;
+  error?: string;
 };
 export type Instance = {
   id: number;

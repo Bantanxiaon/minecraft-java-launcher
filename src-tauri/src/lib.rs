@@ -8,17 +8,22 @@ use std::{
     collections::{BTreeSet, HashMap, HashSet},
     fs,
     io::Read,
+    net::{TcpStream, ToSocketAddrs},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex, OnceLock,
     },
+    time::Instant,
 };
 #[cfg(debug_assertions)]
 use tauri::Manager;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+const AUTHLIB_INJECTOR_VERSION: &str = "1.2.8";
+const AUTHLIB_INJECTOR_MIN_BYTES: u64 = 300_000;
 
 #[cfg(debug_assertions)]
 mod acceptance;
@@ -148,10 +153,11 @@ fn database_path(_app: &AppHandle) -> Result<PathBuf, LauncherError> {
     Ok(directory.join("launcher.sqlite3"))
 }
 
-fn run_migrations(connection: &Connection) -> rusqlite::Result<()> {
+fn run_migrations(connection: &mut Connection) -> rusqlite::Result<()> {
     connection.execute_batch("PRAGMA foreign_keys = ON;
     CREATE TABLE IF NOT EXISTS migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS accounts (id INTEGER PRIMARY KEY, account_type TEXT NOT NULL CHECK(account_type IN ('OFFLINE','MICROSOFT')), display_name TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_used_at TEXT, safe_secret_ref TEXT);
+    CREATE TABLE IF NOT EXISTS accounts (id INTEGER PRIMARY KEY, account_type TEXT NOT NULL CHECK(account_type IN ('OFFLINE','MICROSOFT','EXTERNAL')), display_name TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_used_at TEXT, safe_secret_ref TEXT, auth_server TEXT);
+    CREATE TABLE IF NOT EXISTS servers (id INTEGER PRIMARY KEY, name TEXT NOT NULL, address TEXT NOT NULL, port INTEGER NOT NULL DEFAULT 25565, description TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, last_connected_at TEXT);
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS instances (id INTEGER PRIMARY KEY, name TEXT NOT NULL, icon TEXT, root_path TEXT NOT NULL UNIQUE, game_version TEXT NOT NULL, loader_type TEXT NOT NULL, loader_version TEXT, java_profile TEXT, memory_mb INTEGER NOT NULL DEFAULT 4096, resolution TEXT, last_played TEXT, status TEXT NOT NULL, source TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS installation_states (id INTEGER PRIMARY KEY, instance_id INTEGER NOT NULL REFERENCES instances(id) ON DELETE CASCADE, component_kind TEXT NOT NULL, component_key TEXT NOT NULL, hash TEXT, size_bytes INTEGER, status TEXT NOT NULL, UNIQUE(instance_id, component_kind, component_key));
@@ -198,13 +204,33 @@ fn run_migrations(connection: &Connection) -> rusqlite::Result<()> {
         "INSERT OR IGNORE INTO migrations(version, applied_at) VALUES(4, strftime('%s','now'))",
         [],
     )?;
+    let has_v5: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM migrations WHERE version=5)",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_v5 {
+        let tx = connection.transaction()?;
+        tx.execute_batch(
+            "ALTER TABLE accounts RENAME TO accounts_old;
+            CREATE TABLE accounts (id INTEGER PRIMARY KEY, account_type TEXT NOT NULL CHECK(account_type IN ('OFFLINE','MICROSOFT','EXTERNAL')), display_name TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_used_at TEXT, safe_secret_ref TEXT, auth_server TEXT);
+            INSERT INTO accounts (id, account_type, display_name, created_at, last_used_at, safe_secret_ref, auth_server)
+            SELECT id, account_type, display_name, created_at, last_used_at, safe_secret_ref, NULL FROM accounts_old;
+            DROP TABLE accounts_old;",
+        )?;
+        tx.execute(
+            "INSERT INTO migrations(version, applied_at) VALUES(5, strftime('%s','now'))",
+            [],
+        )?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
 pub(crate) fn open_database(app: &AppHandle) -> Result<Connection, LauncherError> {
-    let connection = Connection::open(database_path(app)?)
+    let mut connection = Connection::open(database_path(app)?)
         .map_err(|error| LauncherError::storage(error.to_string()))?;
-    run_migrations(&connection).map_err(|error| LauncherError::storage(error.to_string()))?;
+    run_migrations(&mut connection).map_err(|error| LauncherError::storage(error.to_string()))?;
     Ok(connection)
 }
 
@@ -332,6 +358,276 @@ fn microsoft_login_available(app: AppHandle) -> Result<bool, LauncherError> {
         .is_some_and(|value| !value.trim().is_empty()))
 }
 
+fn authlib_injector_cache_path() -> Result<PathBuf, LauncherError> {
+    Ok(launcher_data_directory()?
+        .join("cache")
+        .join(format!("authlib-injector-{AUTHLIB_INJECTOR_VERSION}.jar")))
+}
+
+async fn download_authlib_injector_bytes(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<Vec<u8>, LauncherError> {
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|error| {
+            LauncherError::validation(format!("下载外置登录组件失败：{error}"))
+        })?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(LauncherError::validation(format!(
+            "下载外置登录组件失败（HTTP {status}）。"
+        )));
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| LauncherError::validation(format!("读取外置登录组件失败：{error}")))?;
+    if (bytes.len() as u64) < AUTHLIB_INJECTOR_MIN_BYTES {
+        return Err(LauncherError::validation(
+            "下载到的外置登录组件不完整，请稍后重试。",
+        ));
+    }
+    Ok(bytes.to_vec())
+}
+
+async fn ensure_authlib_injector() -> Result<PathBuf, LauncherError> {
+    let path = authlib_injector_cache_path()?;
+    if let Ok(metadata) = fs::metadata(&path) {
+        if metadata.len() >= AUTHLIB_INJECTOR_MIN_BYTES {
+            return Ok(path);
+        }
+    }
+    let client = shared_download_client()?;
+    let mut bytes: Option<Vec<u8>> = None;
+    let mut expected_sha256: Option<String> = None;
+    if let Ok(response) = client
+        .get("https://authlib-injector.yushi.moe/artifact/latest.json")
+        .send()
+        .await
+    {
+        if response.status().is_success() {
+            if let Ok(value) = response.json::<serde_json::Value>().await {
+                if let Some(url) = value.get("download_url").and_then(|value| value.as_str()) {
+                    expected_sha256 = value
+                        .pointer("/checksums/sha256")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string);
+                    if let Ok(downloaded) = download_authlib_injector_bytes(&client, url).await {
+                        bytes = Some(downloaded);
+                    }
+                }
+            }
+        }
+    }
+    if bytes.is_none() {
+        let github_url = format!(
+            "https://github.com/yushijinhun/authlib-injector/releases/download/v{AUTHLIB_INJECTOR_VERSION}/authlib-injector-{AUTHLIB_INJECTOR_VERSION}.jar"
+        );
+        bytes = Some(download_authlib_injector_bytes(&client, &github_url).await?);
+        expected_sha256 = None;
+    }
+    let bytes = bytes
+        .ok_or_else(|| LauncherError::validation("无法下载外置登录组件，请检查网络后重试。"))?;
+    if let Some(checksum) = expected_sha256 {
+        let digest = format!("{:x}", Sha256::digest(&bytes));
+        if !digest.eq_ignore_ascii_case(&checksum) {
+            return Err(LauncherError::validation(
+                "外置登录组件校验失败，已停止安装以保护安全。",
+            ));
+        }
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+    }
+    let temp = path.with_extension(format!("tmp-{}", unique_timestamp()));
+    fs::write(&temp, &bytes).map_err(|error| LauncherError::storage(error.to_string()))?;
+    fs::rename(&temp, &path).map_err(|error| LauncherError::storage(error.to_string()))?;
+    Ok(path)
+}
+
+fn normalize_authlib_api_root(value: &str) -> Result<String, LauncherError> {
+    let value = value.trim().trim_end_matches('/');
+    if value.is_empty() || value.chars().count() > 200 {
+        return Err(LauncherError::validation("外置登录地址无效。"));
+    }
+    let url = reqwest::Url::parse(value)
+        .map_err(|_| LauncherError::validation("外置登录地址不是有效的网址。"))?;
+    let https = url.scheme() == "https";
+    let localhost = url.scheme() == "http"
+        && url
+            .host_str()
+            .is_some_and(|host| matches!(host, "localhost" | "127.0.0.1" | "::1"));
+    if !https && !localhost {
+        return Err(LauncherError::validation(
+            "外置登录地址必须是 https://；仅本机调试允许 http://localhost。",
+        ));
+    }
+    Ok(value.to_string())
+}
+
+async fn refresh_external_token(
+    api_root: &str,
+    access_token: &str,
+    client_token: &str,
+) -> Result<Option<(String, String)>, LauncherError> {
+    if client_token.is_empty() {
+        return Ok(None);
+    }
+    let client = shared_download_client()?;
+    let response = client
+        .post(format!("{api_root}/authserver/refresh"))
+        .json(&serde_json::json!({
+            "accessToken": access_token,
+            "clientToken": client_token,
+        }))
+        .send()
+        .await
+        .map_err(|error| {
+            LauncherError::validation(format!("外置登录服务器连接失败：{error}"))
+        })?;
+    if !response.status().is_success() {
+        return Ok(None);
+    }
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|error| LauncherError::validation(format!("外置登录刷新响应无效：{error}")))?;
+    let new_token = body
+        .get("accessToken")
+        .and_then(|value| value.as_str())
+        .unwrap_or(access_token)
+        .to_string();
+    let new_client = body
+        .get("clientToken")
+        .and_then(|value| value.as_str())
+        .unwrap_or(client_token)
+        .to_string();
+    Ok(Some((new_token, new_client)))
+}
+
+#[tauri::command]
+async fn login_external(
+    app: AppHandle,
+    api_root: String,
+    username: String,
+    password: String,
+) -> Result<Account, LauncherError> {
+    let api_root = normalize_authlib_api_root(&api_root)?;
+    let username = username.trim().to_string();
+    if username.is_empty()
+        || username.chars().count() > 64
+        || username.chars().any(|character| character.is_control())
+    {
+        return Err(LauncherError::validation("请输入有效的外置登录用户名。"));
+    }
+    if password.is_empty() {
+        return Err(LauncherError::validation("请输入外置登录密码。"));
+    }
+    let client = shared_download_client()?;
+    let response = client
+        .post(format!("{api_root}/authserver/authenticate"))
+        .json(&serde_json::json!({
+            "agent": {"name": "Minecraft", "version": 1},
+            "username": username,
+            "password": password,
+            "requestUser": true,
+        }))
+        .send()
+        .await
+        .map_err(|error| {
+            LauncherError::validation(format!("无法连接外置登录服务器：{error}"))
+        })?;
+    let status = response.status();
+    let body: serde_json::Value = response.json().await.map_err(|error| {
+        LauncherError::validation(format!("外置登录返回内容无效：{error}"))
+    })?;
+    if !status.is_success() {
+        let message = body
+            .get("errorMessage")
+            .and_then(|value| value.as_str())
+            .or_else(|| body.get("error").and_then(|value| value.as_str()))
+            .unwrap_or("用户名或密码错误");
+        return Err(LauncherError::validation(format!("外置登录失败：{message}")));
+    }
+    let access_token = body
+        .get("accessToken")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| LauncherError::validation("外置登录返回缺少 accessToken。"))?
+        .to_string();
+    let client_token = body
+        .get("clientToken")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("sh-{}", unique_timestamp()));
+    let profile = body
+        .get("selectedProfile")
+        .ok_or_else(|| LauncherError::validation("该外置登录服务器没有返回游戏档案。"))?;
+    let profile_name = profile
+        .get("name")
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+        .ok_or_else(|| LauncherError::validation("外置登录返回的档案缺少名称。"))?;
+    let profile_uuid = profile
+        .get("id")
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+        .ok_or_else(|| LauncherError::validation("外置登录返回的档案缺少 UUID。"))?;
+    if profile_name.is_empty()
+        || profile_name.chars().count() > 16
+        || profile_name.chars().any(|character| character.is_control())
+    {
+        return Err(LauncherError::validation("外置登录返回的玩家名称无效。"));
+    }
+    ensure_authlib_injector().await?;
+    let connection = open_database(&app)?;
+    let created_at = chrono_like_timestamp();
+    connection
+        .execute(
+            "INSERT INTO accounts (account_type, display_name, created_at, last_used_at, auth_server)
+             VALUES ('EXTERNAL', ?1, ?2, ?2, ?3)
+             ON CONFLICT(display_name) DO UPDATE SET account_type='EXTERNAL', last_used_at=excluded.last_used_at, auth_server=excluded.auth_server",
+            params![profile_name, created_at, api_root],
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let account_id: i64 = connection
+        .query_row(
+            "SELECT id FROM accounts WHERE display_name=?1",
+            [&profile_name],
+            |row| row.get(0),
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let secret_ref = format!("external-account-{account_id}");
+    let entry = keyring::Entry::new("SH启动器", &secret_ref)
+        .map_err(|error| LauncherError::storage(format!("无法打开 Windows 凭据存储：{error}")))?;
+    let secret = serde_json::json!({
+        "accessToken": access_token,
+        "clientToken": client_token,
+        "uuid": profile_uuid,
+        "apiRoot": api_root,
+    });
+    entry
+        .set_password(&secret.to_string())
+        .map_err(|error| LauncherError::storage(format!("无法保存外置登录凭据：{error}")))?;
+    connection
+        .execute(
+            "UPDATE accounts SET safe_secret_ref=?1 WHERE id=?2",
+            params![secret_ref, account_id],
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    Ok(Account {
+        id: account_id,
+        account_type: "EXTERNAL".into(),
+        display_name: profile_name,
+        created_at: created_at.clone(),
+        last_used_at: Some(created_at),
+    })
+}
+
 #[tauri::command]
 fn remove_account(app: AppHandle, account_id: i64) -> Result<(), LauncherError> {
     let connection = open_database(&app)?;
@@ -351,6 +647,228 @@ fn remove_account(app: AppHandle, account_id: i64) -> Result<(), LauncherError> 
         .execute("DELETE FROM accounts WHERE id=?1", [account_id])
         .map_err(|error| LauncherError::storage(error.to_string()))?;
     Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServerEntry {
+    id: i64,
+    name: String,
+    address: String,
+    port: u16,
+    description: String,
+    created_at: String,
+    last_connected_at: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServerPing {
+    reachable: bool,
+    latency_ms: Option<u128>,
+    error: Option<String>,
+}
+
+fn validate_server_name(value: &str) -> Result<String, LauncherError> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.chars().count() > 64
+        || value.chars().any(|character| character.is_control() || matches!(character, '\n' | '\r'))
+    {
+        return Err(LauncherError::validation(
+            "服务器名称须为 1–64 个字符，且不能包含换行。",
+        ));
+    }
+    Ok(value.to_string())
+}
+
+fn validate_server_address(value: &str) -> Result<String, LauncherError> {
+    let value = value.trim().trim_end_matches(['/', '\\']);
+    if value.is_empty() || value.chars().count() > 253 {
+        return Err(LauncherError::validation(
+            "服务器地址不能为空，且不能超过 253 个字符。",
+        ));
+    }
+    if value
+        .chars()
+        .any(|character| character.is_whitespace() || character.is_control() || matches!(character, '/' | '\\'))
+    {
+        return Err(LauncherError::validation(
+            "服务器地址不能包含空格、控制字符或路径符号。",
+        ));
+    }
+    // 端口单独填写；IPv6 允许使用 [::1] 或裸 IPv6，但不接受 host:port 混写
+    if value.contains(':') && !value.starts_with('[') && value.matches(':').count() == 1 {
+        return Err(LauncherError::validation(
+            "请在“端口”栏单独填写端口，地址只填主机名或 IP。",
+        ));
+    }
+    Ok(value.to_string())
+}
+
+fn validate_server_port(port: u16) -> Result<u16, LauncherError> {
+    if port == 0 {
+        return Err(LauncherError::validation("服务器端口须为 1–65535。"));
+    }
+    Ok(port)
+}
+
+fn read_server_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ServerEntry> {
+    Ok(ServerEntry {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        address: row.get(2)?,
+        port: row.get(3)?,
+        description: row.get(4)?,
+        created_at: row.get(5)?,
+        last_connected_at: row.get(6)?,
+    })
+}
+
+#[tauri::command]
+fn list_servers(app: AppHandle) -> Result<Vec<ServerEntry>, LauncherError> {
+    let connection = open_database(&app)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT id, name, address, port, description, created_at, last_connected_at
+             FROM servers ORDER BY COALESCE(last_connected_at, created_at) DESC, id DESC",
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let rows = statement
+        .query_map([], read_server_row)
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| LauncherError::storage(error.to_string()))
+}
+
+#[tauri::command]
+fn add_server(
+    app: AppHandle,
+    name: String,
+    address: String,
+    port: Option<u16>,
+    description: Option<String>,
+) -> Result<ServerEntry, LauncherError> {
+    let name = validate_server_name(&name)?;
+    let address = validate_server_address(&address)?;
+    let port = validate_server_port(port.unwrap_or(25565))?;
+    let description = description
+        .unwrap_or_default()
+        .trim()
+        .chars()
+        .take(500)
+        .collect::<String>();
+    let connection = open_database(&app)?;
+    let created_at = chrono_like_timestamp();
+    connection
+        .execute(
+            "INSERT INTO servers (name, address, port, description, created_at, last_connected_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+            params![name, address, port, description, created_at],
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let id = connection.last_insert_rowid();
+    let mut statement = connection
+        .prepare(
+            "SELECT id, name, address, port, description, created_at, last_connected_at
+             FROM servers WHERE id=?1",
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    statement
+        .query_row([id], read_server_row)
+        .map_err(|error| LauncherError::storage(error.to_string()))
+}
+
+#[tauri::command]
+fn update_server(
+    app: AppHandle,
+    server_id: i64,
+    name: String,
+    address: String,
+    port: Option<u16>,
+    description: Option<String>,
+) -> Result<ServerEntry, LauncherError> {
+    let name = validate_server_name(&name)?;
+    let address = validate_server_address(&address)?;
+    let port = validate_server_port(port.unwrap_or(25565))?;
+    let description = description
+        .unwrap_or_default()
+        .trim()
+        .chars()
+        .take(500)
+        .collect::<String>();
+    let connection = open_database(&app)?;
+    let changed = connection
+        .execute(
+            "UPDATE servers SET name=?1, address=?2, port=?3, description=?4 WHERE id=?5",
+            params![name, address, port, description, server_id],
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    if changed == 0 {
+        return Err(LauncherError::validation("服务器不存在。"));
+    }
+    let mut statement = connection
+        .prepare(
+            "SELECT id, name, address, port, description, created_at, last_connected_at
+             FROM servers WHERE id=?1",
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    statement
+        .query_row([server_id], read_server_row)
+        .map_err(|error| LauncherError::storage(error.to_string()))
+}
+
+#[tauri::command]
+fn remove_server(app: AppHandle, server_id: i64) -> Result<(), LauncherError> {
+    let connection = open_database(&app)?;
+    connection
+        .execute("DELETE FROM servers WHERE id=?1", [server_id])
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn touch_server_connection(app: AppHandle, server_id: i64) -> Result<(), LauncherError> {
+    let connection = open_database(&app)?;
+    connection
+        .execute(
+            "UPDATE servers SET last_connected_at=?1 WHERE id=?2",
+            params![chrono_like_timestamp(), server_id],
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn ping_server(address: String, port: u16) -> Result<ServerPing, LauncherError> {
+    let address = validate_server_address(&address)?;
+    let Ok(mut addrs) = (address.as_str(), port).to_socket_addrs() else {
+        return Ok(ServerPing {
+            reachable: false,
+            latency_ms: None,
+            error: Some("无法解析服务器地址。".into()),
+        });
+    };
+    let Some(addr) = addrs.next() else {
+        return Ok(ServerPing {
+            reachable: false,
+            latency_ms: None,
+            error: Some("服务器地址没有可连接的目标。".into()),
+        });
+    };
+    let started = Instant::now();
+    match TcpStream::connect_timeout(&addr, Duration::from_secs(4)) {
+        Ok(_) => Ok(ServerPing {
+            reachable: true,
+            latency_ms: Some(started.elapsed().as_millis()),
+            error: None,
+        }),
+        Err(error) => Ok(ServerPing {
+            reachable: false,
+            latency_ms: None,
+            error: Some(format!("无法连接：{error}")),
+        }),
+    }
 }
 
 fn validate_profile_name(value: &str) -> Result<(), LauncherError> {
@@ -8295,6 +8813,9 @@ async fn launch_instance(
     account_id: i64,
     java_path: String,
     force: Option<bool>,
+    server_address: Option<String>,
+    server_port: Option<u16>,
+    server_id: Option<i64>,
 ) -> Result<LaunchResult, LauncherError> {
     let _ = app.emit(
         "game-preparing",
@@ -8315,6 +8836,14 @@ async fn launch_instance(
         return Err(LauncherError::validation("实例尚未完成安装或校验。"));
     }
     let force = force.unwrap_or(false);
+    let server_address = server_address
+        .map(|value| validate_server_address(&value))
+        .transpose()?;
+    let server_port = if server_address.is_some() {
+        Some(validate_server_port(server_port.unwrap_or(25565))?)
+    } else {
+        None
+    };
     // 启动不再联网补齐前置：只做本地快速校验，缺前置由前端弹窗让用户选择处理，启动不被网络拖慢
     if !force {
         validate_instance_mods(&root_path, &version, &loader)?;
@@ -8327,7 +8856,7 @@ async fn launch_instance(
         )
         .map_err(|_| LauncherError::validation("请选择有效的账户。"))?;
     drop(connection);
-    let (player_uuid, access_token, user_type, xuid) = if account_type == "MICROSOFT" {
+    let (player_uuid, access_token, user_type, xuid, authlib_javaagent) = if account_type == "MICROSOFT" {
         let secret_ref = secret_ref
             .ok_or_else(|| LauncherError::validation("Microsoft 凭据不存在，请重新登录。"))?;
         let entry = keyring::Entry::new("SH启动器", &secret_ref)
@@ -8374,6 +8903,58 @@ async fn launch_instance(
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string(),
+            None,
+        )
+    } else if account_type == "EXTERNAL" {
+        let secret_ref = secret_ref
+            .ok_or_else(|| LauncherError::validation("外置登录凭据不存在，请重新登录。"))?;
+        let entry = keyring::Entry::new("SH启动器", &secret_ref)
+            .map_err(|error| LauncherError::storage(format!("无法读取 Windows 凭据：{error}")))?;
+        let secret = entry.get_password().map_err(|error| {
+            LauncherError::validation(format!("外置登录已失效，请重新登录：{error}"))
+        })?;
+        let value: serde_json::Value = serde_json::from_str(&secret)
+            .map_err(|_| LauncherError::validation("外置登录凭据格式无效，请重新登录。"))?;
+        let access_token = value
+            .get("accessToken")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let client_token = value
+            .get("clientToken")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let api_root = value
+            .get("apiRoot")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| LauncherError::validation("外置登录凭据缺少服务器地址，请重新登录。"))?
+            .to_string();
+        let uuid = value
+            .get("uuid")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let mut refreshed_token = access_token;
+        if let Ok(Some((new_token, new_client))) =
+            refresh_external_token(&api_root, &refreshed_token, &client_token).await
+        {
+            refreshed_token = new_token;
+            let updated = serde_json::json!({
+                "accessToken": refreshed_token,
+                "clientToken": new_client,
+                "uuid": uuid,
+                "apiRoot": api_root,
+            });
+            let _ = entry.set_password(&updated.to_string());
+        }
+        let jar = ensure_authlib_injector().await?;
+        (
+            uuid,
+            refreshed_token,
+            "legacy".to_string(),
+            String::new(),
+            Some(format!("-javaagent:{}={}", jar.display(), api_root)),
         )
     } else {
         let digest = format!(
@@ -8385,6 +8966,7 @@ async fn launch_instance(
             "0".to_string(),
             "legacy".to_string(),
             String::new(),
+            None,
         )
     };
     let java = PathBuf::from(java_path);
@@ -8428,7 +9010,7 @@ async fn launch_instance(
             )));
         }
     }
-    let arguments = build_vanilla_launch_arguments(
+    let mut arguments = build_vanilla_launch_arguments(
         &details,
         &game,
         &version,
@@ -8439,6 +9021,15 @@ async fn launch_instance(
         &xuid,
         memory_mb,
     )?;
+    if let Some(javaagent) = authlib_javaagent {
+        arguments.insert(0, javaagent);
+    }
+    if let Some(address) = &server_address {
+        arguments.push("--server".into());
+        arguments.push(address.clone());
+        arguments.push("--port".into());
+        arguments.push(server_port.unwrap_or(25565).to_string());
+    }
     if get_settings(app.clone())?.backup_worlds_before_launch {
         let _ = backup_instance_worlds(instance_id, &game)?;
     }
@@ -8482,6 +9073,12 @@ async fn launch_instance(
             params![started_at, instance_id],
         )
         .map_err(|error| LauncherError::storage(error.to_string()))?;
+    if let Some(server_id) = server_id {
+        let _ = connection.execute(
+            "UPDATE servers SET last_connected_at=?1 WHERE id=?2",
+            params![started_at, server_id],
+        );
+    }
     let db_path = database_path(&app)?;
     let watcher_log_path = log_path.clone();
     let watcher_app = app.clone();
@@ -8725,8 +9322,15 @@ pub fn run() {
             list_accounts,
             create_offline_account,
             login_microsoft,
+            login_external,
             microsoft_login_available,
             remove_account,
+            list_servers,
+            add_server,
+            update_server,
+            remove_server,
+            touch_server_connection,
+            ping_server,
             list_instances,
             boot_health_check,
             create_vanilla_instance,
@@ -8951,8 +9555,8 @@ mod tests {
     }
     #[test]
     fn migration_creates_required_tables() {
-        let connection = Connection::open_in_memory().unwrap();
-        run_migrations(&connection).unwrap();
+        let mut connection = Connection::open_in_memory().unwrap();
+        run_migrations(&mut connection).unwrap();
         let count: i64 = connection
             .query_row(
                 "SELECT COUNT(*) FROM migrations WHERE version=1",
@@ -8961,11 +9565,25 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
+        let server_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='servers'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(server_count, 1);
+        connection
+            .execute(
+                "INSERT INTO accounts (account_type, display_name, created_at) VALUES ('EXTERNAL', 'Alex', '1')",
+                [],
+            )
+            .unwrap();
     }
     #[test]
     fn interrupted_downloads_become_retryable_on_startup() {
-        let connection = Connection::open_in_memory().unwrap();
-        run_migrations(&connection).unwrap();
+        let mut connection = Connection::open_in_memory().unwrap();
+        run_migrations(&mut connection).unwrap();
         connection
             .execute(
                 "INSERT INTO download_jobs(source_url,target_path,status,created_at,recovery_action)
@@ -9447,5 +10065,30 @@ side="BOTH"
             Some((402818, 6118401))
         );
         assert_eq!(best_curseforge_match(&files, "iceandfire"), None);
+    }
+
+    #[test]
+    fn server_address_rejects_embedded_port() {
+        assert!(validate_server_address("play.example.com:25565").is_err());
+        assert!(validate_server_address("play.example.com").is_ok());
+        assert!(validate_server_address("192.168.1.10").is_ok());
+        assert!(validate_server_address("[2001:db8::1]").is_ok());
+        assert!(validate_server_address("2001:db8::1").is_ok());
+        assert!(validate_server_address("bad path").is_err());
+    }
+
+    #[test]
+    fn server_port_rejects_zero() {
+        assert!(validate_server_port(0).is_err());
+        assert!(validate_server_port(25565).is_ok());
+    }
+
+    #[test]
+    fn authlib_api_root_allows_https_and_localhost_http() {
+        assert!(normalize_authlib_api_root("https://littleskin.cn/api/yggdrasil").is_ok());
+        assert!(normalize_authlib_api_root("http://localhost:8080").is_ok());
+        assert!(normalize_authlib_api_root("http://127.0.0.1/api").is_ok());
+        assert!(normalize_authlib_api_root("http://example.com/api").is_err());
+        assert!(normalize_authlib_api_root("ftp://example.com").is_err());
     }
 }

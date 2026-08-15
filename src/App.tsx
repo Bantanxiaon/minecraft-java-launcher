@@ -25,6 +25,7 @@ import type {
   ExportResult,
   GameLog,
   OnlineProject,
+  ServerEntry,
 } from "./types";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { ServersPage } from "./pages/ServersPage";
@@ -175,6 +176,7 @@ function DesktopTitleBar() {
 export default function App() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<number>();
+  const [servers, setServers] = useState<ServerEntry[]>([]);
   const [instances, setInstances] = useState<Instance[]>([]);
   const [selectedInstanceId, setSelectedInstanceId] = useState<number>();
   const [versions, setVersions] = useState<VersionSummary[]>([]);
@@ -362,6 +364,7 @@ export default function App() {
       settingsResult,
       loginResult,
       healthResult,
+      serversResult,
     ] = await Promise.allSettled([
       invoke<Account[]>("list_accounts"),
       invoke<Instance[]>("list_instances"),
@@ -369,6 +372,7 @@ export default function App() {
       invoke<LauncherSettings>("get_settings"),
       invoke<boolean>("microsoft_login_available"),
       invoke<BootHealthReport>("boot_health_check"),
+      invoke<ServerEntry[]>("list_servers"),
     ]);
 
     if (accountsResult.status === "fulfilled") {
@@ -407,6 +411,12 @@ export default function App() {
 
     if (loginResult.status === "fulfilled") {
       setMicrosoftLoginAvailable(loginResult.value);
+    }
+
+    if (serversResult.status === "fulfilled") {
+      setServers(serversResult.value);
+    } else {
+      setMessage(errorText(serversResult.reason, "无法读取服务器列表。"));
     }
 
     if (healthResult.status === "fulfilled") {
@@ -891,6 +901,103 @@ export default function App() {
       setMessage("账户已移除；Microsoft 凭据也已从 Windows 凭据管理器清理。 ");
     } catch (error) {
       setMessage(errorText(error, "移除账户失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loginExternal(
+    apiRoot: string,
+    username: string,
+    password: string,
+  ) {
+    if (!isTauri()) {
+      setMessage("请在桌面应用中登录外置账户。");
+      return;
+    }
+    setBusy(true);
+    setMessage("正在连接外置登录服务器并缓存登录组件…");
+    try {
+      const account = await invoke<Account>("login_external", {
+        apiRoot,
+        username,
+        password,
+      });
+      setAccounts((existing) => [
+        account,
+        ...existing.filter((candidate) => candidate.id !== account.id),
+      ]);
+      setSelectedAccountId(account.id);
+      setMessage(`外置登录成功：${account.displayName}，凭据已安全保存。`);
+    } catch (error) {
+      setMessage(errorText(error, "外置登录失败。"));
+      throw error;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addServer(
+    name: string,
+    address: string,
+    port: number,
+    description: string,
+  ) {
+    setBusy(true);
+    try {
+      const server = await invoke<ServerEntry>("add_server", {
+        name,
+        address,
+        port,
+        description,
+      });
+      setServers((existing) => [server, ...existing]);
+      setMessage("服务器已添加。");
+    } catch (error) {
+      setMessage(errorText(error, "添加服务器失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function updateServer(
+    server: ServerEntry,
+    name: string,
+    address: string,
+    port: number,
+    description: string,
+  ) {
+    setBusy(true);
+    try {
+      const updated = await invoke<ServerEntry>("update_server", {
+        serverId: server.id,
+        name,
+        address,
+        port,
+        description,
+      });
+      setServers((existing) =>
+        existing.map((candidate) =>
+          candidate.id === updated.id ? updated : candidate,
+        ),
+      );
+      setMessage("服务器已更新。");
+    } catch (error) {
+      setMessage(errorText(error, "更新服务器失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeServer(server: ServerEntry) {
+    if (!window.confirm(`确定删除服务器“${server.name}”吗？`)) return;
+    setBusy(true);
+    try {
+      await invoke("remove_server", { serverId: server.id });
+      setServers((existing) => existing.filter((candidate) => candidate.id !== server.id));
+      setMessage("服务器已删除。");
+    } catch (error) {
+      setMessage(errorText(error, "删除服务器失败。"));
     } finally {
       setBusy(false);
     }
@@ -1624,7 +1731,12 @@ export default function App() {
     return updated;
   }
 
-  async function launchSelectedInstance(targetInstance?: Instance, force = false) {
+  async function launchSelectedInstance(
+    targetInstance?: Instance,
+    force = false,
+    server?: ServerEntry,
+    accountId?: number,
+  ) {
     const requestedInstance = targetInstance ?? selectedInstance;
     if (!requestedInstance) {
       setMessage("还没有游戏配置，请先新建一套游戏配置。");
@@ -1637,7 +1749,8 @@ export default function App() {
     setBusy(true);
     setMessage("正在准备游戏…");
     try {
-      let launchAccount = current;
+      let launchAccount =
+        accountId ? accounts.find((account) => account.id === accountId) ?? current : current;
       if (!launchAccount) {
         setMessage("正在创建本机测试档案…");
         launchAccount = await invoke<Account>("create_offline_account", {
@@ -1673,11 +1786,21 @@ export default function App() {
           accountId: launchAccount.id,
           javaPath: selectedJava.path,
           force,
+          serverAddress: server?.address ?? null,
+          serverPort: server?.port ?? null,
+          serverId: server?.id ?? null,
         },
       );
       setMessage(
         `游戏进程已启动（PID ${result.processId}），日志：${result.logPath}`,
       );
+      if (server) {
+        try {
+          setServers(await invoke<ServerEntry[]>("list_servers"));
+        } catch {
+          // 刷新失败不影响游戏
+        }
+      }
       if (settings.closeLauncherAfterGameStart) {
         await invoke("exit_launcher");
       }
@@ -2188,7 +2311,7 @@ export default function App() {
           </div>
           {accounts.length > 1 ? (
             <select className="account-switcher" aria-label="切换账户" value={current?.id ?? ""} onChange={(event) => setSelectedAccountId(Number(event.target.value))}>
-              {accounts.map((account) => <option key={account.id} value={account.id}>{account.displayName} · {account.accountType}</option>)}
+              {accounts.map((account) => <option key={account.id} value={account.id}>{account.displayName} · {account.accountType === "MICROSOFT" ? "正版" : account.accountType === "EXTERNAL" ? "外置" : "离线"}</option>)}
             </select>
           ) : null}
         </section>
@@ -2291,7 +2414,7 @@ export default function App() {
                   ) : null}
                 </div>
                 <p className="notice">
-                  本软件仅是启动器，不捆绑游戏；联机功能暂缓开通。
+                  本软件仅是启动器，不捆绑游戏；已支持服务器列表、外置登录与快速加入。
                 </p>
               </section>
               <aside className="activity">
@@ -2495,7 +2618,28 @@ export default function App() {
             ) : null}
           </>
         ) : activeNav === "服务器" ? (
-          <ServersPage />
+          <ServersPage
+            servers={servers}
+            instances={instances}
+            accounts={accounts}
+            selectedInstanceId={selectedInstanceId}
+            selectedAccountId={current?.id}
+            busy={busy}
+            message={message}
+            onAddServer={addServer}
+            onUpdateServer={updateServer}
+            onRemoveServer={removeServer}
+            onJoin={(server, instanceId, accountId) => {
+              const instance = instances.find((candidate) => candidate.id === instanceId);
+              if (!instance) {
+                setMessage("请先选择一套已就绪的游戏配置。");
+                return;
+              }
+              setSelectedInstanceId(instanceId);
+              setSelectedAccountId(accountId);
+              void launchSelectedInstance(instance, false, server, accountId);
+            }}
+          />
         ) : activeNav === "游戏库" || activeNav === "实例" ? (
           <InstanceLibraryPage
             instances={instances}
@@ -2577,6 +2721,7 @@ export default function App() {
             onCheckEnvironment={() => void checkEnvironment()}
             onSetupRecommended={() => void installManagedJava(21)}
             onLoginMicrosoft={() => void loginMicrosoft()}
+            onLoginExternal={loginExternal}
             microsoftLoginAvailable={microsoftLoginAvailable}
             accounts={accounts}
             selectedAccountId={current?.id}
