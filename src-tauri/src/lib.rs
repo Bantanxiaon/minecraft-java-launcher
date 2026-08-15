@@ -8163,6 +8163,7 @@ fn build_vanilla_launch_arguments(
     fs::create_dir_all(&java_temp).map_err(|error| LauncherError::storage(error.to_string()))?;
     let mut arguments = vec![
         format!("-Xmx{memory_mb}M"),
+        "-XX:+UnlockExperimentalVMOptions".into(),
         "-XX:+UseG1GC".into(),
         "-XX:+ParallelRefProcEnabled".into(),
         "-XX:MaxGCPauseMillis=200".into(),
