@@ -1,4 +1,8 @@
 const HIGHLIGHTS_BY_VERSION: Record<string, string[]> = {
+  "0.5.4": [
+    "CurseForge 依赖解析改为按真实 Mod ID 精确匹配，不再靠文件名或列表顺序猜测，适用所有整合包",
+    "依赖解析统一流程：先 CurseForge 精确匹配，再回退 Modrinth，避免把 goety 认成别的模组",
+  ],
   "0.5.3": [
     "修复依赖解析误判：已安装的前置按 Mod ID 去重，不再重复安装报错（如 goety/patchouli）",
   ],

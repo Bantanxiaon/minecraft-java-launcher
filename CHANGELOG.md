@@ -2,6 +2,11 @@
 
 版本号固定三位：主版本.次版本.补丁版本。最右一位是小补丁/Bug 修复，中间一位是稍大补丁更新，最左一位是包含 UI 与新增内容的大型更新。每个版本在 `src/versionHighlights.ts` 维护“版本亮点”，软件首页自动展示。
 
+## SH启动器 0.5.4 Beta - 2026-08-15
+
+- CurseForge 依赖解析改为按真实 Mod ID 精确匹配：导入时从下载到的 JAR 里读取 modId 建立索引，不再依赖 modlist 顺序或文件名猜测，对所有 CurseForge 整合包通用。
+- 依赖解析统一：优先 CurseForge 索引的 Mod ID 精确匹配，匹配不到再回退 Modrinth，避免“goety 被解析成 patchouli”这类错误。
+
 ## SH启动器 0.5.3 Beta - 2026-08-15
 
 - 修复依赖解析误判：前置模组已存在（无论来自 CurseForge 还是 Modrinth）时按 Mod ID 去重，不再出现“已存在相同 Mod ID”这类误报（如 goety 依赖的 patchouli）。
