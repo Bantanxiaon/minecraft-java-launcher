@@ -250,7 +250,7 @@ export default function App() {
   const [packSourcePath, setPackSourcePath] = useState("");
   const [dragging, setDragging] = useState(false);
   const [settings, setSettings] = useState<LauncherSettings>({
-    downloadConcurrency: 8,
+    downloadConcurrency: 16,
     closeLauncherAfterGameStart: false,
     language: "zh-CN",
     defaultMemoryMb: 4096,

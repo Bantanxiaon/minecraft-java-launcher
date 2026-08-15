@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "SH启动器",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "identifier": "com.shlauncher.desktop",
   "build": {
     "frontendDist": "../dist",

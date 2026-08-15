@@ -6892,6 +6892,123 @@ async fn download_verified_file(
     .await
 }
 
+async fn download_verified_file_parallel(
+    url: &str,
+    expected_sha1: &str,
+    expected_size: u64,
+    target: &std::path::Path,
+) -> Result<u64, LauncherError> {
+    if expected_size < 16 * 1024 * 1024 {
+        return Err(LauncherError::validation("文件过小，不需要分段下载。"));
+    }
+    let url = validate_resource_url(url)?;
+    let client = shared_download_client()?;
+    if let Some(parent) = target.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+    }
+    let segments = 4u64;
+    let chunk = (expected_size + segments - 1) / segments;
+    let mut tasks = Vec::new();
+    for index in 0..segments {
+        let start = index * chunk;
+        if start >= expected_size {
+            break;
+        }
+        let end = (start + chunk - 1).min(expected_size - 1);
+        let client = client.clone();
+        let url = url.clone();
+        let part_path = target.with_extension(format!("part{index}"));
+        tasks.push(async move {
+            let mut last_error = String::new();
+            for attempt in 0..=2u32 {
+                let mut request = client
+                    .get(url.clone())
+                    .header(reqwest::header::RANGE, format!("bytes={start}-{end}"));
+                if url.host_str() == Some("www.curseforge.com") {
+                    request = request.header(
+                        reqwest::header::REFERER,
+                        "https://www.curseforge.com/",
+                    );
+                }
+                match request.send().await {
+                    Ok(response)
+                        if response.status() == reqwest::StatusCode::PARTIAL_CONTENT
+                            || response.status().is_success() =>
+                    {
+                        let mut file = tokio::fs::File::create(&part_path)
+                            .await
+                            .map_err(|error| LauncherError::storage(error.to_string()))?;
+                        let mut stream = response.bytes_stream();
+                        while let Some(chunk) = stream.next().await {
+                            let chunk = chunk
+                                .map_err(|error| LauncherError::storage(error.to_string()))?;
+                            tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
+                                .await
+                                .map_err(|error| LauncherError::storage(error.to_string()))?;
+                        }
+                        tokio::io::AsyncWriteExt::flush(&mut file)
+                            .await
+                            .map_err(|error| LauncherError::storage(error.to_string()))?;
+                        return Ok(());
+                    }
+                    Ok(response) => last_error = format!("HTTP {}", response.status()),
+                    Err(error) => last_error = error.to_string(),
+                }
+                if attempt < 2 {
+                    tokio::time::sleep(Duration::from_millis(300 * 2u64.pow(attempt))).await;
+                }
+            }
+            Err(LauncherError::storage(format!("分段下载失败：{last_error}")))
+        });
+    }
+    let results: Vec<Result<(), LauncherError>> =
+        futures_util::stream::iter(tasks)
+            .buffer_unordered(segments as usize)
+            .collect()
+            .await;
+    if results.iter().any(Result::is_err) {
+        for index in 0..segments {
+            let _ = tokio::fs::remove_file(target.with_extension(format!("part{index}"))).await;
+        }
+        return Err(results
+            .into_iter()
+            .find_map(Result::err)
+            .unwrap_or_else(|| LauncherError::storage("分段下载失败。")));
+    }
+    let mut output = tokio::fs::File::create(target)
+        .await
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    for index in 0..segments {
+        let part_path = target.with_extension(format!("part{index}"));
+        if tokio::fs::try_exists(&part_path).await.unwrap_or(false) {
+            let mut part = tokio::fs::File::open(&part_path)
+                .await
+                .map_err(|error| LauncherError::storage(error.to_string()))?;
+            tokio::io::copy(&mut part, &mut output)
+                .await
+                .map_err(|error| LauncherError::storage(error.to_string()))?;
+        }
+    }
+    tokio::io::AsyncWriteExt::flush(&mut output)
+        .await
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    drop(output);
+    let actual_size = tokio::fs::metadata(target)
+        .await
+        .map_err(|error| LauncherError::storage(error.to_string()))?
+        .len();
+    if actual_size != expected_size || !sha1_file(target).await?.eq_ignore_ascii_case(expected_sha1) {
+        let _ = tokio::fs::remove_file(target).await;
+        return Err(LauncherError::validation("下载文件大小或 SHA-1 校验失败。"));
+    }
+    for index in 0..segments {
+        let _ = tokio::fs::remove_file(target.with_extension(format!("part{index}"))).await;
+    }
+    Ok(actual_size)
+}
+
 async fn download_verified_file_with_progress(
     app: &AppHandle,
     instance_id: i64,
@@ -6901,6 +7018,20 @@ async fn download_verified_file_with_progress(
     target: &std::path::Path,
     emit_file_progress: bool,
 ) -> Result<u64, LauncherError> {
+    if !expected_sha1.is_empty()
+        && expected_size.is_some_and(|size| size >= 16 * 1024 * 1024)
+    {
+        if let Ok(size) = download_verified_file_parallel(
+            url,
+            expected_sha1,
+            expected_size.unwrap_or(0),
+            target,
+        )
+        .await
+        {
+            return Ok(size);
+        }
+    }
     let first = download_verified_file_attempt(
         app,
         instance_id,
@@ -7282,6 +7413,7 @@ fn shared_download_client() -> Result<reqwest::Client, LauncherError> {
         .connect_timeout(Duration::from_secs(30))
         .timeout(Duration::from_secs(30 * 60))
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+        .http1_only()
         .pool_max_idle_per_host(32)
         .build()
         .map_err(|error| LauncherError::storage(error.to_string()))?;

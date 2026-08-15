@@ -1,4 +1,9 @@
 const HIGHLIGHTS_BY_VERSION: Record<string, string[]> = {
+  "0.5.5": [
+    "下载强制走 HTTP/1.1，修复“error decoding response body”这类传输错误",
+    "大模组（16MB 以上）自动 4 段并行下载，速度更快",
+    "下载并发数默认提高到 16",
+  ],
   "0.5.4": [
     "CurseForge 依赖解析改为按真实 Mod ID 精确匹配，不再靠文件名或列表顺序猜测，适用所有整合包",
     "依赖解析统一流程：先 CurseForge 精确匹配，再回退 Modrinth，避免把 goety 认成别的模组",
