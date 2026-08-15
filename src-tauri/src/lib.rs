@@ -5609,6 +5609,42 @@ fn rename_instance(
 }
 
 #[tauri::command]
+fn update_instance_memory(
+    app: AppHandle,
+    instance_id: i64,
+    memory_mb: i64,
+) -> Result<Instance, LauncherError> {
+    if !(2048..=65536).contains(&memory_mb) {
+        return Err(LauncherError::validation("内存须在 2048–65536 MB 之间。"));
+    }
+    let connection = open_database(&app)?;
+    connection
+        .execute(
+            "UPDATE instances SET memory_mb=?1 WHERE id=?2",
+            params![memory_mb, instance_id],
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    connection
+        .query_row(
+            "SELECT id,name,root_path,game_version,loader_type,memory_mb,status,source FROM instances WHERE id=?1",
+            [instance_id],
+            |row| {
+                Ok(Instance {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    root_path: row.get(2)?,
+                    game_version: row.get(3)?,
+                    loader_type: row.get(4)?,
+                    memory_mb: row.get(5)?,
+                    status: row.get(6)?,
+                    source: row.get(7)?,
+                })
+            },
+        )
+        .map_err(|_| LauncherError::validation("实例不存在。"))
+}
+
+#[tauri::command]
 fn clone_instance(
     app: AppHandle,
     instance_id: i64,
@@ -8696,6 +8732,7 @@ pub fn run() {
             create_vanilla_instance,
             create_instance_profile,
             rename_instance,
+            update_instance_memory,
             clone_instance,
             delete_instance_to_backup,
             fetch_version_manifest,

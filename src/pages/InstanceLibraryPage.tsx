@@ -9,6 +9,7 @@ export function InstanceLibraryPage({
   onCreate,
   onClone,
   onRename,
+  onMemoryChange,
   onRepair,
   onDelete,
   onOpen,
@@ -18,6 +19,7 @@ export function InstanceLibraryPage({
   onCreate: () => void;
   onClone: (instance: Instance) => void;
   onRename: (instance: Instance) => void;
+  onMemoryChange: (instance: Instance, memoryMb: number) => void;
   onRepair: (instance: Instance) => void;
   onDelete: (instance: Instance) => void;
   onOpen: (instance: Instance) => void;
@@ -75,7 +77,30 @@ export function InstanceLibraryPage({
               <div className="library-card-body">
                 <div className="library-card-title"><h2>{instance.name}</h2></div>
                 <p>{instance.gameVersion} · {instance.loaderType === "vanilla" ? "Vanilla" : instance.loaderType}</p>
-                <div className="library-card-meta"><span><Box size={14} /> {instance.status === "ready" ? "已就绪" : "待安装"}</span><span>{instance.memoryMb} MB</span></div>
+                <div className="library-card-meta">
+                  <span><Box size={14} /> {instance.status === "ready" ? "已就绪" : "待安装"}</span>
+                  <label className="library-memory">
+                    内存
+                    <input
+                      type="number"
+                      min={2048}
+                      max={65536}
+                      step={512}
+                      defaultValue={instance.memoryMb}
+                      onBlur={(event) => {
+                        const value = Math.max(
+                          2048,
+                          Math.min(65536, Number(event.target.value) || instance.memoryMb),
+                        );
+                        if (value !== instance.memoryMb) onMemoryChange(instance, value);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") (event.target as HTMLInputElement).blur();
+                      }}
+                    />
+                    MB
+                  </label>
+                </div>
                 <button className="library-play" onClick={() => onPlay(instance)}><Play size={15} fill="currentColor" /> 启动实例</button>
                 <div className="library-secondary-actions"><button onClick={() => onOpen(instance)}>文件夹</button><button onClick={() => onRepair(instance)}>修复</button><button onClick={() => onRename(instance)}>重命名</button><button onClick={() => onClone(instance)}>复制</button><button className="danger" onClick={() => onDelete(instance)}>移除</button></div>
               </div>

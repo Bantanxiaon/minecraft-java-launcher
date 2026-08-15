@@ -1455,6 +1455,25 @@ export default function App() {
     }
   }
 
+  async function updateInstanceMemory(instance: Instance, memoryMb: number) {
+    setBusy(true);
+    setMessage("");
+    try {
+      const updated = await invoke<Instance>("update_instance_memory", {
+        instanceId: instance.id,
+        memoryMb,
+      });
+      setInstances((existing) =>
+        existing.map((item) => (item.id === updated.id ? updated : item)),
+      );
+      setMessage(`实例“${updated.name}”内存已改为 ${updated.memoryMb} MB。`);
+    } catch (error) {
+      setMessage(errorText(error, "修改实例内存失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function deleteInstance(instance: Instance) {
     if (!window.confirm(`确定移除实例“${instance.name}”吗？实例会先进入可恢复备份。`)) return;
     if (!window.confirm("请再次确认：存档、模组和配置都会从实例列表移除。")) return;
@@ -2484,6 +2503,9 @@ export default function App() {
             onPlay={(instance) => { setSelectedInstanceId(instance.id); void launchSelectedInstance(instance); }}
             onClone={(instance) => void cloneInstance(instance)}
             onRename={(instance) => void renameInstance(instance)}
+            onMemoryChange={(instance, memoryMb) =>
+              void updateInstanceMemory(instance, memoryMb)
+            }
             onRepair={(instance) => void repairInstance(instance)}
             onDelete={(instance) => void deleteInstance(instance)}
             onOpen={(instance) => void openInstanceDirectory(instance.id, "game")}

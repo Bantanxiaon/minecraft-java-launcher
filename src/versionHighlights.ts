@@ -1,4 +1,7 @@
 const HIGHLIGHTS_BY_VERSION: Record<string, string[]> = {
+  "0.5.13": [
+    "游戏库可以直接修改已有实例的运行内存（2048–65536 MB），立即生效",
+  ],
   "0.5.12": [
     "kotlinforforge 识别为语言加载器，不再被误报为缺失前置（适用于所有包）",
   ],

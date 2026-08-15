@@ -1789,6 +1789,23 @@ nav button.active svg { color:#3b8d40; }
   font-size: 12px;
 }
 
+.library-memory {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: #7b8590;
+}
+
+.library-memory input {
+  width: 74px;
+  border: 1px solid #d9dfe4;
+  border-radius: 7px;
+  padding: 4px 7px;
+  font-size: 12px;
+  background: #fff;
+}
+
 /* ============ 底部全局进度条 ============ */
 .global-progress-bar {
   position: fixed;
