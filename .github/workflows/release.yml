@@ -42,8 +42,15 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: "SH启动器 v__VERSION__"
-          releaseBody: "请先在草稿中填写更新内容并完成测试，再点击发布。"
-          releaseDraft: true
+          releaseBody: |
+            ## SH启动器 v__VERSION__
+
+            - 新增精美启动动画：动画期间并行完成游戏、游戏库、模组与整合包、Java 环境和更新检查，并显示进度条与检查清单。
+            - 启动前自动识别缺失的前置模组，并从 Modrinth 自动下载补全。
+            - 下载任务显示文件名、大小、速度和预计剩余时间。
+            - 首页显示新版本更新卡片，更新完成后自动弹出更新内容。
+            - 修复窗口无法拖动的问题。
+          releaseDraft: false
           prerelease: false
           updaterJsonPreferNsis: true
           uploadUpdaterJson: true
