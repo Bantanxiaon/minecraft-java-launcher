@@ -32,7 +32,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { InstanceLibraryPage } from "./pages/InstanceLibraryPage";
 import { HomeUpdateCard } from "./components/HomeUpdateCard";
 import { SplashScreen } from "./components/SplashScreen";
-import { VersionHighlightsCard } from "./components/VersionHighlightsCard";
+import { VersionHighlightsModal } from "./components/VersionHighlightsModal";
 import { ChangelogModal } from "./components/ChangelogModal";
 import { checkForUpdate, updaterEnabled } from "./updater";
 import type { Update } from "./updater";
@@ -42,6 +42,7 @@ import type {
   BootStepKey,
 } from "./types/splash";
 import { APP_VERSION, RELEASE_CHANNEL_LABEL } from "./version";
+import { highlightsFor } from "./versionHighlights";
 import {
   ArchiveContentPage,
   ComingSoonPage,
@@ -197,6 +198,7 @@ export default function App() {
   const [updateCheckError, setUpdateCheckError] = useState(false);
   const [bootProblems, setBootProblems] = useState<BootProblem[]>([]);
   const [showChangelog, setShowChangelog] = useState(false);
+  const [showHighlights, setShowHighlights] = useState(false);
   const bootCancelledRef = useRef(false);
   const [activeNav, setActiveNav] = useState("主页");
   const activeNavRef = useRef(activeNav);
@@ -282,6 +284,18 @@ export default function App() {
         setSplashFinishing(true);
         await wait(480);
         if (cancelled) return;
+        const HIGHLIGHTS_SEEN_KEY = "sh-launcher-highlights-seen";
+        try {
+          if (
+            localStorage.getItem(HIGHLIGHTS_SEEN_KEY) !== APP_VERSION &&
+            highlightsFor(APP_VERSION).length
+          ) {
+            setShowHighlights(true);
+          }
+        } catch {
+          // 存储不可用时本次启动直接弹出
+          setShowHighlights(true);
+        }
         setBooting(false);
       }
     })();
@@ -1977,9 +1991,6 @@ export default function App() {
               checking={updateChecking}
               checkError={updateCheckError}
             />
-            <VersionHighlightsCard
-              onOpenChangelog={() => setShowChangelog(true)}
-            />
             {bootProblems.length ? (
               <section className="boot-problems-card" role="alert">
                 <div className="boot-problems-head">
@@ -2237,6 +2248,21 @@ export default function App() {
                 </p>
               ) : null}
             </section>
+            {showHighlights ? (
+              <VersionHighlightsModal
+                onClose={() => {
+                  setShowHighlights(false);
+                  try {
+                    localStorage.setItem(
+                      "sh-launcher-highlights-seen",
+                      APP_VERSION,
+                    );
+                  } catch {
+                    // 忽略存储失败
+                  }
+                }}
+              />
+            ) : null}
             {showChangelog ? (
               <ChangelogModal onClose={() => setShowChangelog(false)} />
             ) : null}
