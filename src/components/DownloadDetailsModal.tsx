@@ -1,4 +1,4 @@
-import type { DownloadJob } from "../types";
+import type { DownloadJob, Instance } from "../types";
 
 function formatBytes(value?: number): string {
   if (!value) return "0 B";
@@ -26,14 +26,35 @@ function fileBaseName(path: string): string {
 
 export function DownloadDetailsModal({
   jobs,
+  instanceProgress,
+  instances,
   onClose,
 }: {
   jobs: DownloadJob[];
+  instanceProgress: Record<number, number>;
+  instances: Instance[];
   onClose: () => void;
 }) {
   const active = jobs.filter((job) => job.status === "downloading");
   const others = jobs.filter((job) => job.status !== "downloading").slice(0, 50);
   const rows = [...active, ...others];
+  const totalBytes = active.reduce(
+    (sum, job) => sum + (job.totalBytes ?? job.progressBytes),
+    0,
+  );
+  const downloadedBytes = active.reduce(
+    (sum, job) => sum + job.progressBytes,
+    0,
+  );
+  const totalPercent = totalBytes
+    ? Math.min(100, Math.round((downloadedBytes * 100) / totalBytes))
+    : undefined;
+  const instanceRows = Object.entries(instanceProgress)
+    .filter(([, percent]) => percent > 0 && percent < 100)
+    .map(([id, percent]) => ({
+      instanceId: Number(id),
+      percent,
+    }));
   return (
     <div className="error-modal-backdrop" role="dialog" aria-modal="true" aria-label="下载详情">
       <div className="download-detail-modal">
@@ -43,9 +64,25 @@ export function DownloadDetailsModal({
         <h2>下载详情</h2>
         <p className="download-detail-subtitle">
           {active.length
-            ? `${active.length} 个任务正在下载，速度与进度实时更新。`
+            ? `共 ${active.length} 个下载目标，总进度 ${totalPercent ?? "—"}%，速度与进度实时更新。`
             : "当前没有进行中的下载；下面是最新任务记录。"}
         </p>
+        {totalPercent !== undefined ? (
+          <div className="download-detail-progress">
+            <div className="global-progress-track">
+              <div
+                className="global-progress-fill"
+                style={{ width: `${totalPercent}%` }}
+              />
+            </div>
+            <div className="download-detail-progress-meta">
+              <span>全部任务 {totalPercent}%</span>
+              <span>
+                {formatBytes(downloadedBytes)} / {formatBytes(totalBytes)}
+              </span>
+            </div>
+          </div>
+        ) : null}
         <div className="download-detail-list">
           {rows.length ? rows.map((job) => {
             const percent = job.totalBytes
@@ -98,6 +135,41 @@ export function DownloadDetailsModal({
           }) : (
             <p className="download-detail-empty">还没有下载任务。</p>
           )}
+          {instanceRows.length ? (
+            <>
+              <h3 className="download-detail-group-title">实例安装进度</h3>
+              {instanceRows.map((row) => {
+                const instance = instances.find(
+                  (candidate) => candidate.id === row.instanceId,
+                );
+                return (
+                  <div
+                    className="download-detail-row"
+                    key={`instance-${row.instanceId}`}
+                  >
+                    <div className="download-detail-head">
+                      <strong>
+                        {instance?.name ?? `实例 #${row.instanceId}`}
+                      </strong>
+                      <span className="job-status downloading">安装中</span>
+                    </div>
+                    <div className="download-detail-progress">
+                      <div
+                        className="global-progress-fill"
+                        style={{
+                          width: `${Math.max(0, Math.min(100, row.percent))}%`,
+                        }}
+                      />
+                    </div>
+                    <div className="download-detail-meta">
+                      <span>{Math.round(row.percent)}%</span>
+                      <span>游戏文件 / 加载器 / Java 安装</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </>
+          ) : null}
         </div>
         <button className="primary" type="button" onClick={onClose}>
           关闭

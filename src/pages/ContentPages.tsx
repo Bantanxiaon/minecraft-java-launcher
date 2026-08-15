@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   BackupItem,
   ContentItem,
@@ -74,6 +74,7 @@ function categoryText(value: string): string {
 function OnlineCatalog({
   title, query, onQuery, onSearch, projects, busy, disabled, onInstall,
   loaderOptions, selectedLoader, onLoader, versionValue, onVersion,
+  onTranslate,
 }: {
   title: string;
   query: string;
@@ -88,7 +89,59 @@ function OnlineCatalog({
   onLoader?: (value: string) => void;
   versionValue?: string;
   onVersion?: (value: string) => void;
+  onTranslate?: (text: string) => Promise<string | undefined>;
 }) {
+  const [translations, setTranslations] = useState<Record<string, string>>({});
+  const onTranslateRef = useRef(onTranslate);
+  onTranslateRef.current = onTranslate;
+
+  useEffect(() => {
+    if (!onTranslateRef.current) return;
+    let cancelled = false;
+    const queue: Array<{ text: string; keys: string[] }> = [];
+    const byText = new Map<string, string[]>();
+    const hasCjk = (value: string) => /[\u4e00-\u9fff]/.test(value);
+    for (const project of projects) {
+      if (queue.length >= 18) break;
+      const titleKey = `${project.source}:${project.projectId}:title`;
+      const descKey = `${project.source}:${project.projectId}:desc`;
+      if (!project.titleZh && !hasCjk(project.title) && project.title) {
+        byText.set(project.title, [...(byText.get(project.title) ?? []), titleKey]);
+      }
+      if (
+        !project.descriptionZh &&
+        !hasCjk(project.description) &&
+        project.description
+      ) {
+        const text = project.description.slice(0, 300);
+        byText.set(text, [...(byText.get(text) ?? []), descKey]);
+      }
+    }
+    for (const [text, keys] of byText) {
+      if (queue.length >= 18) break;
+      queue.push({ text, keys });
+    }
+    let index = 0;
+    const workers = Array.from({ length: 3 }, async () => {
+      while (index < queue.length && !cancelled) {
+        const item = queue[index];
+        index += 1;
+        const translated = await onTranslateRef.current?.(item.text);
+        if (translated && !cancelled) {
+          setTranslations((existing) => {
+            const next = { ...existing };
+            for (const key of item.keys) next[key] = translated;
+            return next;
+          });
+        }
+      }
+    });
+    void Promise.all(workers);
+    return () => {
+      cancelled = true;
+    };
+  }, [projects]);
+
   return (
     <section className="online-catalog">
       <div className="section-heading">
@@ -135,22 +188,30 @@ function OnlineCatalog({
       ) : null}
       {disabled ? <p className="catalog-hint">请先选择一套已经启用 Fabric、Forge、NeoForge 或 Quilt 的游戏配置。</p> : null}
       {projects.length ? <div className="catalog-grid">
-        {projects.map((project) => <article key={`${project.source}-${project.projectId}`}>
-          <div className="catalog-mark">{project.title.slice(0, 1).toUpperCase()}</div>
-          <div className="catalog-copy">
-            <strong>{project.titleZh ?? project.title}</strong>
-            <small>
-              <em className="catalog-source">{project.source === "curseforge" ? "CurseForge" : "Modrinth"}</em>
-              {" "}作者 {project.author} · {project.downloads.toLocaleString("zh-CN")} 次下载
-            </small>
-            {project.titleZh && project.titleZh !== project.title ? (
-              <small className="catalog-original">原文：{project.title}</small>
-            ) : null}
-            <p>{project.descriptionZh ?? project.description}</p>
-            <span>{project.categories.slice(0, 3).map(categoryText).join(" · ") || "Minecraft"}</span>
-          </div>
-          <button disabled={busy} onClick={() => onInstall(project)}>下载并安装</button>
-        </article>)}
+        {projects.map((project) => {
+          const titleKey = `${project.source}:${project.projectId}:title`;
+          const descKey = `${project.source}:${project.projectId}:desc`;
+          const title = translations[titleKey] ?? project.titleZh ?? project.title;
+          const description = translations[descKey] ?? project.descriptionZh ?? project.description;
+          return (
+            <article key={`${project.source}-${project.projectId}`}>
+              <div className="catalog-mark">{project.title.slice(0, 1).toUpperCase()}</div>
+              <div className="catalog-copy">
+                <strong>{title}</strong>
+                <small>
+                  <em className="catalog-source">{project.source === "curseforge" ? "CurseForge" : "Modrinth"}</em>
+                  {" "}作者 {project.author} · {project.downloads.toLocaleString("zh-CN")} 次下载
+                </small>
+                {title !== project.title ? (
+                  <small className="catalog-original">原文：{project.title}</small>
+                ) : null}
+                <p>{description}</p>
+                <span>{project.categories.slice(0, 3).map(categoryText).join(" · ") || "Minecraft"}</span>
+              </div>
+              <button disabled={busy} onClick={() => onInstall(project)}>下载并安装</button>
+            </article>
+          );
+        })}
       </div> : null}
     </section>
   );
@@ -199,6 +260,7 @@ type ModsPageProps = {
   onOnlineQuery: (value: string) => void;
   onOnlineSearch: () => void;
   onOnlineInstall: (project: OnlineProject) => void;
+  onTranslate: (text: string) => Promise<string | undefined>;
   onInstallCurseforgeUrl: (url: string) => void;
   onlineLoader?: string;
   onlineVersion?: string;
@@ -233,6 +295,7 @@ export function ModsPage({
   onOnlineQuery,
   onOnlineSearch,
   onOnlineInstall,
+  onTranslate,
   onInstallCurseforgeUrl,
   onlineLoader,
   onlineVersion,
@@ -380,6 +443,7 @@ export function ModsPage({
       <OnlineCatalog title="在线搜索模组" query={onlineQuery} onQuery={onOnlineQuery}
         onSearch={onOnlineSearch} projects={onlineProjects} busy={busy}
         disabled={!selected || selected.loaderType === "vanilla"} onInstall={onOnlineInstall}
+        onTranslate={onTranslate}
         loaderOptions={["fabric", "quilt", "forge", "neoforge"]}
         selectedLoader={onlineLoader}
         onLoader={onOnlineLoader}
@@ -536,6 +600,7 @@ export function ModpacksPage({
   onOnlineQuery,
   onOnlineSearch,
   onOnlineInstall,
+  onTranslate,
   onExport,
   archives,
   javaRuntimes,
@@ -557,6 +622,7 @@ export function ModpacksPage({
   onOnlineQuery: (value: string) => void;
   onOnlineSearch: () => void;
   onOnlineInstall: (project: OnlineProject) => void;
+  onTranslate: (text: string) => Promise<string | undefined>;
   onExport: (instanceId: number, includeSaves: boolean) => void;
   archives: ModpackArchive[];
   javaRuntimes: JavaRuntime[];
@@ -590,7 +656,7 @@ export function ModpacksPage({
       </section>
       <OnlineCatalog title="在线搜索整合包" query={onlineQuery} onQuery={onOnlineQuery}
         onSearch={onOnlineSearch} projects={onlineProjects} busy={busy}
-        onInstall={onOnlineInstall} />
+        onInstall={onOnlineInstall} onTranslate={onTranslate} />
       <section className="pack-export-card">
         <div>
           <h2>导出自己的整合包</h2>

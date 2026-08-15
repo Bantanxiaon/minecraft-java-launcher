@@ -36,6 +36,7 @@ import { HomeUpdateCard } from "./components/HomeUpdateCard";
 import { SplashScreen } from "./components/SplashScreen";
 import { VersionHighlightsModal } from "./components/VersionHighlightsModal";
 import { ChangelogModal } from "./components/ChangelogModal";
+import { TutorialModal } from "./components/TutorialModal";
 import { ErrorModal } from "./components/ErrorModal";
 import { IncompatibleModsModal } from "./components/IncompatibleModsModal";
 import { GlobalProgressBar } from "./components/GlobalProgressBar";
@@ -276,6 +277,7 @@ export default function App() {
     Record<number, Record<string, string>>
   >({});
   const [showChangelog, setShowChangelog] = useState(false);
+  const [showTutorial, setShowTutorial] = useState(false);
   const [showHighlights, setShowHighlights] = useState(false);
   const [errorModal, setErrorModal] = useState<{
     title: string;
@@ -1243,6 +1245,20 @@ export default function App() {
       setMessage(errorText(error, "在线模组安装失败。"));
     } finally {
       setDownloading(false);
+    }
+  }
+
+  async function translateSearchText(
+    text: string,
+  ): Promise<string | undefined> {
+    if (!isTauri()) return undefined;
+    try {
+      const translated = await invoke<string | null>("translate_search_text", {
+        text,
+      });
+      return translated ?? undefined;
+    } catch {
+      return undefined;
     }
   }
 
@@ -2670,6 +2686,13 @@ export default function App() {
         >
           更新日志
         </button>
+        <button
+          className="changelog-sidebar-button"
+          type="button"
+          onClick={() => setShowTutorial(true)}
+        >
+          使用教程
+        </button>
         <nav>
           {navItems.map((item, index) => {
             const Icon = navIcons[index] ?? Gamepad2;
@@ -3011,6 +3034,9 @@ export default function App() {
             {showChangelog ? (
               <ChangelogModal onClose={() => setShowChangelog(false)} />
             ) : null}
+            {showTutorial ? (
+              <TutorialModal onClose={() => setShowTutorial(false)} />
+            ) : null}
           </>
         ) : activeNav === "服务器" ? (
           <ServersPage
@@ -3069,6 +3095,7 @@ export default function App() {
             onOnlineQuery={setOnlineModQuery}
             onOnlineSearch={() => void searchOnline("mod")}
             onOnlineInstall={(project) => void installOnlineMod(project)}
+            onTranslate={translateSearchText}
             onInstallCurseforgeUrl={(url) => void installCurseforgeUrl(url)}
             onlineLoader={onlineModLoader}
             onlineVersion={onlineModVersion}
@@ -3099,6 +3126,7 @@ export default function App() {
             onOnlineQuery={setOnlinePackQuery}
             onOnlineSearch={() => void searchOnline("modpack")}
             onOnlineInstall={(project) => void installOnlinePack(project)}
+            onTranslate={translateSearchText}
             onExport={(instanceId, includeSaves) => void exportPack(instanceId, includeSaves)}
             archives={modpackArchives}
             javaRuntimes={javaRuntimes}
@@ -3191,13 +3219,19 @@ export default function App() {
       </main>
       <GlobalProgressBar
         visible={busy || downloading || activeDownloadJobs.length > 0}
-        message={message}
+        message={
+          activeDownloadJobs.length
+            ? `${activeDownloadJobs.length} 个下载目标 · 总进度 ${aggregateDownloadPercent ?? "—"}%${message ? ` · ${message}` : ""}`
+            : message || "正在处理…"
+        }
         progress={aggregateDownloadPercent}
         onClick={() => setShowDownloadDetails(true)}
       />
       {showDownloadDetails ? (
         <DownloadDetailsModal
           jobs={downloadJobs}
+          instanceProgress={downloadProgress}
+          instances={instances}
           onClose={() => setShowDownloadDetails(false)}
         />
       ) : null}

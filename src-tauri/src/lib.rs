@@ -2723,7 +2723,7 @@ async fn fetch_modrinth_json(url: reqwest::Url) -> Result<serde_json::Value, Lau
     {
         return Err(LauncherError::validation("仅允许 Modrinth 官方 API。"));
     }
-    let response = send_download_request(&shared_download_client()?, &url, None)
+    let response = send_download_request(&quick_http_client()?, &url, None)
         .await?
         .error_for_status()
         .map_err(|error| LauncherError::storage(format!("Modrinth API 返回错误：{error}")))?;
@@ -2751,6 +2751,7 @@ async fn search_modrinth_projects(
     game_version: Option<String>,
     loader: Option<String>,
 ) -> Result<Vec<OnlineProject>, LauncherError> {
+    log::info!("搜索 Modrinth：query={query} type={project_type}");
     if query.chars().count() > 80 || !matches!(project_type.as_str(), "mod" | "modpack") {
         return Err(LauncherError::validation("搜索条件无效。"));
     }
@@ -2829,7 +2830,7 @@ async fn search_modrinth_projects(
             })
         })
         .collect::<Vec<_>>();
-    localize_online_projects(&mut projects).await;
+    localize_titles(&mut projects);
     Ok(projects)
 }
 
@@ -2996,8 +2997,8 @@ async fn translate_text_mymemory(text: &str) -> Option<String> {
     url.query_pairs_mut()
         .append_pair("q", text)
         .append_pair("langpair", "en|zh-CN");
-    let client = shared_download_client().ok()?;
-    let result = tokio::time::timeout(Duration::from_secs(8), async {
+    let client = quick_http_client().ok()?;
+    let result = tokio::time::timeout(Duration::from_secs(6), async {
         let response = client.get(url).send().await.ok()?;
         if !response.status().is_success() {
             return None;
@@ -3016,74 +3017,62 @@ async fn translate_text_mymemory(text: &str) -> Option<String> {
     Some(result)
 }
 
-async fn localize_online_projects(projects: &mut Vec<OnlineProject>) {
+fn localize_titles(projects: &mut Vec<OnlineProject>) {
     static LOADED: AtomicBool = AtomicBool::new(false);
     if !LOADED.swap(true, Ordering::SeqCst) {
         load_translation_cache();
     }
-    let mut pending = Vec::new();
-    {
-        let Ok(cache) = translation_cache().lock() else {
-            return;
-        };
-        for project in projects.iter_mut() {
-            if !contains_cjk(&project.title) {
-                project.title_zh = dictionary_title(&project.title)
-                    .or_else(|| cache.get(&project.title).cloned());
-                if project.title_zh.is_none() && !project.title.is_empty() {
-                    pending.push(project.title.clone());
-                }
-            }
-            if !contains_cjk(&project.description) {
-                project.description_zh = cache.get(&project.description).cloned();
-                if project.description_zh.is_none()
-                    && !project.description.is_empty()
-                    && project.description.chars().count() <= 300
-                {
-                    pending.push(project.description.clone());
-                }
-            }
-        }
-    }
-    if pending.is_empty() {
+    let Ok(cache) = translation_cache().lock() else {
         return;
-    }
-    let mut unique = Vec::new();
-    let mut seen = HashSet::new();
-    for text in pending {
-        if seen.insert(text.clone()) && unique.len() < 60 {
-            unique.push(text);
+    };
+    for project in projects.iter_mut() {
+        if !contains_cjk(&project.title) && project.title_zh.is_none() {
+            project.title_zh =
+                dictionary_title(&project.title).or_else(|| cache.get(&project.title).cloned());
+        }
+        if !contains_cjk(&project.description) && project.description_zh.is_none() {
+            project.description_zh = cache.get(&project.description).cloned();
         }
     }
-    let results = futures_util::stream::iter(unique.into_iter().map(|text| async move {
-        (text.clone(), translate_text_mymemory(&text).await)
-    }))
-    .buffer_unordered(4)
-    .collect::<Vec<_>>()
-    .await;
-    if let Ok(mut cache) = translation_cache().lock() {
-        let mut changed = false;
-        for (text, translated) in results {
-            if let Some(translated) = translated {
-                if cache.insert(text, translated).is_none() {
-                    changed = true;
-                }
-            }
-        }
-        drop(cache);
-        if changed {
+}
+
+#[tauri::command]
+async fn translate_search_text(text: String) -> Result<Option<String>, LauncherError> {
+    log::info!("翻译搜索文本：len={}", text.chars().count());
+    let text = text.trim();
+    if text.is_empty() || text.chars().count() > 500 {
+        return Ok(None);
+    }
+    if contains_cjk(text) {
+        return Ok(Some(text.to_string()));
+    }
+    static LOADED: AtomicBool = AtomicBool::new(false);
+    if !LOADED.swap(true, Ordering::SeqCst) {
+        load_translation_cache();
+    }
+    if let Some(cached) = translation_cache()
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(text).cloned())
+    {
+        return Ok(Some(cached));
+    }
+    if let Some(dictionary) = dictionary_title(text) {
+        if let Ok(mut cache) = translation_cache().lock() {
+            cache.insert(text.to_string(), dictionary.clone());
             save_translation_cache();
         }
+        return Ok(Some(dictionary));
     }
-    if let Ok(cache) = translation_cache().lock() {
-        for project in projects.iter_mut() {
-            if project.title_zh.is_none() && !contains_cjk(&project.title) {
-                project.title_zh = cache.get(&project.title).cloned();
+    match translate_text_mymemory(text).await {
+        Some(translated) => {
+            if let Ok(mut cache) = translation_cache().lock() {
+                cache.insert(text.to_string(), translated.clone());
+                save_translation_cache();
             }
-            if project.description_zh.is_none() && !contains_cjk(&project.description) {
-                project.description_zh = cache.get(&project.description).cloned();
-            }
+            Ok(Some(translated))
         }
+        None => Ok(None),
     }
 }
 
@@ -3094,6 +3083,7 @@ async fn search_curseforge_projects(
     game_version: Option<String>,
     loader: Option<String>,
 ) -> Result<Vec<OnlineProject>, LauncherError> {
+    log::info!("搜索 CurseForge：query={query} type={project_type}");
     if query.chars().count() > 80 || !matches!(project_type.as_str(), "mod" | "modpack") {
         return Err(LauncherError::validation("搜索条件无效。"));
     }
@@ -3141,7 +3131,7 @@ async fn search_curseforge_projects(
             }
         }
     }
-    let response = send_download_request(&shared_download_client()?, &url, None)
+    let response = send_download_request(&quick_http_client()?, &url, None)
         .await?
         .error_for_status()
         .map_err(|error| {
@@ -3253,7 +3243,7 @@ async fn search_curseforge_projects(
             })
         })
         .collect::<Vec<_>>();
-    localize_online_projects(&mut projects).await;
+    localize_titles(&mut projects);
     Ok(projects)
 }
 
@@ -4142,6 +4132,7 @@ async fn install_modrinth_modpack(
     app: AppHandle,
     project_id: String,
 ) -> Result<ImportedModpack, LauncherError> {
+    log::info!("开始安装 Modrinth 整合包：project={project_id}");
     let (url, sha1, filename, size) =
         modrinth_primary_file(&project_id, None, None, ".mrpack").await?;
     let cache = launcher_data_directory()?
@@ -4923,6 +4914,7 @@ async fn download_curseforge_modpack(
     game_version: String,
     loader: String,
 ) -> Result<String, LauncherError> {
+    log::info!("开始下载 CurseForge 整合包：project={project_id}");
     let project_id = project_id.trim();
     if project_id.is_empty()
         || project_id.len() > 16
@@ -4961,6 +4953,7 @@ async fn import_local_pack(
     instance_id: i64,
     source_path: String,
 ) -> Result<ImportedLocalPack, LauncherError> {
+    log::info!("开始导入本地整合包：instance={instance_id} path={source_path}");
     let source = PathBuf::from(&source_path);
     let inspection = inspect_modpack_path(&source)?;
     if inspection.format == "modrinth" {
@@ -8810,6 +8803,22 @@ fn shared_download_client() -> Result<reqwest::Client, LauncherError> {
     Ok(CLIENT.get().cloned().unwrap_or(client))
 }
 
+fn quick_http_client() -> Result<reqwest::Client, LauncherError> {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client.clone());
+    }
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(20))
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+        .http1_only()
+        .build()
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let _ = CLIENT.set(client.clone());
+    Ok(CLIENT.get().cloned().unwrap_or(client))
+}
+
 fn should_emit_download_progress() -> bool {
     static LAST_EMIT: OnceLock<Mutex<std::time::Instant>> = OnceLock::new();
     let mutex =
@@ -10147,6 +10156,7 @@ pub fn run() {
             inspect_modpack,
             search_modrinth_projects,
             search_curseforge_projects,
+            translate_search_text,
             install_modrinth_mod,
             install_curseforge_url,
             install_curseforge_project,

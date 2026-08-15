@@ -2416,6 +2416,12 @@ button.global-progress-bar:hover {
   color: #a34d4d;
 }
 
+.download-detail-group-title {
+  margin: 14px 0 4px;
+  font-size: 13px;
+  color: #44515b;
+}
+
 @media (max-width: 900px) {
   .download-detail-grid {
     grid-template-columns: 1fr;
