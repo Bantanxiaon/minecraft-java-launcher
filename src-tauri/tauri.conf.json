@@ -58,7 +58,9 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/Bantanxiaon/minecraft-java-launcher/releases/latest/download/latest.json"
+        "https://github.com/Bantanxiaon/minecraft-java-launcher/releases/latest/download/latest.json",
+        "https://gh-proxy.com/https://github.com/Bantanxiaon/minecraft-java-launcher/releases/latest/download/latest.json",
+        "https://ghfast.top/https://github.com/Bantanxiaon/minecraft-java-launcher/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDkwOTFFMzIyRDI3MDQzM0EKUldRNlEzRFNJdU9Sa09WdW9NbUlLY1BKckNyeC9FTE4xc3F5Nll6L1k1S3R3ejlsSEdMcXV4V1QK",
       "windows": {

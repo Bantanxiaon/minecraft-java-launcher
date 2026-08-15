@@ -9,8 +9,11 @@ const configPath = new URL("../src-tauri/tauri.conf.json", import.meta.url);
 const config = JSON.parse(await readFile(configPath, "utf8"));
 config.plugins ??= {};
 config.plugins.updater ??= {};
+const base = "https://github.com/" + repository;
 config.plugins.updater.endpoints = [
-  "https://github.com/" + repository + "/releases/latest/download/latest.json",
+  base + "/releases/latest/download/latest.json",
+  "https://gh-proxy.com/" + base + "/releases/latest/download/latest.json",
+  "https://ghfast.top/" + base + "/releases/latest/download/latest.json",
 ];
 await writeFile(configPath, JSON.stringify(config, null, 2) + "\n", "utf8");
 console.log("Updater endpoint configured for " + repository);
