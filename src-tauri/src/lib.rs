@@ -2686,9 +2686,9 @@ async fn auto_install_missing_mod_dependencies(
     let mut failures = Vec::new();
     let auto_fill_started = std::time::Instant::now();
     for missing_id in missing {
-        if auto_fill_started.elapsed().as_secs() >= 20 {
+        if auto_fill_started.elapsed().as_secs() >= 60 {
             failures.push(
-                "自动补齐超过 20 秒时间预算，已停止尝试；可先启动游戏，稍后重试补齐。"
+                "自动补齐超过 60 秒时间预算，已停止尝试；可先启动游戏，稍后重试补齐。"
                     .to_string(),
             );
             break;
@@ -2698,7 +2698,7 @@ async fn auto_install_missing_mod_dependencies(
             .map(|names| names.join("、"))
             .unwrap_or_default();
         let resolved = tokio::time::timeout(
-            Duration::from_secs(10),
+            Duration::from_secs(30),
             resolve_missing_mod_dependency(app, instance_id, &missing_id),
         )
         .await;
