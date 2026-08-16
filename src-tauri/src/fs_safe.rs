@@ -48,6 +48,51 @@ pub fn ensure_canonical_child(root: &Path, target: &Path) -> Result<PathBuf, Lau
     Ok(target)
 }
 
+/// 文件移动事务：每次 move 记录反向操作，rollback 时 LIFO 回滚。
+pub struct FsTransaction {
+    pub id: String,
+    undo: Vec<(PathBuf, PathBuf)>,
+    committed: bool,
+}
+
+impl FsTransaction {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            undo: Vec::new(),
+            committed: false,
+        }
+    }
+
+    pub fn move_with_undo(&mut self, from: &Path, to: &Path) -> Result<(), LauncherError> {
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| LauncherError::storage(error.to_string()))?;
+        }
+        std::fs::rename(from, to).map_err(|error| LauncherError::storage(error.to_string()))?;
+        self.undo.push((to.to_path_buf(), from.to_path_buf()));
+        Ok(())
+    }
+
+    pub fn commit(mut self) {
+        log::info!("fs transaction committed: {}", self.id);
+        self.committed = true;
+    }
+
+    pub fn rollback(mut self) -> Result<(), LauncherError> {
+        if self.committed {
+            return Ok(());
+        }
+        while let Some((moved_to, original)) = self.undo.pop() {
+            if moved_to.exists() && !original.exists() {
+                std::fs::rename(&moved_to, &original)
+                    .map_err(|error| LauncherError::storage(error.to_string()))?;
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ArchiveLimits {
     pub max_entries: usize,
@@ -209,6 +254,21 @@ mod tests {
             extract_zip_securely(&zip_path, &dir.join("out"), &ArchiveLimits::default()).unwrap();
         assert_eq!(report.files, 2);
         assert!(dir.join("out").join("mods").join("a.jar").is_file());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fs_transaction_rolls_back_moves_in_reverse_order() {
+        let dir = std::env::temp_dir().join(format!("sh-tx-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.txt");
+        let b = dir.join("b.txt");
+        std::fs::write(&a, "a").unwrap();
+        let mut tx = FsTransaction::new("t1");
+        tx.move_with_undo(&a, &b).unwrap();
+        assert!(!a.exists() && b.exists());
+        tx.rollback().unwrap();
+        assert!(a.exists() && !b.exists(), "回滚应恢复原路径");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

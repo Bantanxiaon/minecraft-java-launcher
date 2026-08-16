@@ -4262,6 +4262,12 @@ async fn resolve_modrinth_project_id(input: &str) -> Result<String, LauncherErro
     {
         return Ok((*project_id).to_string());
     }
+    // SHA-1 反向查项目：Modrinth 官方 version_file 端点，属于可信 hash 身份。
+    if input.len() == 40 && input.chars().all(|value| value.is_ascii_hexdigit()) {
+        if let Some(project_id) = modrinth_project_by_hash(input).await {
+            return Ok(project_id);
+        }
+    }
     let candidates = modrinth_slug_candidates(input);
     for candidate in &candidates {
         if candidate.is_empty()
@@ -4305,29 +4311,60 @@ async fn resolve_modrinth_project_id(input: &str) -> Result<String, LauncherErro
         let Some(hits) = value.get("hits").and_then(|value| value.as_array()) else {
             continue;
         };
-        for hit in hits {
-            let slug = hit.get("slug").and_then(|value| value.as_str());
-            let project_id = hit.get("project_id").and_then(|value| value.as_str());
-            let title = hit.get("title").and_then(|value| value.as_str());
-            let title_matches = title.is_some_and(|value| {
-                value.eq_ignore_ascii_case(input)
-                    || value
-                        .replace([' ', '_'], "-")
-                        .eq_ignore_ascii_case(candidate)
-            });
-            if slug.is_some_and(|value| value.eq_ignore_ascii_case(candidate))
-                || project_id.is_some_and(|value| value.eq_ignore_ascii_case(input))
-                || title_matches
-            {
-                if let Some(project_id) = project_id {
-                    return Ok(project_id.to_string());
-                }
-            }
+        let matches = exact_candidate_matches(candidate, hits);
+        if matches.len() == 1 {
+            return Ok(matches[0].clone());
+        }
+        if matches.len() > 1 {
+            return Err(LauncherError::validation(format!(
+                "“{input}”在 Modrinth 存在多个同名项目，无法安全自动安装。候选：{}。请手动选择。",
+                matches.join("、")
+            )));
         }
     }
     Err(LauncherError::validation(format!(
         "没有在 Modrinth 找到前置模组“{input}”。请确认模组来源，或手动安装该前置模组。"
     )))
+}
+
+fn exact_candidate_matches(candidate: &str, hits: &[serde_json::Value]) -> Vec<String> {
+    let mut matches = Vec::new();
+    for hit in hits {
+        let slug = hit.get("slug").and_then(|value| value.as_str());
+        let project_id = hit.get("project_id").and_then(|value| value.as_str());
+        let title = hit.get("title").and_then(|value| value.as_str());
+        let title_matches = title.is_some_and(|value| {
+            value.eq_ignore_ascii_case(candidate)
+                || value
+                    .replace([' ', '_'], "-")
+                    .eq_ignore_ascii_case(candidate)
+        });
+        if slug.is_some_and(|value| value.eq_ignore_ascii_case(candidate))
+            || project_id.is_some_and(|value| value.eq_ignore_ascii_case(candidate))
+            || title_matches
+        {
+            if let Some(project_id) = project_id {
+                if !matches.contains(&project_id.to_string()) {
+                    matches.push(project_id.to_string());
+                }
+            }
+        }
+    }
+    matches
+}
+
+async fn modrinth_project_by_hash(sha1: &str) -> Option<String> {
+    let url = reqwest::Url::parse(&format!(
+        "https://api.modrinth.com/v2/version_file/{sha1}?algorithm=sha1"
+    ))
+    .ok()?;
+    let value = fetch_modrinth_json(url).await.ok()?;
+    let project_id = value.get("project_id").and_then(|value| value.as_str())?;
+    let project_id = project_id.to_string();
+    (3..=64)
+        .contains(&project_id.len())
+        .then_some(project_id)
+        .filter(|id| id.chars().all(|value| value.is_ascii_alphanumeric()))
 }
 
 /// 统一解析并安装缺失前置：优先 CurseForge 索引的 Mod ID 精确匹配，其次 Modrinth。
@@ -7569,13 +7606,36 @@ fn clone_instance(
 ) -> Result<Instance, LauncherError> {
     validate_instance_field(name.trim(), 64)?;
     let connection = open_database(&app)?;
-    let (source_root, version, loader, loader_version, status): (String,String,String,Option<String>,String) = connection.query_row(
-        "SELECT root_path,game_version,loader_type,loader_version,status FROM instances WHERE id=?1",
+    if running_games()
+        .lock()
+        .map_err(|_| LauncherError::storage("无法读取游戏运行状态。"))?
+        .contains_key(&instance_id)
+    {
+        return Err(LauncherError::validation("实例正在运行，不能复制。"));
+    }
+    let (source_root, version, loader, loader_version, memory_mb, resolution): (
+        String,
+        String,
+        String,
+        Option<String>,
+        i64,
+        Option<String>,
+    ) = connection.query_row(
+        "SELECT root_path,game_version,loader_type,loader_version,memory_mb,resolution FROM instances WHERE id=?1",
         [instance_id],
-        |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?)),
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        },
     ).map_err(|_| LauncherError::validation("实例不存在。"))?;
     drop(connection);
-    let mut cloned = create_instance_profile(app.clone(), name, version, loader)?;
+    let mut cloned = create_instance_profile(app.clone(), name, version, loader.clone())?;
     let source_game = PathBuf::from(source_root).join(".minecraft");
     let target_game = PathBuf::from(&cloned.root_path).join(".minecraft");
     for directory in [
@@ -7585,17 +7645,31 @@ fn clone_instance(
         "resourcepacks",
         "shaderpacks",
         "versions",
+        "libraries",
+        "assets",
     ] {
         copy_directory_contents(&source_game.join(directory), &target_game.join(directory))?;
     }
+    let cloned_status = if loader == "vanilla" {
+        "missing"
+    } else {
+        "loader_missing"
+    };
     let connection = open_database(&app)?;
     connection
         .execute(
-            "UPDATE instances SET loader_version=?1,status=?2,source='clone' WHERE id=?3",
-            params![loader_version, status, cloned.id],
+            "UPDATE instances SET loader_version=?1,memory_mb=?2,resolution=?3,status=?4,source='clone' WHERE id=?5",
+            params![
+                loader_version,
+                memory_mb,
+                resolution,
+                cloned_status,
+                cloned.id
+            ],
         )
         .map_err(|error| LauncherError::storage(error.to_string()))?;
-    cloned.status = status;
+    cloned.memory_mb = memory_mb;
+    cloned.status = cloned_status.into();
     cloned.source = "clone".into();
     Ok(cloned)
 }
@@ -7650,9 +7724,9 @@ fn delete_instance_to_backup(
         .join("deleted-instances");
     fs::create_dir_all(&backup_root).map_err(|error| LauncherError::storage(error.to_string()))?;
     let destination = backup_root.join(format!("{}-{}", instance_id, unique_timestamp()));
+    let mut transaction = fs_safe::FsTransaction::new(format!("delete-instance-{instance_id}"));
     if root.exists() {
-        fs::rename(&root, &destination)
-            .map_err(|error| LauncherError::storage(format!("移动实例备份失败：{error}")))?;
+        transaction.move_with_undo(&root, &destination)?;
     }
     let size_bytes = storage::directory_size(&destination);
     let instance_json = serde_json::to_string(&serde_json::json!({
@@ -7665,17 +7739,22 @@ fn delete_instance_to_backup(
         "source": source,
     }))
     .map_err(|error| LauncherError::storage(error.to_string()))?;
-    storage::record_deleted_instance(
+    if let Err(error) = storage::record_deleted_instance(
         &connection,
         instance_id,
         &name,
         &destination.to_string_lossy(),
         size_bytes,
         &instance_json,
-    )?;
-    connection
-        .execute("DELETE FROM instances WHERE id=?1", [instance_id])
-        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    ) {
+        transaction.rollback()?;
+        return Err(error);
+    }
+    if let Err(error) = connection.execute("DELETE FROM instances WHERE id=?1", [instance_id]) {
+        transaction.rollback()?;
+        return Err(LauncherError::storage(error.to_string()));
+    }
+    transaction.commit();
     Ok(RemovedContent {
         id: instance_id,
         backup_path: destination.to_string_lossy().to_string(),
@@ -11023,6 +11102,8 @@ pub fn run() {
             storage::list_deleted_instances,
             storage::restore_deleted_instance,
             storage::permanently_delete_instance_backup,
+            storage::list_staging_operations,
+            storage::cleanup_staging_operation,
             content_reconcile::reconcile_scan,
             content_reconcile::reconcile_apply,
             list_removed_backups,
@@ -11857,6 +11938,63 @@ side="BOTH"
             "存在 kotlinforforge 文件时不应再报缺失"
         );
         assert!(with_kotlin.contains("patchouli"));
+    }
+
+    #[test]
+    fn resolver_rejects_ambiguous_same_slug_projects() {
+        let hits = vec![
+            serde_json::json!({"project_id": "AAA", "slug": "bookshelf", "title": "Bookshelf"}),
+            serde_json::json!({"project_id": "BBB", "slug": "bookshelf", "title": "Bookshelf"}),
+        ];
+        let matches = exact_candidate_matches("bookshelf", &hits);
+        assert_eq!(
+            matches.len(),
+            2,
+            "同名多项目必须返回 AMBIGUOUS 候选而非自动安装第一条"
+        );
+    }
+
+    #[test]
+    fn resolver_unknown_mod_without_exact_match_returns_no_candidates() {
+        // “第 11 个未知 Mod”：不在别名表，modId 与任何 provider slug 都不同。
+        let hits = vec![
+            serde_json::json!({"project_id": "uy4Cnpcm", "slug": "bookshelf-lib", "title": "Bookshelf-Lib"}),
+            serde_json::json!({"project_id": "1OE8wbN0", "slug": "prism-lib", "title": "Prism-Lib"}),
+            serde_json::json!({"project_id": "SzzJttH8", "slug": "timeless-and-classics-zero", "title": "Timeless and Classics Zero"}),
+        ];
+        let matches = exact_candidate_matches("totally_unknown_mod_xyz", &hits);
+        assert!(matches.is_empty(), "未知 modId 不得被静默解析");
+    }
+
+    #[test]
+    fn download_retry_does_not_repeat_not_found() {
+        use std::io::{Read as _, Write as _};
+        tauri::async_runtime::block_on(async {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counter = requests.clone();
+            let handle = std::thread::spawn(move || {
+                if let Ok((mut stream, _)) = listener.accept() {
+                    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let mut buffer = [0u8; 1024];
+                    let _ = stream.read(&mut buffer);
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                }
+            });
+            let url = reqwest::Url::parse(&format!("http://127.0.0.1:{port}/missing")).unwrap();
+            let client = quick_http_client().unwrap();
+            let result = send_download_request(&client, &url, None).await;
+            assert!(result.is_err(), "404 应返回失败");
+            let _ = handle.join();
+            assert_eq!(
+                requests.load(std::sync::atomic::Ordering::SeqCst),
+                1,
+                "404 不得反复重试"
+            );
+        });
     }
 
     #[test]

@@ -97,6 +97,15 @@ pub struct DeletedInstance {
     pub loader_type: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StagingOperation {
+    pub id: String,
+    pub path: String,
+    pub bytes: u64,
+    pub age_seconds: i64,
+}
+
 pub(crate) fn directory_size(path: &Path) -> u64 {
     let mut total = 0u64;
     for entry in walkdir::WalkDir::new(path)
@@ -509,4 +518,56 @@ pub(crate) fn record_deleted_instance(
         )
         .map_err(|error| LauncherError::storage(error.to_string()))?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn list_staging_operations() -> Result<Vec<StagingOperation>, LauncherError> {
+    let root = launcher_data_directory()?;
+    let mut operations = Vec::new();
+    let roots = vec![root.join("instances").join(".staging")];
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0);
+    for staging_root in roots {
+        if !staging_root.is_dir() {
+            continue;
+        }
+        for entry in std::fs::read_dir(&staging_root)
+            .map_err(|error| LauncherError::storage(error.to_string()))?
+            .flatten()
+        {
+            let path = entry.path();
+            let modified = entry
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_secs() as i64)
+                .unwrap_or(now);
+            operations.push(StagingOperation {
+                id: entry.file_name().to_string_lossy().to_string(),
+                bytes: directory_size(&path),
+                path: path.to_string_lossy().to_string(),
+                age_seconds: (now - modified).max(0),
+            });
+        }
+    }
+    operations.sort_by_key(|operation| std::cmp::Reverse(operation.age_seconds));
+    Ok(operations)
+}
+
+#[tauri::command]
+pub fn cleanup_staging_operation(id: String) -> Result<u64, LauncherError> {
+    let root = launcher_data_directory()?;
+    let staging = root.join("instances").join(".staging").join(&id);
+    if !staging.starts_with(root.join("instances").join(".staging")) || id.contains("..") {
+        return Err(LauncherError::validation("staging 路径不安全。"));
+    }
+    let bytes = directory_size(&staging);
+    if staging.is_dir() {
+        std::fs::remove_dir_all(&staging)
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+    }
+    Ok(bytes)
 }
