@@ -13641,6 +13641,50 @@ pub fn run() {
             if std::env::var("SH_STARTUP_BENCH_EXIT").is_ok_and(|value| value == "1") {
                 _app.handle().exit(0);
             }
+            // 启动窗口兜底：前端交接若失败（例如主窗口 show 在个别环境下未生效），
+            // 1.5 秒后由 Rust 强制显示主窗口；只有确认主窗口可见才关闭启动小窗，
+            // 绝不允许出现“小窗已关、主窗口还隐藏”的无窗口状态。
+            let e2e_mode = [
+                "LAUNCHER_E2E_WINDOW",
+                "LAUNCHER_E2E_VERSION",
+                "LAUNCHER_E2E_LAUNCH_VERSION",
+                "LAUNCHER_E2E_LOADER",
+                "LAUNCHER_E2E_CLONE_SOURCE",
+                "LAUNCHER_E2E_PACK_UPDATE_INSTANCE",
+                "LAUNCHER_E2E_MULTIPLAYER",
+                "LAUNCHER_E2E_ACCOUNT",
+            ]
+            .iter()
+            .any(|name| std::env::var_os(name).is_some());
+            if !e2e_mode {
+                if let (Some(main_window), Some(splash_window)) = (
+                    _app.get_webview_window("main"),
+                    _app.get_webview_window("splash"),
+                ) {
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(1500)).await;
+                        let mut shown = false;
+                        for _ in 0..20 {
+                            if main_window.is_visible().unwrap_or(false) {
+                                shown = true;
+                                break;
+                            }
+                            if main_window.show().is_ok() {
+                                shown = true;
+                                break;
+                            }
+                            tokio::time::sleep(Duration::from_millis(300)).await;
+                        }
+                        if shown {
+                            let _ = splash_window.close();
+                        } else {
+                            log::warn!(
+                                "startup watchdog: main window failed to show; keeping splash open"
+                            );
+                        }
+                    });
+                }
+            }
             #[cfg(debug_assertions)]
             {
                 let app = _app;

@@ -417,14 +417,11 @@ export default function App() {
           const mainWindow = getCurrentWindow();
           try {
             await mainWindow.show();
-          } catch {
-            // 窗口已可见时忽略
-          }
-          try {
             const splash = await WebviewWindow.getByLabel("splash");
             await splash?.close();
           } catch {
-            // Splash 可能已不存在
+            // 主窗口显示失败时绝不能关闭小窗（否则会变成“无可见窗口”）；
+            // 交给 Rust 侧看门狗兜底重试显示。
           }
         }
       }
