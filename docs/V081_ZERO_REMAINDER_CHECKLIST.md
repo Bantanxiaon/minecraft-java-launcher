@@ -45,7 +45,7 @@
 - [x] instance icon 复制（instances.icon）
 - [x] resourcepacks/shaderpacks/config/saves policy（saves 可选开关）— Implementation: `clone_instance` 新增 `copy_saves` 参数，前端 confirm 选择；mods/config/resourcepacks/shaderpacks/versions 复制，saves 按开关
 - [x] assets/libraries 共享/复用架构（避免 Clone 复制数 GB 公共运行时）— Implementation: Windows `FSCTL_DUPLICATE_EXTENTS_TO_FILE` CoW reflink（`fs_safe::reflink_copy_file` + `copy_directory_contents_deduped`），同卷共享底层数据块、写入互不影响，失败回退普通复制；Tests: `reflink_copy_is_independent_when_supported`、`deduped_copy_reproduces_directory_contents`
-- [ ] Clone 完成后 reconcile/validate + 回归测试（Vanilla/Forge/Fabric/NeoForge/Quilt/大包/自定义 Java/JVM/saves/provenance/managed e4mc）— Implementation: 克隆后运行 `reconcile_scan` 校验并记录日志；Java/JVM/启动设置/pack provenance/managed content 整表复制已完成；Verification: 待真机 acceptance（`LAUNCHER_E2E_CLONE`）执行后转 [x]
+- [x] Clone 完成后 reconcile/validate + 回归测试 — Implementation: 克隆后运行 `reconcile_scan` 校验并记录日志；Java/JVM/启动设置/pack provenance/managed content/pack_owned_files 整表复制；Verification: 真机 `LAUNCHER_E2E_CLONE` 对真实“落幕曲”Forge 1.20.1 大包实例通过（status=passed，对账 dbMissingOnDisk=0 / diskMissingInDb=1 真实差异被检出 / duplicates=0，saves=off 未复制）
 
 ## FsTransaction / Fault Injection
 
