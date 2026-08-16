@@ -14,6 +14,20 @@ pub struct OperationMetadata {
     pub file_count: u64,
     pub bytes: u64,
     pub error: Option<String>,
+    #[serde(default)]
+    pub source_path: Option<String>,
+    #[serde(default)]
+    pub pack_name: Option<String>,
+    #[serde(default)]
+    pub pack_version: Option<String>,
+    #[serde(default)]
+    pub game_version: Option<String>,
+    #[serde(default)]
+    pub loader_type: Option<String>,
+    #[serde(default)]
+    pub total_files: Option<u64>,
+    #[serde(default)]
+    pub completed_files: Option<u64>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -24,8 +38,37 @@ fn staging_root() -> Result<PathBuf, LauncherError> {
         .join(".staging"))
 }
 
+pub fn validate_operation_id(id: &str) -> Result<(), LauncherError> {
+    if id.is_empty()
+        || id.len() > 128
+        || id.contains("..")
+        || id.contains('\\')
+        || id.contains('/')
+        || !id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+    {
+        return Err(LauncherError::validation("操作 ID 不安全。"));
+    }
+    Ok(())
+}
+
+/// 每个操作独占的 staging 目录：文件镜像、overrides 解压与 operation.json 元数据。
+pub fn operation_staging_directory(id: &str) -> Result<PathBuf, LauncherError> {
+    validate_operation_id(id)?;
+    Ok(staging_root()?.join(id))
+}
+
+pub fn operation_files_directory(id: &str) -> Result<PathBuf, LauncherError> {
+    Ok(operation_staging_directory(id)?.join("files"))
+}
+
+pub fn operation_overrides_directory(id: &str) -> Result<PathBuf, LauncherError> {
+    Ok(operation_staging_directory(id)?.join("overrides"))
+}
+
 pub fn write_operation_metadata(metadata: &OperationMetadata) -> Result<(), LauncherError> {
-    let directory = staging_root()?.join(&metadata.id);
+    let directory = operation_staging_directory(&metadata.id)?;
     std::fs::create_dir_all(&directory)
         .map_err(|error| LauncherError::storage(error.to_string()))?;
     let bytes = serde_json::to_vec_pretty(metadata)
@@ -35,16 +78,32 @@ pub fn write_operation_metadata(metadata: &OperationMetadata) -> Result<(), Laun
 }
 
 pub fn read_operation_metadata(id: &str) -> Result<Option<OperationMetadata>, LauncherError> {
-    if id.contains("..") || id.contains('\\') || id.contains('/') {
-        return Err(LauncherError::validation("操作 ID 不安全。"));
-    }
-    let path = staging_root()?.join(id).join("operation.json");
+    validate_operation_id(id)?;
+    let path = operation_staging_directory(id)?.join("operation.json");
     let Ok(bytes) = std::fs::read(&path) else {
         return Ok(None);
     };
     Ok(Some(serde_json::from_slice(&bytes).map_err(|error| {
         LauncherError::storage(error.to_string())
     })?))
+}
+
+/// 更新既有操作的状态（崩溃恢复用），保留其余字段。
+pub fn mark_operation_state(
+    id: &str,
+    state: &str,
+    instance_id: Option<i64>,
+    error: Option<String>,
+) -> Result<(), LauncherError> {
+    let mut metadata = read_operation_metadata(id)?
+        .ok_or_else(|| LauncherError::validation("找不到这个操作，无法更新状态。"))?;
+    metadata.state = state.into();
+    if instance_id.is_some() {
+        metadata.instance_id = instance_id;
+    }
+    metadata.error = error;
+    metadata.updated_at = crate::chrono_like_timestamp();
+    write_operation_metadata(&metadata)
 }
 
 #[tauri::command]
@@ -72,10 +131,8 @@ pub fn list_operations() -> Result<Vec<OperationMetadata>, LauncherError> {
 #[tauri::command]
 pub fn cleanup_operation(id: String) -> Result<u64, LauncherError> {
     let id = id.as_str();
-    if id.contains("..") || id.contains('\\') || id.contains('/') {
-        return Err(LauncherError::validation("操作 ID 不安全。"));
-    }
-    let directory = staging_root()?.join(id);
+    validate_operation_id(id)?;
+    let directory = operation_staging_directory(id)?;
     let bytes = crate::storage::directory_size(&directory);
     if directory.is_dir() {
         std::fs::remove_dir_all(&directory)
@@ -100,6 +157,13 @@ mod tests {
             file_count: 3,
             bytes: 42,
             error: None,
+            source_path: Some("pack.mrpack".into()),
+            pack_name: Some("Test Pack".into()),
+            pack_version: None,
+            game_version: Some("1.20.1".into()),
+            loader_type: Some("forge".into()),
+            total_files: Some(3),
+            completed_files: Some(1),
             created_at: chrono_like_timestamp(),
             updated_at: chrono_like_timestamp(),
         })

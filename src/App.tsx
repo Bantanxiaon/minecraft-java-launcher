@@ -1650,9 +1650,13 @@ export default function App() {
     setBusy(true);
     setMessage("正在复制实例…");
     try {
+      const copySaves = window.confirm(
+        `要同时复制“${instance.name}”的存档（saves）吗？\n\n确定 = 连同存档一起复制\n取消 = 只复制游戏、模组与配置`,
+      );
       const cloned = await invoke<Instance>("clone_instance", {
         instanceId: instance.id,
         name: `${instance.name} 副本`,
+        copySaves,
       });
       setInstances((existing) => [cloned, ...existing]);
       setMessage(`实例已复制：${cloned.name}`);

@@ -48,6 +48,96 @@ pub fn ensure_canonical_child(root: &Path, target: &Path) -> Result<PathBuf, Lau
     Ok(target)
 }
 
+/// Windows 上尝试 Copy-on-Write reflink（`FSCTL_DUPLICATE_EXTENTS_TO_FILE`），
+/// 成功返回 true：共享底层数据块但写入互不影响，用于克隆实例的 libraries/assets 去重。
+/// 不支持或失败时返回 Ok(false)，调用方回退为普通复制。
+#[cfg(windows)]
+pub fn reflink_copy_file(source: &Path, target: &Path) -> Result<bool, LauncherError> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_READ, OPEN_EXISTING,
+    };
+    use windows_sys::Win32::System::Ioctl::{
+        DUPLICATE_EXTENTS_DATA, FSCTL_DUPLICATE_EXTENTS_TO_FILE,
+    };
+    use windows_sys::Win32::System::IO::DeviceIoControl;
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+    }
+    let wide = |value: &Path| -> Vec<u16> {
+        value
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    };
+    let source_wide = wide(source);
+    let target_wide = wide(target);
+    unsafe {
+        let source_handle = CreateFileW(
+            source_wide.as_ptr(),
+            FILE_GENERIC_READ,
+            FILE_SHARE_READ,
+            std::ptr::null_mut(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        );
+        if source_handle == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE
+            || source_handle.is_null()
+        {
+            return Ok(false);
+        }
+        let target_handle = CreateFileW(
+            target_wide.as_ptr(),
+            FILE_GENERIC_WRITE,
+            FILE_SHARE_READ,
+            std::ptr::null_mut(),
+            windows_sys::Win32::Storage::FileSystem::CREATE_NEW,
+            0,
+            std::ptr::null_mut(),
+        );
+        if target_handle == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE
+            || target_handle.is_null()
+        {
+            windows_sys::Win32::Foundation::CloseHandle(source_handle);
+            return Ok(false);
+        }
+        let data = DUPLICATE_EXTENTS_DATA {
+            FileHandle: source_handle,
+            SourceFileOffset: 0,
+            TargetFileOffset: 0,
+            ByteCount: std::fs::metadata(source)
+                .map(|metadata| metadata.len() as i64)
+                .unwrap_or(0),
+        };
+        let mut returned: u32 = 0;
+        let ok = DeviceIoControl(
+            target_handle,
+            FSCTL_DUPLICATE_EXTENTS_TO_FILE,
+            &data as *const _ as *const _,
+            std::mem::size_of::<DUPLICATE_EXTENTS_DATA>() as u32,
+            std::ptr::null_mut(),
+            0,
+            &mut returned,
+            std::ptr::null_mut(),
+        );
+        windows_sys::Win32::Foundation::CloseHandle(source_handle);
+        windows_sys::Win32::Foundation::CloseHandle(target_handle);
+        if ok == 0 {
+            let _ = std::fs::remove_file(target);
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+#[cfg(not(windows))]
+pub fn reflink_copy_file(_source: &Path, _target: &Path) -> Result<bool, LauncherError> {
+    Ok(false)
+}
+
 /// 文件移动事务：每次 move 记录反向操作，rollback 时 LIFO 回滚。
 pub struct FsTransaction {
     pub id: String,
@@ -269,6 +359,26 @@ mod tests {
         assert!(!a.exists() && b.exists());
         tx.rollback().unwrap();
         assert!(a.exists() && !b.exists(), "回滚应恢复原路径");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reflink_copy_is_independent_when_supported() {
+        let dir = std::env::temp_dir().join(format!("sh-reflink-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("source.bin");
+        let target = dir.join("target.bin");
+        std::fs::write(&source, vec![7u8; 4096]).unwrap();
+        match reflink_copy_file(&source, &target) {
+            Ok(true) => {
+                assert_eq!(std::fs::read(&target).unwrap(), vec![7u8; 4096]);
+                // CoW 语义：改写目标不得影响源文件（reflink 不是 hardlink）。
+                std::fs::write(&target, vec![9u8; 4096]).unwrap();
+                assert_eq!(std::fs::read(&source).unwrap(), vec![7u8; 4096]);
+            }
+            Ok(false) => {}
+            Err(error) => panic!("reflink 不应报错：{}", error.message),
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

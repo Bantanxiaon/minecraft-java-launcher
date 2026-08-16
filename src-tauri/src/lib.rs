@@ -210,6 +210,7 @@ pub(crate) fn legacy_offline_uuid(player_name: &str) -> String {
 mod acceptance;
 mod auth;
 mod content_reconcile;
+mod content_update;
 mod diagnostics;
 mod download_perf;
 mod exports;
@@ -564,6 +565,32 @@ fn run_migrations(connection: &mut Connection) -> rusqlite::Result<()> {
             "INSERT INTO migrations(version, applied_at) VALUES(8, strftime('%s','now'))",
             [],
         )?;
+    }
+    let has_v9: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM migrations WHERE version=9)",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_v9 {
+        let tx = connection.transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS pack_owned_files (
+                id INTEGER PRIMARY KEY,
+                instance_id INTEGER NOT NULL,
+                relative_path TEXT NOT NULL,
+                sha1 TEXT,
+                sha256 TEXT NOT NULL,
+                source TEXT NOT NULL,
+                installed_at TEXT NOT NULL,
+                UNIQUE(instance_id, relative_path),
+                FOREIGN KEY(instance_id) REFERENCES instances(id) ON DELETE CASCADE
+            );",
+        )?;
+        tx.execute(
+            "INSERT INTO migrations(version, applied_at) VALUES(9, strftime('%s','now'))",
+            [],
+        )?;
+        tx.commit()?;
     }
     // 补齐离线账户的标准 UUID 与旧 SHA-256 UUID，仅处理缺失的旧数据。
     {
@@ -4900,49 +4927,21 @@ async fn update_modrinth_mod(
     app: AppHandle,
     content_id: i64,
 ) -> Result<ContentItem, LauncherError> {
-    let connection = open_database(&app)?;
-    let (mut item, root) = content_location(&connection, content_id)?;
-    if item.source != "modrinth" {
-        return Err(LauncherError::validation(
-            "只有从 Modrinth 安装的模组可以在线更新。",
-        ));
-    }
-    let (game_version, loader): (String, String) = connection
-        .query_row(
-            "SELECT game_version,loader_type FROM instances WHERE id=?1",
-            [item.instance_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .map_err(|_| LauncherError::validation("目标实例不存在。"))?;
-    let mut metadata = item
-        .metadata_json
-        .as_deref()
-        .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
-        .ok_or_else(|| LauncherError::validation("这个模组缺少在线来源信息，无法自动更新。"))?;
-    let project_id = metadata
-        .get("modrinthProjectId")
-        .and_then(|value| value.as_str())
-        .ok_or_else(|| LauncherError::validation("这个模组缺少 Modrinth 项目编号。"))?
-        .to_string();
-    drop(connection);
-
-    let (url, sha1, filename, size) =
-        modrinth_primary_file(&project_id, Some(&game_version), Some(&loader), ".jar").await?;
-    if metadata
-        .get("modrinthSha1")
-        .and_then(|value| value.as_str())
-        .is_some_and(|installed| installed.eq_ignore_ascii_case(&sha1))
-    {
+    let Some(preparation) = prepare_mod_update(&app, content_id).await? else {
+        let connection = open_database(&app)?;
+        let (item, _) = content_location(&connection, content_id)?;
         return Ok(item);
-    }
-    let cache = launcher_data_directory()?
-        .join("cache")
-        .join("modrinth")
-        .join(format!("{}-{filename}", &sha1[..12]));
-    download_verified_file(&app, item.instance_id, &url, &sha1, Some(size), &cache).await?;
-    let inspection = inspect_mod_jar_path(&cache)?;
-    ensure_loader_compatible(&loader, &inspection.loader_type)?;
-
+    };
+    let ModUpdatePreparation {
+        mut item,
+        root,
+        project_id,
+        sha1,
+        filename,
+        cache,
+        inspection,
+        mut plan,
+    } = preparation;
     let mods = root.join(".minecraft").join("mods");
     let active_directory = if item.enabled {
         mods.clone()
@@ -4988,12 +4987,12 @@ async fn update_modrinth_mod(
         )));
     }
 
-    metadata = serde_json::to_value(&inspection)
+    let mut metadata = serde_json::to_value(&inspection)
         .map_err(|error| LauncherError::storage(error.to_string()))?;
     if let Some(object) = metadata.as_object_mut() {
         object.insert(
             "modrinthProjectId".into(),
-            serde_json::Value::String(project_id),
+            serde_json::Value::String(project_id.clone()),
         );
         object.insert("modrinthSha1".into(), serde_json::Value::String(sha1));
     }
@@ -5012,7 +5011,128 @@ async fn update_modrinth_mod(
     item.hash = inspection.sha256;
     item.metadata_json = Some(metadata_json);
     item.installed_at = installed_at;
+    // 依赖变化：新增依赖尽量自动补齐（失败记录为冲突，不静默覆盖用户内容）。
+    for dependency in &plan.installs {
+        match resolve_missing_mod_dependency(&app, item.instance_id, dependency).await {
+            Ok(_) => {
+                log::info!("模组更新后已自动补齐依赖：{dependency}");
+            }
+            Err(error) => {
+                plan.conflicts
+                    .push(format!("依赖“{dependency}”自动补齐失败：{}", error.message));
+                log::warn!(
+                    "模组更新后自动补齐依赖失败（{dependency}）：{}",
+                    error.message
+                );
+            }
+        }
+    }
+    let _ = app.emit(
+        "mod-update-plan",
+        serde_json::json!({ "contentId": content_id, "plan": plan }),
+    );
     Ok(item)
+}
+
+struct ModUpdatePreparation {
+    item: ContentItem,
+    root: PathBuf,
+    project_id: String,
+    sha1: String,
+    filename: String,
+    cache: PathBuf,
+    inspection: ModInspection,
+    plan: content_update::ContentUpdatePlan,
+}
+
+async fn prepare_mod_update(
+    app: &AppHandle,
+    content_id: i64,
+) -> Result<Option<ModUpdatePreparation>, LauncherError> {
+    let connection = open_database(app)?;
+    let (item, root) = content_location(&connection, content_id)?;
+    if item.source != "modrinth" {
+        return Err(LauncherError::validation(
+            "只有从 Modrinth 安装的模组可以在线更新。",
+        ));
+    }
+    let (game_version, loader): (String, String) = connection
+        .query_row(
+            "SELECT game_version,loader_type FROM instances WHERE id=?1",
+            [item.instance_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|_| LauncherError::validation("目标实例不存在。"))?;
+    let metadata = item
+        .metadata_json
+        .as_deref()
+        .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+        .ok_or_else(|| LauncherError::validation("这个模组缺少在线来源信息，无法自动更新。"))?;
+    let project_id = metadata
+        .get("modrinthProjectId")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| LauncherError::validation("这个模组缺少 Modrinth 项目编号。"))?
+        .to_string();
+    drop(connection);
+
+    let (url, sha1, filename, size) =
+        modrinth_primary_file(&project_id, Some(&game_version), Some(&loader), ".jar").await?;
+    if metadata
+        .get("modrinthSha1")
+        .and_then(|value| value.as_str())
+        .is_some_and(|installed| installed.eq_ignore_ascii_case(&sha1))
+    {
+        return Ok(None);
+    }
+    let cache = launcher_data_directory()?
+        .join("cache")
+        .join("modrinth")
+        .join(format!("{}-{filename}", &sha1[..12]));
+    download_verified_file(app, item.instance_id, &url, &sha1, Some(size), &cache).await?;
+    let inspection = inspect_mod_jar_path(&cache)?;
+    ensure_loader_compatible(&loader, &inspection.loader_type)?;
+    ensure_game_version_compatible(&game_version, &inspection)?;
+
+    let old_dependencies = metadata
+        .get("dependencies")
+        .map(json_requirement_strings)
+        .unwrap_or_default();
+    let (installs, removals) =
+        content_update::dependency_delta(&old_dependencies, &inspection.dependencies);
+    let dependency_changes = installs
+        .iter()
+        .map(|dependency| format!("新增依赖：{dependency}"))
+        .chain(
+            removals
+                .iter()
+                .map(|dependency| format!("不再依赖：{dependency}")),
+        )
+        .collect();
+    let plan = content_update::ContentUpdatePlan {
+        updates: vec![content_update::PlannedFile {
+            action: content_update::PlanAction::Update,
+            relative_path: format!("mods/{}", item.file_name),
+            file_name: filename.clone(),
+            old_sha256: Some(item.hash.clone()),
+            new_sha1: Some(sha1.clone()),
+            new_sha256: Some(inspection.sha256.clone()),
+            reason: None,
+        }],
+        installs,
+        removals,
+        dependency_changes,
+        conflicts: Vec::new(),
+    };
+    Ok(Some(ModUpdatePreparation {
+        item,
+        root,
+        project_id,
+        sha1,
+        filename,
+        cache,
+        inspection,
+        plan,
+    }))
 }
 
 #[tauri::command]
@@ -5028,11 +5148,16 @@ async fn install_modrinth_modpack(
         .join("modrinth")
         .join(format!("{}-{filename}", &sha1[..12]));
     download_verified_file(&app, 0, &url, &sha1, Some(size), &cache).await?;
-    import_modrinth_pack(app, cache.to_string_lossy().to_string()).await
+    import_modrinth_pack(app, cache.to_string_lossy().to_string(), None).await
 }
 
 fn pack_target_path(game: &Path, value: &str) -> Result<PathBuf, LauncherError> {
     let relative = safe_relative_download_path(value)?;
+    validate_pack_target_relative(&relative)?;
+    Ok(game.join(relative))
+}
+
+fn validate_pack_target_relative(relative: &Path) -> Result<(), LauncherError> {
     let first = relative
         .components()
         .next()
@@ -5048,7 +5173,7 @@ fn pack_target_path(game: &Path, value: &str) -> Result<PathBuf, LauncherError> 
     ) {
         return Err(LauncherError::validation("整合包试图写入启动器管理目录。"));
     }
-    Ok(game.join(relative))
+    Ok(())
 }
 
 fn move_pack_collision_to_backup(game: &Path, output: &Path) -> Result<(), LauncherError> {
@@ -5064,112 +5189,29 @@ fn move_pack_collision_to_backup(game: &Path, output: &Path) -> Result<(), Launc
         .map_err(|error| LauncherError::storage(format!("备份被覆盖文件失败：{error}")))
 }
 
-fn extract_pack_overrides(source: &Path, game: &Path) -> Result<usize, LauncherError> {
+/// 将整合包 overrides 安全解压到 staging 目录，返回 overrides 根（无 overrides 时为 None）。
+fn stage_pack_overrides(
+    source: &Path,
+    staging_root: &Path,
+) -> Result<Option<PathBuf>, LauncherError> {
     let limits = fs_safe::ArchiveLimits::default();
-    let staging = game
-        .join(".staging")
-        .join(format!("overrides-{}", unique_timestamp()));
-    let report = fs_safe::extract_zip_securely(source, &staging, &limits)?;
+    let report = fs_safe::extract_zip_securely(source, staging_root, &limits)?;
     let overrides_root = ["overrides", "client-overrides"]
         .iter()
-        .map(|name| staging.join(name))
-        .find(|path| path.is_dir())
-        .unwrap_or_else(|| staging.clone());
-    let mut count = 0usize;
-    let mut pending = vec![overrides_root.clone()];
-    while let Some(current) = pending.pop() {
-        for entry in fs::read_dir(&current)
-            .map_err(|error| LauncherError::storage(error.to_string()))?
-            .flatten()
-        {
-            let path = entry.path();
-            if entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
-                pending.push(path);
-                continue;
-            }
-            let Ok(relative) = path.strip_prefix(&overrides_root) else {
-                continue;
-            };
-            if relative.as_os_str().is_empty() {
-                continue;
-            }
-            let output = pack_target_path(game, &relative.to_string_lossy())?;
-            if let Some(parent) = output.parent() {
-                fs::create_dir_all(parent)
-                    .map_err(|error| LauncherError::storage(error.to_string()))?;
-            }
-            if output.exists() {
-                move_pack_collision_to_backup(game, &output)?;
-            }
-            fs::copy(&path, &output).map_err(|error| LauncherError::storage(error.to_string()))?;
-            count += 1;
-        }
+        .map(|name| staging_root.join(name))
+        .find(|path| path.is_dir());
+    if overrides_root.is_none() {
+        log::info!("整合包不含 overrides：entries={}", report.entries);
     }
-    let _ = fs::remove_dir_all(&staging);
-    log::info!(
-        "整合包 overrides 解压完成：entries={} files={}",
-        report.entries,
-        count
-    );
-    Ok(count)
+    Ok(overrides_root)
 }
 
 #[tauri::command]
 async fn import_modrinth_pack(
     app: AppHandle,
     source_path: String,
+    operation_id: Option<String>,
 ) -> Result<ImportedModpack, LauncherError> {
-    let operation_id = format!("modrinth-{}", unique_timestamp());
-    let now = chrono_like_timestamp();
-    modpack_ops::write_operation_metadata(&modpack_ops::OperationMetadata {
-        id: operation_id.clone(),
-        kind: "modrinth".into(),
-        state: "running".into(),
-        instance_id: None,
-        file_count: 0,
-        bytes: 0,
-        error: None,
-        created_at: now.clone(),
-        updated_at: now,
-    })?;
-    match import_modrinth_pack_inner(app, source_path).await {
-        Ok(result) => {
-            modpack_ops::write_operation_metadata(&modpack_ops::OperationMetadata {
-                id: operation_id.clone(),
-                kind: "modrinth".into(),
-                state: "committed".into(),
-                instance_id: Some(result.instance.id),
-                file_count: result.downloaded_files as u64,
-                bytes: 0,
-                error: None,
-                created_at: chrono_like_timestamp(),
-                updated_at: chrono_like_timestamp(),
-            })?;
-            let _ = modpack_ops::cleanup_operation(operation_id.clone());
-            Ok(result)
-        }
-        Err(error) => {
-            modpack_ops::write_operation_metadata(&modpack_ops::OperationMetadata {
-                id: operation_id.clone(),
-                kind: "modrinth".into(),
-                state: "failed".into(),
-                instance_id: None,
-                file_count: 0,
-                bytes: 0,
-                error: Some(error.message.clone()),
-                created_at: chrono_like_timestamp(),
-                updated_at: chrono_like_timestamp(),
-            })?;
-            Err(error)
-        }
-    }
-}
-
-async fn import_modrinth_pack_inner(
-    app: AppHandle,
-    source_path: String,
-) -> Result<ImportedModpack, LauncherError> {
-    download_cancel_flag().store(false, Ordering::Release);
     let source = PathBuf::from(&source_path);
     let inspection = inspect_modpack_path(&source)?;
     if inspection.format != "modrinth" {
@@ -5186,15 +5228,159 @@ async fn import_modrinth_pack_inner(
         .clone()
         .ok_or_else(|| LauncherError::validation("整合包未声明受支持的加载器。"))?;
     validate_loader_type(&loader_type)?;
-    let instance = create_instance_profile(
-        app.clone(),
-        inspection
-            .name
-            .clone()
-            .unwrap_or_else(|| "Imported Modpack".into()),
-        game_version.clone(),
-        loader_type.clone(),
-    )?;
+    let operation_id = match operation_id {
+        Some(id) => {
+            modpack_ops::validate_operation_id(&id)?;
+            if let Some(existing) = modpack_ops::read_operation_metadata(&id)? {
+                if existing.kind != "modrinth" {
+                    return Err(LauncherError::validation(
+                        "操作类型不匹配，无法继续该导入。",
+                    ));
+                }
+                if existing.state == "committed" {
+                    return Err(LauncherError::validation("该导入已经完成，无需重试。"));
+                }
+            }
+            id
+        }
+        None => format!("modrinth-{}", unique_timestamp()),
+    };
+    let created_at = chrono_like_timestamp();
+    let write_state = |state: &str,
+                       instance_id: Option<i64>,
+                       completed: u64,
+                       total: u64,
+                       error: Option<String>|
+     -> Result<(), LauncherError> {
+        modpack_ops::write_operation_metadata(&modpack_ops::OperationMetadata {
+            id: operation_id.clone(),
+            kind: "modrinth".into(),
+            state: state.into(),
+            instance_id,
+            file_count: completed,
+            bytes: 0,
+            error,
+            source_path: Some(source_path.clone()),
+            pack_name: inspection.name.clone(),
+            pack_version: inspection.version.clone(),
+            game_version: Some(game_version.clone()),
+            loader_type: Some(loader_type.clone()),
+            total_files: Some(total),
+            completed_files: Some(completed),
+            created_at: created_at.clone(),
+            updated_at: chrono_like_timestamp(),
+        })
+    };
+    write_state("running", None, 0, 0, None)?;
+    match import_modrinth_pack_inner(app, source, operation_id.clone()).await {
+        Ok(result) => {
+            let _ = write_state(
+                "committed",
+                Some(result.instance.id),
+                result.downloaded_files as u64,
+                result.downloaded_files as u64,
+                None,
+            );
+            let _ = modpack_ops::cleanup_operation(operation_id);
+            Ok(result)
+        }
+        Err(error) => {
+            let _ = write_state("failed", None, 0, 0, Some(error.message.clone()));
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
+async fn retry_modpack_operation(
+    app: AppHandle,
+    operation_id: String,
+) -> Result<ImportedModpack, LauncherError> {
+    let metadata = modpack_ops::read_operation_metadata(&operation_id)?
+        .ok_or_else(|| LauncherError::validation("找不到这个导入操作。"))?;
+    if metadata.kind != "modrinth" {
+        return Err(LauncherError::validation(
+            "该操作不是 Modrinth 整合包导入。",
+        ));
+    }
+    if metadata.state == "committed" {
+        return Err(LauncherError::validation("该导入已经完成，无需重试。"));
+    }
+    let source_path = metadata
+        .source_path
+        .ok_or_else(|| LauncherError::validation("缺少原始整合包路径，无法重试。"))?;
+    if !Path::new(&source_path).is_file() {
+        return Err(LauncherError::validation(
+            "原始整合包文件已不存在，请重新选择文件导入。",
+        ));
+    }
+    import_modrinth_pack(app, source_path, Some(operation_id)).await
+}
+
+#[tauri::command]
+async fn update_modrinth_modpack(
+    app: AppHandle,
+    instance_id: i64,
+    source_path: String,
+) -> Result<content_update::ModpackUpdatePlan, LauncherError> {
+    let connection = open_database(&app)?;
+    if running_games()
+        .lock()
+        .map_err(|_| LauncherError::storage("无法读取游戏运行状态。"))?
+        .contains_key(&instance_id)
+    {
+        return Err(LauncherError::validation("实例正在运行，不能更新整合包。"));
+    }
+    let (root_path, game_version, loader_type): (String, String, String) = connection
+        .query_row(
+            "SELECT root_path,game_version,loader_type FROM instances WHERE id=?1",
+            [instance_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(|_| LauncherError::validation("目标实例不存在。"))?;
+    let mut owned: HashMap<String, (Option<String>, String)> = HashMap::new();
+    {
+        let mut statement = connection
+            .prepare("SELECT relative_path,sha1,sha256 FROM pack_owned_files WHERE instance_id=?1")
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        let rows = statement
+            .query_map([instance_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    (row.get::<_, Option<String>>(1)?, row.get::<_, String>(2)?),
+                ))
+            })
+            .map_err(|error| LauncherError::storage(error.to_string()))?
+            .filter_map(Result::ok);
+        for (relative, value) in rows {
+            owned.insert(relative, value);
+        }
+    }
+    drop(connection);
+
+    let source = PathBuf::from(&source_path);
+    let inspection = inspect_modpack_path(&source)?;
+    if inspection.format != "modrinth" {
+        return Err(LauncherError::validation(
+            "整合包更新仅支持标准 Modrinth .mrpack。",
+        ));
+    }
+    let pack_game = inspection
+        .game_version
+        .clone()
+        .ok_or_else(|| LauncherError::validation("整合包未声明 Minecraft 版本。"))?;
+    let pack_loader = inspection
+        .loader_type
+        .clone()
+        .ok_or_else(|| LauncherError::validation("整合包未声明加载器。"))?;
+    if !pack_game.eq_ignore_ascii_case(&game_version)
+        || !pack_loader.eq_ignore_ascii_case(&loader_type)
+    {
+        return Err(LauncherError::validation(format!(
+            "整合包环境（Minecraft {pack_game} / {pack_loader}）与实例（Minecraft {game_version} / {loader_type}）不匹配，已拒绝更新。"
+        )));
+    }
+
     let file =
         fs::File::open(&source).map_err(|error| LauncherError::storage(error.to_string()))?;
     let mut archive =
@@ -5208,9 +5394,468 @@ async fn import_modrinth_pack_inner(
         .get("files")
         .and_then(|value| value.as_array())
         .ok_or_else(|| LauncherError::validation("Modrinth index 缺少 files。"))?;
-    let game = PathBuf::from(&instance.root_path).join(".minecraft");
-    let mut downloaded_files = 0usize;
+
+    let game = PathBuf::from(&root_path).join(".minecraft");
+    let operation_id = format!("modpack-update-{}", unique_timestamp());
+    let files_root = modpack_ops::operation_files_directory(&operation_id)?;
+    fs::create_dir_all(&files_root).map_err(|error| LauncherError::storage(error.to_string()))?;
+    let mut new_files: Vec<(String, Option<String>, String, PathBuf)> = Vec::new();
     for entry in files {
+        if download_cancel_flag().load(Ordering::Acquire) {
+            return Err(LauncherError::validation("已取消更新。"));
+        }
+        if entry
+            .pointer("/env/client")
+            .and_then(|value| value.as_str())
+            == Some("unsupported")
+        {
+            continue;
+        }
+        let relative = entry
+            .get("path")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| LauncherError::validation("整合包文件路径缺失。"))?
+            .replace('\\', "/");
+        let relative_path = safe_relative_download_path(&relative)?;
+        validate_pack_target_relative(&relative_path)?;
+        let sha1 = entry
+            .pointer("/hashes/sha1")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| LauncherError::validation("整合包文件缺少 SHA-1。"))?
+            .to_string();
+        let size = entry.get("fileSize").and_then(|value| value.as_u64());
+        let target = files_root.join(&relative_path);
+        let already_verified = tokio::fs::try_exists(&target).await.unwrap_or(false)
+            && sha1_file(&target)
+                .await
+                .is_ok_and(|hash| hash.eq_ignore_ascii_case(&sha1));
+        if !already_verified {
+            let downloads = entry
+                .get("downloads")
+                .and_then(|value| value.as_array())
+                .ok_or_else(|| LauncherError::validation("整合包文件缺少下载源。"))?;
+            let url = downloads
+                .iter()
+                .filter_map(|value| value.as_str())
+                .find(|value| validate_resource_url(value).is_ok())
+                .ok_or_else(|| {
+                    LauncherError::validation("整合包文件没有受信任的 HTTPS 下载源。")
+                })?;
+            let _ = tokio::fs::remove_file(&target).await;
+            download_verified_file(&app, instance_id, url, &sha1, size, &target).await?;
+        }
+        new_files.push((relative, Some(sha1), sha256_file_sync(&target)?, target));
+    }
+    let overrides_root = modpack_ops::operation_overrides_directory(&operation_id)?;
+    let overrides_dir = stage_pack_overrides(&source, &overrides_root)?;
+    if let Some(root) = &overrides_dir {
+        for entry in walkdir::WalkDir::new(root)
+            .follow_links(false)
+            .into_iter()
+            .flatten()
+        {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let Ok(relative) = entry.path().strip_prefix(root) else {
+                continue;
+            };
+            if relative.as_os_str().is_empty() {
+                continue;
+            }
+            new_files.push((
+                relative.to_string_lossy().replace('\\', "/"),
+                None,
+                sha256_file_sync(entry.path())?,
+                entry.path().to_path_buf(),
+            ));
+        }
+    }
+
+    // 无副作用分类，生成更新计划。
+    let mut plan = content_update::ModpackUpdatePlan {
+        instance_id,
+        pack_version: inspection.version.clone(),
+        ..content_update::ModpackUpdatePlan::default()
+    };
+    let mut apply_actions: Vec<(String, PlanActionKind)> = Vec::new();
+    let mut expected_disk: HashMap<String, String> = HashMap::new();
+    let mut staged_paths: HashMap<String, PathBuf> = HashMap::new();
+    for (relative, sha1, new_sha256, staged) in &new_files {
+        let output = pack_target_path(&game, relative)?;
+        let disk_sha256 = if output.is_file() {
+            Some(sha256_file_sync(&output)?)
+        } else {
+            None
+        };
+        let lower = relative.to_ascii_lowercase();
+        let state = content_update::PackFileState {
+            pack_sha256: owned.get(relative).map(|(_, hash)| hash.clone()),
+            disk_sha256: disk_sha256.clone(),
+            is_save: lower.starts_with("saves/"),
+            is_config: lower.starts_with("config/"),
+            allow_saves_overwrite: false,
+        };
+        let classification = content_update::classify_pack_file(new_sha256, &state);
+        let (action, reason) = match classification {
+            content_update::PackFileClassification::Install => {
+                (content_update::PlanAction::Install, None)
+            }
+            content_update::PackFileClassification::Update => {
+                (content_update::PlanAction::Update, None)
+            }
+            content_update::PackFileClassification::Skip => {
+                (content_update::PlanAction::Skip, None)
+            }
+            content_update::PackFileClassification::Conflict(reason) => {
+                (content_update::PlanAction::Conflict, Some(reason))
+            }
+        };
+        plan.files.push(content_update::PlannedFile {
+            action,
+            relative_path: relative.clone(),
+            file_name: relative.rsplit('/').next().unwrap_or(relative).to_string(),
+            old_sha256: disk_sha256.clone(),
+            new_sha1: sha1.clone(),
+            new_sha256: Some(new_sha256.clone()),
+            reason: reason.clone(),
+        });
+        match action {
+            content_update::PlanAction::Install => {
+                plan.installs.push(relative.clone());
+                apply_actions.push((relative.clone(), PlanActionKind::Install));
+                staged_paths.insert(relative.clone(), staged.clone());
+            }
+            content_update::PlanAction::Update => {
+                plan.updates.push(relative.clone());
+                apply_actions.push((relative.clone(), PlanActionKind::Update));
+                expected_disk.insert(relative.clone(), disk_sha256.unwrap_or_default());
+                staged_paths.insert(relative.clone(), staged.clone());
+            }
+            content_update::PlanAction::Conflict => {
+                plan.conflicts.push(reason.unwrap_or_default());
+                plan.protected_user_files.push(relative.clone());
+            }
+            _ => {}
+        }
+    }
+    let new_set: HashSet<String> = new_files
+        .iter()
+        .map(|(path, _, _, _)| path.clone())
+        .collect();
+    for (relative, (_, pack_sha256)) in &owned {
+        if new_set.contains(relative) {
+            continue;
+        }
+        let output = pack_target_path(&game, relative)?;
+        let disk_sha256 = if output.is_file() {
+            Some(sha256_file_sync(&output)?)
+        } else {
+            None
+        };
+        let action = match disk_sha256.as_deref() {
+            None => continue,
+            Some(disk) if disk.eq_ignore_ascii_case(pack_sha256) => {
+                content_update::PlanAction::Remove
+            }
+            Some(_) => content_update::PlanAction::Conflict,
+        };
+        let reason = if action == content_update::PlanAction::Conflict {
+            Some("整合包已移除该文件，但文件已被用户修改，保留现有版本。".to_string())
+        } else {
+            None
+        };
+        plan.files.push(content_update::PlannedFile {
+            action,
+            relative_path: relative.clone(),
+            file_name: relative.rsplit('/').next().unwrap_or(relative).to_string(),
+            old_sha256: disk_sha256.clone(),
+            new_sha1: None,
+            new_sha256: None,
+            reason: reason.clone(),
+        });
+        match action {
+            content_update::PlanAction::Remove => {
+                plan.removals.push(relative.clone());
+                apply_actions.push((relative.clone(), PlanActionKind::Remove));
+                expected_disk.insert(relative.clone(), disk_sha256.unwrap_or_default());
+            }
+            content_update::PlanAction::Conflict => {
+                plan.conflicts.push(reason.unwrap_or_default());
+                plan.protected_user_files.push(relative.clone());
+            }
+            _ => {}
+        }
+    }
+
+    if plan.is_noop() || apply_actions.is_empty() {
+        let _ = modpack_ops::cleanup_operation(operation_id);
+        return Ok(plan);
+    }
+
+    // 应用阶段：备份目录 + FsTransaction 文件移动 + rusqlite 事务 DB 双写。
+    let backup_root = game
+        .join(".launcher-backup")
+        .join(format!("pack-update-{}", unique_timestamp()));
+    fs::create_dir_all(&backup_root).map_err(|error| LauncherError::storage(error.to_string()))?;
+    let mut transaction = fs_safe::FsTransaction::new(format!("modpack-update-{instance_id}"));
+    let apply_files = (|| -> Result<(), LauncherError> {
+        for (relative, kind) in &apply_actions {
+            let target = pack_target_path(&game, relative)?;
+            match kind {
+                PlanActionKind::Install => {
+                    if target.exists() {
+                        return Err(LauncherError::validation(format!(
+                            "文件“{relative}”在检查后出现，已中止更新以保护数据。"
+                        )));
+                    }
+                    let staged = staged_paths
+                        .get(relative)
+                        .ok_or_else(|| LauncherError::validation("缺少 staging 文件。"))?;
+                    transaction.move_with_undo(staged, &target)?;
+                }
+                PlanActionKind::Update => {
+                    let current = sha256_file_sync(&target)?;
+                    let expected = expected_disk.get(relative).cloned().unwrap_or_default();
+                    if !current.eq_ignore_ascii_case(&expected) {
+                        return Err(LauncherError::validation(format!(
+                            "文件“{relative}”在检查后被修改，已中止更新以保护数据。"
+                        )));
+                    }
+                    let backup = backup_root.join(relative);
+                    transaction.move_with_undo(&target, &backup)?;
+                    let staged = staged_paths
+                        .get(relative)
+                        .ok_or_else(|| LauncherError::validation("缺少 staging 文件。"))?;
+                    transaction.move_with_undo(staged, &target)?;
+                }
+                PlanActionKind::Remove => {
+                    let current = sha256_file_sync(&target)?;
+                    let expected = expected_disk.get(relative).cloned().unwrap_or_default();
+                    if !current.eq_ignore_ascii_case(&expected) {
+                        return Err(LauncherError::validation(format!(
+                            "文件“{relative}”在检查后被修改，已中止更新以保护数据。"
+                        )));
+                    }
+                    transaction.move_with_undo(&target, &backup_root.join(relative))?;
+                }
+            }
+        }
+        Ok(())
+    })();
+    if let Err(error) = apply_files {
+        let _ = transaction.rollback();
+        let _ = modpack_ops::cleanup_operation(operation_id);
+        return Err(error);
+    }
+
+    let mut connection = open_database(&app)?;
+    let record_plan = (|| -> Result<(), LauncherError> {
+        let db_transaction = connection
+            .transaction()
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        {
+            let mut owned_statement = db_transaction
+                .prepare(
+                    "INSERT INTO pack_owned_files(instance_id,relative_path,sha1,sha256,source,installed_at)
+                     VALUES(?1,?2,?3,?4,'modrinth',?5)
+                     ON CONFLICT(instance_id,relative_path) DO UPDATE SET
+                       sha1=excluded.sha1, sha256=excluded.sha256, installed_at=excluded.installed_at",
+                )
+                .map_err(|error| LauncherError::storage(error.to_string()))?;
+            let mut remove_statement = db_transaction
+                .prepare("DELETE FROM pack_owned_files WHERE instance_id=?1 AND relative_path=?2")
+                .map_err(|error| LauncherError::storage(error.to_string()))?;
+            for (relative, kind) in &apply_actions {
+                match kind {
+                    PlanActionKind::Remove => {
+                        remove_statement
+                            .execute(params![instance_id, relative])
+                            .map_err(|error| LauncherError::storage(error.to_string()))?;
+                        sync_mod_content_row(
+                            &db_transaction,
+                            instance_id,
+                            relative,
+                            ModSync::Remove,
+                            &game,
+                        )?;
+                    }
+                    _ => {
+                        let (sha1, sha256) = new_files
+                            .iter()
+                            .find(|(path, _, _, _)| path == relative)
+                            .map(|(_, sha1, sha256, _)| (sha1.clone(), sha256.clone()))
+                            .ok_or_else(|| LauncherError::validation("新文件哈希缺失。"))?;
+                        owned_statement
+                            .execute(params![
+                                instance_id,
+                                relative,
+                                sha1,
+                                sha256,
+                                chrono_like_timestamp()
+                            ])
+                            .map_err(|error| LauncherError::storage(error.to_string()))?;
+                        sync_mod_content_row(
+                            &db_transaction,
+                            instance_id,
+                            relative,
+                            ModSync::Upsert,
+                            &game,
+                        )?;
+                    }
+                }
+            }
+            db_transaction
+                .execute(
+                    "INSERT INTO instance_pack_source(instance_id,provider,pack_version,installed_at)
+                     VALUES(?1,'modrinth',?2,?3)
+                     ON CONFLICT(instance_id) DO UPDATE SET pack_version=excluded.pack_version, installed_at=excluded.installed_at",
+                    params![
+                        instance_id,
+                        inspection.version,
+                        chrono_like_timestamp()
+                    ],
+                )
+                .map_err(|error| LauncherError::storage(error.to_string()))?;
+        }
+        db_transaction
+            .commit()
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        Ok(())
+    })();
+    if let Err(error) = record_plan {
+        drop(connection);
+        let _ = transaction.rollback();
+        let _ = modpack_ops::cleanup_operation(operation_id);
+        return Err(error);
+    }
+    transaction.commit();
+    let _ = modpack_ops::cleanup_operation(operation_id);
+    Ok(plan)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PlanActionKind {
+    Install,
+    Update,
+    Remove,
+}
+
+#[derive(Clone, Copy)]
+enum ModSync {
+    Upsert,
+    Remove,
+}
+
+fn sync_mod_content_row(
+    transaction: &rusqlite::Transaction<'_>,
+    instance_id: i64,
+    relative: &str,
+    sync: ModSync,
+    game: &Path,
+) -> Result<(), LauncherError> {
+    let lower = relative.replace('\\', "/").to_ascii_lowercase();
+    let is_mod_jar = lower.starts_with("mods/")
+        && Path::new(relative)
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.eq_ignore_ascii_case("jar"));
+    if !is_mod_jar {
+        return Ok(());
+    }
+    let file_name = relative.rsplit('/').next().unwrap_or(relative).to_string();
+    match sync {
+        ModSync::Remove => {
+            transaction
+                .execute(
+                    "DELETE FROM content_items WHERE instance_id=?1 AND kind='mod' AND file_name=?2",
+                    params![instance_id, file_name],
+                )
+                .map_err(|error| LauncherError::storage(error.to_string()))?;
+            Ok(())
+        }
+        ModSync::Upsert => {
+            let path = pack_target_path(game, relative)?;
+            if !path.is_file() {
+                return Ok(());
+            }
+            let inspection = inspect_mod_jar_path(&path)?;
+            let metadata = serde_json::to_string(&inspection)
+                .map_err(|error| LauncherError::storage(error.to_string()))?;
+            let updated = transaction
+                .execute(
+                    "UPDATE content_items SET file_name=?1,hash=?2,metadata_json=?3,source='modrinth',installed_at=?4
+                     WHERE instance_id=?5 AND kind='mod' AND file_name=?6",
+                    params![
+                        file_name,
+                        &inspection.sha256,
+                        &metadata,
+                        chrono_like_timestamp(),
+                        instance_id,
+                        &file_name
+                    ],
+                )
+                .map_err(|error| LauncherError::storage(error.to_string()))?;
+            if updated == 0 {
+                transaction
+                    .execute(
+                        "INSERT OR IGNORE INTO content_items(instance_id,kind,file_name,hash,metadata_json,enabled,source,installed_at)
+                         VALUES(?1,'mod',?2,?3,?4,1,'modrinth',?5)",
+                        params![
+                            instance_id,
+                            &file_name,
+                            &inspection.sha256,
+                            &metadata,
+                            chrono_like_timestamp()
+                        ],
+                    )
+                    .map_err(|error| LauncherError::storage(error.to_string()))?;
+            }
+            Ok(())
+        }
+    }
+}
+
+async fn import_modrinth_pack_inner(
+    app: AppHandle,
+    source: PathBuf,
+    operation_id: String,
+) -> Result<ImportedModpack, LauncherError> {
+    download_cancel_flag().store(false, Ordering::Release);
+    let inspection = inspect_modpack_path(&source)?;
+    let game_version = inspection
+        .game_version
+        .clone()
+        .ok_or_else(|| LauncherError::validation("整合包未声明 Minecraft 版本。"))?;
+    let loader_type = inspection
+        .loader_type
+        .clone()
+        .ok_or_else(|| LauncherError::validation("整合包未声明受支持的加载器。"))?;
+    validate_loader_type(&loader_type)?;
+    let file =
+        fs::File::open(&source).map_err(|error| LauncherError::storage(error.to_string()))?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|error| LauncherError::validation(error.to_string()))?;
+    let bytes = read_descriptor(&mut archive, "modrinth.index.json")?
+        .ok_or_else(|| LauncherError::validation("Modrinth index 缺失。"))?;
+    drop(archive);
+    let index: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|error| LauncherError::validation(error.to_string()))?;
+    let files = index
+        .get("files")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| LauncherError::validation("Modrinth index 缺少 files。"))?;
+
+    // 阶段一：全部文件下载到 staging，已校验完成的文件复用（崩溃恢复的“继续”语义）。
+    let files_root = modpack_ops::operation_files_directory(&operation_id)?;
+    fs::create_dir_all(&files_root).map_err(|error| LauncherError::storage(error.to_string()))?;
+    let mut downloaded_files = 0u64;
+    let mut mod_rows: Vec<(String, String, String)> = Vec::new();
+    let mut owned_rows: Vec<(String, Option<String>, String)> = Vec::new();
+    for entry in files {
+        if download_cancel_flag().load(Ordering::Acquire) {
+            return Err(LauncherError::validation("已取消导入。"));
+        }
         if entry
             .pointer("/env/client")
             .and_then(|value| value.as_str())
@@ -5222,7 +5867,9 @@ async fn import_modrinth_pack_inner(
             .get("path")
             .and_then(|value| value.as_str())
             .ok_or_else(|| LauncherError::validation("整合包文件路径缺失。"))?;
-        let target = pack_target_path(&game, relative)?;
+        let relative_path = safe_relative_download_path(relative)?;
+        validate_pack_target_relative(&relative_path)?;
+        let target = files_root.join(&relative_path);
         let sha1 = entry
             .pointer("/hashes/sha1")
             .and_then(|value| value.as_str())
@@ -5237,40 +5884,183 @@ async fn import_modrinth_pack_inner(
             .filter_map(|value| value.as_str())
             .find(|value| validate_resource_url(value).is_ok())
             .ok_or_else(|| LauncherError::validation("整合包文件没有受信任的 HTTPS 下载源。"))?;
-        download_verified_file(&app, instance.id, url, sha1, size, &target).await?;
-        downloaded_files += 1;
-        if target
-            .extension()
-            .and_then(|value| value.to_str())
-            .is_some_and(|value| value.eq_ignore_ascii_case("jar"))
-            && relative
-                .replace('\\', "/")
-                .to_ascii_lowercase()
-                .starts_with("mods/")
+        let already_verified = tokio::fs::try_exists(&target).await.unwrap_or(false)
+            && sha1_file(&target)
+                .await
+                .is_ok_and(|hash| hash.eq_ignore_ascii_case(sha1));
+        if !already_verified {
+            let _ = tokio::fs::remove_file(&target).await;
+            download_verified_file(&app, 0, url, sha1, size, &target).await?;
+            downloaded_files += 1;
+        }
+        owned_rows.push((
+            relative.replace('\\', "/"),
+            Some(sha1.to_string()),
+            sha256_file_sync(&target)?,
+        ));
+        let normalized = relative.replace('\\', "/").to_ascii_lowercase();
+        if normalized.starts_with("mods/")
+            && target
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| value.eq_ignore_ascii_case("jar"))
         {
             let mod_info = inspect_mod_jar_path(&target)?;
             ensure_loader_compatible(&loader_type, &mod_info.loader_type)?;
             ensure_game_version_compatible(&game_version, &mod_info)?;
-            let connection = open_database(&app)?;
             let metadata = serde_json::to_string(&mod_info)
                 .map_err(|error| LauncherError::storage(error.to_string()))?;
-            connection.execute("INSERT OR IGNORE INTO content_items(instance_id,kind,file_name,hash,metadata_json,enabled,source,installed_at) VALUES(?1,'mod',?2,?3,?4,1,'modrinth',?5)", params![instance.id, target.file_name().and_then(|value| value.to_str()).unwrap_or("mod.jar"), mod_info.sha256, metadata, chrono_like_timestamp()]).map_err(|error| LauncherError::storage(error.to_string()))?;
+            mod_rows.push((
+                target
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("mod.jar")
+                    .to_string(),
+                mod_info.sha256,
+                metadata,
+            ));
         }
     }
-    let override_files = extract_pack_overrides(&source, &game)?;
+
+    // 阶段二：overrides 安全解压到 staging。
+    let overrides_root = modpack_ops::operation_overrides_directory(&operation_id)?;
+    let overrides_dir = stage_pack_overrides(&source, &overrides_root)?;
+
+    // 阶段三：原子提交。先建实例，再统一移动文件，最后 DB 双写；任何一步失败都整体回滚。
+    let instance = create_instance_profile(
+        app.clone(),
+        inspection
+            .name
+            .clone()
+            .unwrap_or_else(|| "Imported Modpack".into()),
+        game_version.clone(),
+        loader_type.clone(),
+    )?;
+    // 进入提交态：一旦此后崩溃，启动时按 instance_id 回滚这个未完成的新实例。
+    if let Err(error) =
+        modpack_ops::mark_operation_state(&operation_id, "committing", Some(instance.id), None)
+    {
+        discard_instance_immediately(&app, instance.id, &instance.root_path);
+        return Err(error);
+    }
+    let game = PathBuf::from(&instance.root_path).join(".minecraft");
+    let mut transaction = fs_safe::FsTransaction::new(format!("modpack-import-{operation_id}"));
+    let index_relatives: Vec<String> = owned_rows.iter().map(|(path, _, _)| path.clone()).collect();
+    let move_files = (|| -> Result<usize, LauncherError> {
+        for relative in &index_relatives {
+            let staged = files_root.join(safe_relative_download_path(relative)?);
+            let output = pack_target_path(&game, relative)?;
+            if output.exists() {
+                move_pack_collision_to_backup(&game, &output)?;
+            }
+            transaction.move_with_undo(&staged, &output)?;
+        }
+        let mut count = 0usize;
+        if let Some(root) = &overrides_dir {
+            for entry in walkdir::WalkDir::new(root)
+                .follow_links(false)
+                .into_iter()
+                .flatten()
+            {
+                if !entry.file_type().is_file() {
+                    continue;
+                }
+                let Ok(relative) = entry.path().strip_prefix(root) else {
+                    continue;
+                };
+                if relative.as_os_str().is_empty() {
+                    continue;
+                }
+                let output = pack_target_path(&game, &relative.to_string_lossy())?;
+                if output.exists() {
+                    move_pack_collision_to_backup(&game, &output)?;
+                }
+                owned_rows.push((
+                    relative.to_string_lossy().replace('\\', "/"),
+                    None,
+                    sha256_file_sync(entry.path())?,
+                ));
+                transaction.move_with_undo(entry.path(), &output)?;
+                count += 1;
+            }
+        }
+        Ok(count)
+    })();
+    let override_files = match move_files {
+        Ok(count) => count,
+        Err(error) => {
+            let _ = transaction.rollback();
+            discard_instance_immediately(&app, instance.id, &instance.root_path);
+            return Err(error);
+        }
+    };
+
     let connection = open_database(&app)?;
-    connection
-        .execute(
-            "UPDATE instances SET source='modrinth' WHERE id=?1",
-            [instance.id],
-        )
-        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let record_commit = (|| -> Result<(), LauncherError> {
+        let mut statement = connection
+            .prepare(
+                "INSERT OR IGNORE INTO content_items(instance_id,kind,file_name,hash,metadata_json,enabled,source,installed_at)
+                 VALUES(?1,'mod',?2,?3,?4,1,'modrinth',?5)",
+            )
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        for (file_name, hash, metadata) in &mod_rows {
+            statement
+                .execute(params![
+                    instance.id,
+                    file_name,
+                    hash,
+                    metadata,
+                    chrono_like_timestamp()
+                ])
+                .map_err(|error| LauncherError::storage(error.to_string()))?;
+        }
+        drop(statement);
+        connection
+            .execute(
+                "UPDATE instances SET source='modrinth' WHERE id=?1",
+                [instance.id],
+            )
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO instance_pack_source(instance_id,provider,project_id,version_id,pack_version,source_url,installed_at)
+                 VALUES(?1,'modrinth',NULL,NULL,?2,NULL,?3)",
+                params![instance.id, inspection.version, chrono_like_timestamp()],
+            )
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        let mut owned_statement = connection
+            .prepare(
+                "INSERT OR IGNORE INTO pack_owned_files(instance_id,relative_path,sha1,sha256,source,installed_at)
+                 VALUES(?1,?2,?3,?4,'modrinth',?5)",
+            )
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        for (relative, sha1, sha256) in &owned_rows {
+            owned_statement
+                .execute(params![
+                    instance.id,
+                    relative,
+                    sha1,
+                    sha256,
+                    chrono_like_timestamp()
+                ])
+                .map_err(|error| LauncherError::storage(error.to_string()))?;
+        }
+        drop(owned_statement);
+        Ok(())
+    })();
+    if let Err(error) = record_commit {
+        drop(connection);
+        let _ = transaction.rollback();
+        discard_instance_immediately(&app, instance.id, &instance.root_path);
+        return Err(error);
+    }
+    transaction.commit();
     Ok(ImportedModpack {
         instance: Instance {
             source: "modrinth".into(),
             ..instance
         },
-        downloaded_files,
+        downloaded_files: downloaded_files as usize,
         override_files,
     })
 }
@@ -7946,6 +8736,7 @@ fn clone_instance(
     app: AppHandle,
     instance_id: i64,
     name: String,
+    copy_saves: bool,
 ) -> Result<Instance, LauncherError> {
     validate_instance_field(name.trim(), 64)?;
     let connection = open_database(&app)?;
@@ -7985,17 +8776,18 @@ fn clone_instance(
     let mut cloned = create_instance_profile(app.clone(), name, version, loader.clone())?;
     let source_game = PathBuf::from(source_root).join(".minecraft");
     let target_game = PathBuf::from(&cloned.root_path).join(".minecraft");
-    for directory in [
-        "mods",
-        "config",
-        "saves",
-        "resourcepacks",
-        "shaderpacks",
-        "versions",
-        "libraries",
-        "assets",
-    ] {
+    for directory in ["mods", "config", "resourcepacks", "shaderpacks", "versions"] {
         copy_directory_contents(&source_game.join(directory), &target_game.join(directory))?;
+    }
+    if copy_saves {
+        copy_directory_contents(&source_game.join("saves"), &target_game.join("saves"))?;
+    }
+    // libraries/assets 体积最大：优先 CoW reflink 共享底层数据块，失败回退普通复制。
+    for directory in ["libraries", "assets"] {
+        copy_directory_contents_deduped(
+            &source_game.join(directory),
+            &target_game.join(directory),
+        )?;
     }
     let cloned_status = if loader == "vanilla" {
         "missing"
@@ -8080,7 +8872,67 @@ fn clone_instance(
     cloned.memory_mb = memory_mb;
     cloned.status = cloned_status.into();
     cloned.source = "clone".into();
+    let report = content_reconcile::reconcile_scan(app, cloned.id)?;
+    log::info!(
+        "克隆完成，对账结果：db_missing_on_disk={} disk_missing_in_db={} duplicates={}",
+        report.db_missing_on_disk.len(),
+        report.disk_missing_in_db.len(),
+        report.duplicate_groups.len()
+    );
     Ok(cloned)
+}
+
+/// 立即丢弃一个刚创建、尚未交付给用户的新实例（用于事务回滚），不写入回收站。
+fn discard_instance_immediately(app: &AppHandle, instance_id: i64, root_path: &str) {
+    let root = PathBuf::from(root_path);
+    let instances_root = launcher_data_directory()
+        .map(|directory| directory.join("instances"))
+        .unwrap_or_default();
+    if root.starts_with(&instances_root) && root != instances_root && root.exists() {
+        if let Err(error) = fs::remove_dir_all(&root) {
+            log::warn!("回滚实例目录失败（{}）：{error}", root.display());
+        }
+    }
+    if let Ok(connection) = open_database(app) {
+        if let Err(error) = connection.execute("DELETE FROM instances WHERE id=?1", [instance_id]) {
+            log::warn!("回滚实例数据库记录失败（{instance_id}）：{error}");
+        }
+    }
+}
+
+/// 启动时清理崩溃遗留的“提交中”整合包操作：回滚半成品新实例并清空 staging。
+fn recover_interrupted_modpack_operations(app: &AppHandle) {
+    let operations = match modpack_ops::list_operations() {
+        Ok(operations) => operations,
+        Err(error) => {
+            log::warn!("扫描整合包 staging 失败：{}", error.message);
+            return;
+        }
+    };
+    for operation in operations {
+        if operation.state != "committing" {
+            continue;
+        }
+        log::warn!(
+            "检测到中断的整合包提交操作 {}，回滚未完成实例。",
+            operation.id
+        );
+        if let Some(instance_id) = operation.instance_id {
+            let root: Option<String> = open_database(app).ok().and_then(|connection| {
+                connection
+                    .query_row(
+                        "SELECT root_path FROM instances WHERE id=?1",
+                        [instance_id],
+                        |row| row.get(0),
+                    )
+                    .ok()
+            });
+            if let Some(root) = root {
+                discard_instance_immediately(app, instance_id, &root);
+            }
+        }
+        let _ = modpack_ops::cleanup_operation(operation.id);
+    }
 }
 
 #[tauri::command]
@@ -10505,6 +11357,28 @@ fn copy_directory_contents(source: &Path, target: &Path) -> Result<(), LauncherE
     Ok(())
 }
 
+/// 目录复制：优先 CoW reflink 去重（不额外占用磁盘、写入互不影响），失败回退普通复制。
+fn copy_directory_contents_deduped(source: &Path, target: &Path) -> Result<(), LauncherError> {
+    if !source.is_dir() {
+        return Ok(());
+    }
+    fs::create_dir_all(target).map_err(|error| LauncherError::storage(error.to_string()))?;
+    for entry in fs::read_dir(source).map_err(|error| LauncherError::storage(error.to_string()))? {
+        let entry = entry.map_err(|error| LauncherError::storage(error.to_string()))?;
+        let from = entry.path();
+        let to = target.join(entry.file_name());
+        if from.is_dir() {
+            copy_directory_contents_deduped(&from, &to)?;
+        } else if !to.exists() {
+            let reflinked = fs_safe::reflink_copy_file(&from, &to).unwrap_or(false);
+            if !reflinked {
+                fs::copy(&from, &to).map_err(|error| LauncherError::storage(error.to_string()))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn backup_instance_worlds(instance_id: i64, game: &Path) -> Result<Option<PathBuf>, LauncherError> {
     let saves = game.join("saves");
     if !saves.is_dir()
@@ -11410,20 +12284,57 @@ pub fn run() {
             if let Ok(connection) = open_database(_app.handle()) {
                 let _ = recover_interrupted_download_jobs(&connection);
             }
+            recover_interrupted_modpack_operations(_app.handle());
             #[cfg(debug_assertions)]
             {
                 let app = _app;
                 let install_version = std::env::var("LAUNCHER_E2E_VERSION").ok();
                 let launch_version = std::env::var("LAUNCHER_E2E_LAUNCH_VERSION").ok();
                 let loader_type = std::env::var("LAUNCHER_E2E_LOADER").ok();
-                if install_version.is_some() || launch_version.is_some() || loader_type.is_some() {
+                let clone_source = std::env::var("LAUNCHER_E2E_CLONE_SOURCE").ok();
+                let pack_update_instance = std::env::var("LAUNCHER_E2E_PACK_UPDATE_INSTANCE").ok();
+                if install_version.is_some()
+                    || launch_version.is_some()
+                    || loader_type.is_some()
+                    || clone_source.is_some()
+                    || pack_update_instance.is_some()
+                {
                     if let Some(window) = app.get_webview_window("main") {
                         let _ = window.hide();
                     }
                     let handle = app.handle().clone();
                     tauri::async_runtime::spawn(async move {
                         let report_name;
-                        let result = if let Some(loader) = loader_type {
+                        let result = if let Some(source_name) = clone_source {
+                            report_name = "acceptance-clone.json".into();
+                            acceptance::run_clone_acceptance(
+                                handle.clone(),
+                                source_name,
+                                std::env::var("LAUNCHER_E2E_COPY_SAVES")
+                                    .ok()
+                                    .is_some_and(|value| value == "1"),
+                            )
+                            .await
+                        } else if let Some(instance_id) = pack_update_instance {
+                            report_name = "acceptance-pack-update.json".into();
+                            let parsed_id = instance_id
+                                .parse()
+                                .map_err(|_| LauncherError::validation("实例 ID 无效。"));
+                            match (parsed_id, std::env::var("LAUNCHER_E2E_PACK_UPDATE_PATH")) {
+                                (Ok(instance_id), Ok(source_path)) => {
+                                    acceptance::run_modpack_update_acceptance(
+                                        handle.clone(),
+                                        instance_id,
+                                        source_path,
+                                    )
+                                    .await
+                                }
+                                (Err(error), _) => Err(error),
+                                (_, Err(_)) => Err(LauncherError::validation(
+                                    "整合包更新验收缺少 LAUNCHER_E2E_PACK_UPDATE_PATH。",
+                                )),
+                            }
+                        } else if let Some(loader) = loader_type {
                             report_name = format!("acceptance-loader-{loader}.json");
                             match (
                                 std::env::var("LAUNCHER_E2E_GAME_VERSION"),
@@ -11597,6 +12508,8 @@ pub fn run() {
             content_reconcile::reconcile_apply,
             modpack_ops::list_operations,
             modpack_ops::cleanup_operation,
+            retry_modpack_operation,
+            update_modrinth_modpack,
             list_removed_backups,
             restore_removed_backup,
             exports::export_instance_modpack,
@@ -12568,5 +13481,79 @@ side="BOTH"
             .query_row("SELECT COUNT(*) FROM accounts", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn pack_target_relative_rejects_managed_directories_and_traversal() {
+        assert!(validate_pack_target_relative(Path::new("mods/a.jar")).is_ok());
+        assert!(validate_pack_target_relative(Path::new("config/x.toml")).is_ok());
+        assert!(validate_pack_target_relative(Path::new("versions/evil")).is_err());
+        assert!(validate_pack_target_relative(Path::new("libraries/x")).is_err());
+        assert!(validate_pack_target_relative(Path::new("assets/x")).is_err());
+        assert!(validate_pack_target_relative(Path::new(".launcher-backup/x")).is_err());
+        assert!(safe_relative_download_path("../outside").is_err());
+        assert!(safe_relative_download_path("C:\\evil").is_err());
+    }
+
+    #[test]
+    fn stage_pack_overrides_extracts_only_safe_tree() {
+        let directory = std::env::temp_dir().join(format!("sh-pack-stage-{}", unique_timestamp()));
+        fs::create_dir_all(&directory).unwrap();
+        let zip_path = directory.join("pack.mrpack");
+        let file = fs::File::create(&zip_path).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+        archive.start_file("modrinth.index.json", options).unwrap();
+        archive.write_all(b"{}").unwrap();
+        archive
+            .start_file("overrides/config/x.txt", options)
+            .unwrap();
+        archive.write_all(b"cfg").unwrap();
+        archive.finish().unwrap();
+        let staging = directory.join("staging");
+        let overrides = stage_pack_overrides(&zip_path, &staging).unwrap().unwrap();
+        assert!(overrides.join("config").join("x.txt").is_file());
+        assert!(staging.join("modrinth.index.json").is_file());
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn stage_pack_overrides_rejects_traversal_entry() {
+        let directory = std::env::temp_dir().join(format!("sh-pack-bad-{}", unique_timestamp()));
+        fs::create_dir_all(&directory).unwrap();
+        let zip_path = directory.join("bad.mrpack");
+        let file = fs::File::create(&zip_path).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+        archive.start_file("modrinth.index.json", options).unwrap();
+        archive.write_all(b"{}").unwrap();
+        archive
+            .start_file("overrides/../../evil.txt", options)
+            .unwrap();
+        archive.write_all(b"evil").unwrap();
+        archive.finish().unwrap();
+        let staging = directory.join("staging");
+        assert!(stage_pack_overrides(&zip_path, &staging).is_err());
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn deduped_copy_reproduces_directory_contents() {
+        let directory = std::env::temp_dir().join(format!("sh-dedup-{}", unique_timestamp()));
+        let source = directory.join("source").join("assets").join("indexes");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("1.json"), b"asset-one").unwrap();
+        fs::write(source.join("2.json"), b"asset-two").unwrap();
+        let target = directory.join("target").join("assets");
+        copy_directory_contents_deduped(&directory.join("source").join("assets"), &target).unwrap();
+        assert_eq!(
+            fs::read(target.join("indexes").join("1.json")).unwrap(),
+            b"asset-one"
+        );
+        assert_eq!(
+            fs::read(target.join("indexes").join("2.json")).unwrap(),
+            b"asset-two"
+        );
+        let _ = fs::remove_dir_all(&directory);
     }
 }

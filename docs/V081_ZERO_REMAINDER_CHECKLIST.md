@@ -25,12 +25,12 @@
 
 ## Modpack / Update
 
-- [ ] 整合包事务：staging 下载 → hash → overrides → loader/dependency/disk 验证 → atomic commit → DB commit
+- [x] 整合包事务：staging 下载 → hash → overrides → loader/dependency/disk 验证 → atomic commit → DB commit — Implementation: `import_modrinth_pack_inner` 三阶段（staging 下载+校验复用 / overrides 安全解压 / FsTransaction 移动 + DB 双写，失败整体回滚 `discard_instance_immediately`）；Tests: `stage_pack_overrides_extracts_only_safe_tree`、`stage_pack_overrides_rejects_traversal_entry`、`pack_target_relative_rejects_managed_directories_and_traversal`
 - [x] 崩溃恢复基础：`.staging/<operation-id>/operation.json` 元数据（running/committed/failed）+ list/cleanup 命令，Modrinth 导入已接入生命周期
-- [ ] 崩溃恢复完整：failed 操作继续/回滚（当前为清理/重试语义）
-- [ ] Content UpdatePlan 接入业务（当前 `update_modrinth_mod` 为内联备份+回滚，无 plan struct）
-- [ ] Modpack UpdatePlan（pack-owned / user-added / user-modified / saves / config 区分，snapshot + rollback）
-- [ ] 用户 saves / 自加 Mod / 修改 config 保护测试
+- [x] 崩溃恢复完整：failed 操作继续/回滚 — Implementation: `retry_modpack_operation`（staged 文件按 SHA-1 复用续传）+ `committing` 状态机（提交中崩溃 → 启动时按 instance_id 回滚并清 staging，`recover_interrupted_modpack_operations`）；Tests: `operation_metadata_roundtrips_and_cleanup`
+- [x] Content UpdatePlan 接入业务 — Implementation: `content_update::ContentUpdatePlan` + `prepare_mod_update`（版本比对/下载校验/依赖差集）+ `update_modrinth_mod` 应用计划（FsTransaction 备份回滚、依赖自动补齐经受信解析链、conflicts 记录并 emit `mod-update-plan`）；Tests: `dependency_delta_detects_added_and_removed`
+- [x] Modpack UpdatePlan（pack-owned / user-added / user-modified / saves / config 区分，snapshot + rollback）— Implementation: `pack_owned_files` 归属表（migration v9，sha1/sha256 双重记录）+ `update_modrinth_modpack`（staging 下载→无副作用分类→TOCTOU 复检→FsTransaction+rusqlite 事务双写回滚，移除文件进 `.launcher-backup/pack-update-*`）
+- [x] 用户 saves / 自加 Mod / 修改 config 保护测试 — Tests: `pack_classification_protects_user_content`（存档默认不覆盖、用户配置保留、自加同名模组保留、全新文件安装、未修改文件更新）
 
 ## Clone
 
@@ -43,16 +43,16 @@
 - [x] content 记录复制（content_items 重建为 source='clone'）
 - [x] managed content 复制（managed_content 标记 installed_by_launcher=0）
 - [x] instance icon 复制（instances.icon）
-- [ ] resourcepacks/shaderpacks/config/saves policy（saves 可选开关）
-- [ ] assets/libraries 共享/复用架构（避免 Clone 复制数 GB 公共运行时）
-- [ ] Clone 完成后 reconcile/validate + 回归测试（Vanilla/Forge/Fabric/NeoForge/Quilt/大包/自定义 Java/JVM/saves/provenance/managed e4mc）
+- [x] resourcepacks/shaderpacks/config/saves policy（saves 可选开关）— Implementation: `clone_instance` 新增 `copy_saves` 参数，前端 confirm 选择；mods/config/resourcepacks/shaderpacks/versions 复制，saves 按开关
+- [x] assets/libraries 共享/复用架构（避免 Clone 复制数 GB 公共运行时）— Implementation: Windows `FSCTL_DUPLICATE_EXTENTS_TO_FILE` CoW reflink（`fs_safe::reflink_copy_file` + `copy_directory_contents_deduped`），同卷共享底层数据块、写入互不影响，失败回退普通复制；Tests: `reflink_copy_is_independent_when_supported`、`deduped_copy_reproduces_directory_contents`
+- [ ] Clone 完成后 reconcile/validate + 回归测试（Vanilla/Forge/Fabric/NeoForge/Quilt/大包/自定义 Java/JVM/saves/provenance/managed e4mc）— Implementation: 克隆后运行 `reconcile_scan` 校验并记录日志；Java/JVM/启动设置/pack provenance/managed content 整表复制已完成；Verification: 待真机 acceptance（`LAUNCHER_E2E_CLONE`）执行后转 [x]
 
 ## FsTransaction / Fault Injection
 
 - [x] FsTransaction move + LIFO rollback（`fs_safe::FsTransaction` + 测试）
 - [x] 接入删除实例（DB 失败回滚文件移动）
 - [x] 接入 Mod update（备份/替换/DB 失败均回滚）
-- [ ] 接入 Modpack import/update
+- [x] 接入 Modpack import/update（import：staging+原子提交；update：UpdatePlan+快照回滚）
 - [ ] 接入 Content delete / World import/restore
 - [ ] 接入 Java runtime swap
 - [ ] 接入 Reconcile destructive apply

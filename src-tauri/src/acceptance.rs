@@ -1,5 +1,84 @@
 use super::*;
 
+pub(crate) async fn run_clone_acceptance(
+    app: AppHandle,
+    source_name: String,
+    copy_saves: bool,
+) -> Result<serde_json::Value, LauncherError> {
+    let instance = list_instances(app.clone())?
+        .into_iter()
+        .find(|instance| instance.name == source_name)
+        .ok_or_else(|| LauncherError::validation("验收源实例不存在，请先安装对应版本。"))?;
+    let source_game = PathBuf::from(&instance.root_path).join(".minecraft");
+    let cloned = clone_instance(
+        app.clone(),
+        instance.id,
+        format!("{source_name} Clone QA"),
+        copy_saves,
+    )?;
+    let target_game = PathBuf::from(&cloned.root_path).join(".minecraft");
+    let mut missing: Vec<String> = Vec::new();
+    for directory in ["mods", "config", "resourcepacks", "shaderpacks", "versions"] {
+        if source_game.join(directory).is_dir() && !target_game.join(directory).is_dir() {
+            missing.push(directory.to_string());
+        }
+    }
+    if source_game.join("libraries").is_dir() && !target_game.join("libraries").is_dir() {
+        missing.push("libraries".into());
+    }
+    if source_game.join("assets").is_dir() && !target_game.join("assets").is_dir() {
+        missing.push("assets".into());
+    }
+    let saves_copied = target_game.join("saves").is_dir()
+        && target_game
+            .join("saves")
+            .read_dir()
+            .map_err(|error| LauncherError::storage(error.to_string()))?
+            .next()
+            .is_some();
+    if copy_saves && !saves_copied {
+        missing.push("saves".into());
+    }
+    if !missing.is_empty() {
+        return Err(LauncherError::storage(format!(
+            "克隆验收文件结构不完整：{}",
+            missing.join("、")
+        )));
+    }
+    let report = content_reconcile::reconcile_scan(app.clone(), cloned.id)?;
+    Ok(serde_json::json!({
+        "status": "passed",
+        "sourceInstanceId": instance.id,
+        "clonedInstanceId": cloned.id,
+        "copySaves": copy_saves,
+        "reconcile": {
+            "dbMissingOnDisk": report.db_missing_on_disk.len(),
+            "diskMissingInDb": report.disk_missing_in_db.len(),
+            "duplicateGroups": report.duplicate_groups.len()
+        },
+        "completedAt": chrono_like_timestamp()
+    }))
+}
+
+pub(crate) async fn run_modpack_update_acceptance(
+    app: AppHandle,
+    instance_id: i64,
+    source_path: String,
+) -> Result<serde_json::Value, LauncherError> {
+    let plan = update_modrinth_modpack(app.clone(), instance_id, source_path).await?;
+    Ok(serde_json::json!({
+        "status": "passed",
+        "instanceId": instance_id,
+        "packVersion": plan.pack_version,
+        "installs": plan.installs.len(),
+        "updates": plan.updates.len(),
+        "removals": plan.removals.len(),
+        "conflicts": plan.conflicts.len(),
+        "protectedUserFiles": plan.protected_user_files.len(),
+        "completedAt": chrono_like_timestamp()
+    }))
+}
+
 pub(crate) async fn run_vanilla_install_acceptance(
     app: AppHandle,
     game_version: String,
