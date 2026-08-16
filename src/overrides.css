@@ -2730,3 +2730,67 @@ button.global-progress-bar:hover {
     grid-template-columns: 1fr;
   }
 }
+
+.multiplayer-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+
+.room-state {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.room-state .ping-badge {
+  align-self: flex-start;
+}
+
+.room-hint {
+  margin: 0;
+  color: #66717d;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.room-note {
+  margin: 0;
+  color: #8a94a0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.diagnostics-panel {
+  margin-top: 18px;
+  border: 1px solid var(--ui-line);
+  border-radius: 16px;
+  background: #fff;
+  padding: 16px 18px;
+}
+
+.diagnostics-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.diagnostics-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.diagnostics-panel pre {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  background: #f7f9fa;
+  border-radius: 10px;
+  padding: 12px;
+  font-size: 12px;
+  color: #44505c;
+  white-space: pre-wrap;
+  word-break: break-all;
+}

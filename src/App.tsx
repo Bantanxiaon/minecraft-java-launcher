@@ -3022,6 +3022,30 @@ export default function App() {
               setSelectedAccountId(accountId);
               void launchSelectedInstance(instance, false, server, accountId);
             }}
+            onQuickJoin={(address, instanceId, accountId) => {
+              const instance = instances.find(
+                (candidate) => candidate.id === instanceId,
+              );
+              if (!instance) {
+                setMessage("请先选择一套已就绪的游戏配置。");
+                return;
+              }
+              setSelectedInstanceId(instanceId);
+              setSelectedAccountId(accountId);
+              void launchSelectedInstance(
+                instance,
+                false,
+                {
+                  id: 0,
+                  name: "快速加入",
+                  address,
+                  port: 25565,
+                  description: "",
+                  createdAt: "",
+                },
+                accountId,
+              );
+            }}
           />
         ) : activeNav === "存储" ? (
           <StoragePage />

@@ -230,6 +230,8 @@ pub fn reconcile_apply(
             "内容已发生变化，请重新扫描后再应用。",
         ));
     }
+    // 联机受管理 helper 的 DB 对账：文件缺失 / 哈希变化时修正 DB，绝不假装可信。
+    crate::multiplayer::reconcile_managed_helpers(&connection, instance_id)?;
     let backup_base = launcher_data_directory()?.join("backups");
     apply_reconcile_core(
         &mut connection,

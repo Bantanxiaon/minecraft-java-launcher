@@ -340,6 +340,23 @@ impl LauncherError {
             recoverable: true,
         }
     }
+    pub(crate) fn classified(
+        code: impl Into<String>,
+        message: impl Into<String>,
+        recoverable: bool,
+    ) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+            recoverable,
+        }
+    }
+    pub(crate) fn error_code(&self) -> &str {
+        &self.code
+    }
+    pub(crate) fn error_message(&self) -> &str {
+        &self.message
+    }
 }
 
 #[derive(Serialize)]
@@ -744,6 +761,37 @@ pub(crate) fn run_migrations(connection: &mut Connection) -> rusqlite::Result<()
                 [],
             )?;
         }
+    }
+    // v11：联机房间轻量历史（不含好友 IP / token / 私密路径）。
+    let has_v11: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM migrations WHERE version=11)",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_v11 {
+        let tx = connection.transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS multiplayer_history (
+                id INTEGER PRIMARY KEY,
+                session_id TEXT NOT NULL UNIQUE,
+                instance_id INTEGER NOT NULL,
+                provider TEXT NOT NULL,
+                game_version TEXT,
+                loader TEXT,
+                helper_version TEXT,
+                got_address INTEGER NOT NULL DEFAULT 0,
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                exit_reason TEXT,
+                FOREIGN KEY(instance_id) REFERENCES instances(id) ON DELETE CASCADE
+            );
+            ALTER TABLE managed_content ADD COLUMN version_number TEXT;",
+        )?;
+        tx.execute(
+            "INSERT INTO migrations(version, applied_at) VALUES(11, strftime('%s','now'))",
+            [],
+        )?;
+        tx.commit()?;
     }
     // 补齐离线账户的标准 UUID 与旧 SHA-256 UUID，仅处理缺失的旧数据。
     {
@@ -2329,16 +2377,16 @@ struct ModInspection {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ContentItem {
-    id: i64,
-    instance_id: i64,
-    kind: String,
-    file_name: String,
-    hash: String,
-    metadata_json: Option<String>,
-    enabled: bool,
-    source: String,
-    installed_at: String,
+pub(crate) struct ContentItem {
+    pub(crate) id: i64,
+    pub(crate) instance_id: i64,
+    pub(crate) kind: String,
+    pub(crate) file_name: String,
+    pub(crate) hash: String,
+    pub(crate) metadata_json: Option<String>,
+    pub(crate) enabled: bool,
+    pub(crate) source: String,
+    pub(crate) installed_at: String,
 }
 
 #[derive(Serialize)]
@@ -2723,7 +2771,7 @@ fn read_descriptor(
     Ok(Some(bytes))
 }
 
-fn inspect_mod_jar_path(path: &Path) -> Result<ModInspection, LauncherError> {
+pub(crate) fn inspect_mod_jar_path(path: &Path) -> Result<ModInspection, LauncherError> {
     if path
         .extension()
         .and_then(|value| value.to_str())
@@ -2965,6 +3013,25 @@ fn inspect_mod_jar_path(path: &Path) -> Result<ModInspection, LauncherError> {
         dependencies,
         conflicts,
     })
+}
+
+/// 供联机模块识别用户自装 jar 的身份（mod_id + loader），不暴露内部结构体。
+pub(crate) fn inspect_jar_identity(path: &Path) -> Result<(String, String), LauncherError> {
+    let info = inspect_mod_jar_path(path)?;
+    Ok((info.mod_id.unwrap_or_default(), info.loader_type.clone()))
+}
+
+/// 供联机模块判断用户自装 jar 是否支持当前游戏版本。
+pub(crate) fn jar_supports_game_version(path: &Path, game_version: &str) -> bool {
+    inspect_mod_jar_path(path)
+        .map(|info| {
+            info.game_version_requirements.is_empty()
+                || info
+                    .game_version_requirements
+                    .iter()
+                    .any(|requirement| game_version_matches(requirement, game_version))
+        })
+        .unwrap_or(false)
 }
 
 fn has_kotlinforforge_file(mods_directory: &Path) -> bool {
@@ -3486,7 +3553,9 @@ fn validate_modrinth_project_id(value: &str) -> Result<(), LauncherError> {
     }
 }
 
-async fn fetch_modrinth_json(url: reqwest::Url) -> Result<serde_json::Value, LauncherError> {
+pub(crate) async fn fetch_modrinth_json(
+    url: reqwest::Url,
+) -> Result<serde_json::Value, LauncherError> {
     if url.scheme() != "https"
         || url.host_str() != Some("api.modrinth.com")
         || !url.path().starts_with("/v2/")
@@ -4640,14 +4709,6 @@ async fn install_modrinth_mod(
         }
     }
     requested_item.ok_or_else(|| LauncherError::storage("模组安装结果丢失。"))
-}
-
-pub(crate) async fn install_managed_mod(
-    app: AppHandle,
-    instance_id: i64,
-    project_id: String,
-) -> Result<ContentItem, LauncherError> {
-    install_modrinth_mod(app, instance_id, project_id).await
 }
 
 fn modrinth_slug_candidates(value: &str) -> Vec<String> {
@@ -7749,6 +7810,15 @@ fn install_mod(
     })
 }
 
+/// 联机模块等内部调用入口：复用 install_mod 的下载后安装逻辑，但绕过 Tauri 命令宏。
+pub(crate) fn install_mod_from_cache(
+    app: AppHandle,
+    instance_id: i64,
+    source_path: String,
+) -> Result<ContentItem, LauncherError> {
+    install_mod(app, instance_id, source_path)
+}
+
 fn content_location(
     connection: &Connection,
     content_id: i64,
@@ -9241,6 +9311,11 @@ fn delete_instance_to_backup(
     {
         return Err(LauncherError::validation("实例正在运行，不能删除。"));
     }
+    if multiplayer::has_active_session(instance_id) {
+        return Err(LauncherError::validation(
+            "该实例正在进行联机会话，请先结束联机再删除。",
+        ));
+    }
     let (name, root, game_version, loader_type, memory_mb, status, source): (
         String,
         String,
@@ -9453,7 +9528,7 @@ fn validate_metadata_url(value: &str) -> Result<reqwest::Url, LauncherError> {
     Ok(url)
 }
 
-fn validate_resource_url(value: &str) -> Result<reqwest::Url, LauncherError> {
+pub(crate) fn validate_resource_url(value: &str) -> Result<reqwest::Url, LauncherError> {
     // Some official loader metadata contains a trailing line break in URL values.
     // Treat surrounding ASCII/Unicode whitespace as formatting, not as part of the URL.
     let url = reqwest::Url::parse(value.trim())
@@ -10641,7 +10716,7 @@ async fn send_download_request(
     )))
 }
 
-async fn download_verified_file(
+pub(crate) async fn download_verified_file(
     app: &AppHandle,
     instance_id: i64,
     url: &str,
@@ -12494,7 +12569,7 @@ async fn launch_instance(
             serde_json::json!({ "instanceId": instance_id, "exitCode": exit_code }),
         );
         // 联机会话清理 + 游戏退出后的收尾任务通知（健康扫描等由前端响应）。
-        multiplayer::on_game_exit(instance_id);
+        multiplayer::on_game_exit(&watcher_app, instance_id);
         let _ = watcher_app.emit(
             "post-game-tasks",
             serde_json::json!({ "instanceId": instance_id, "exitCode": exit_code }),
@@ -12855,7 +12930,11 @@ pub fn run() {
             multiplayer::multiplayer_prepare,
             multiplayer::multiplayer_start,
             multiplayer::multiplayer_stop,
+            multiplayer::multiplayer_cancel,
+            multiplayer::multiplayer_join,
             multiplayer::multiplayer_state,
+            multiplayer::multiplayer_diagnostics,
+            multiplayer::multiplayer_history,
             repair_missing_mod_dependencies,
             list_loader_versions,
             install_profile_loader,
@@ -12932,6 +13011,26 @@ pub(crate) async fn multiplayer_launch(
         java_path,
         Some(true),
         None,
+        None,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn multiplayer_join_launch(
+    app: AppHandle,
+    instance_id: i64,
+    account_id: i64,
+    java_path: String,
+    address: String,
+) -> Result<LaunchResult, LauncherError> {
+    launch_instance(
+        app,
+        instance_id,
+        account_id,
+        java_path,
+        Some(false),
+        Some(address),
         None,
         None,
     )

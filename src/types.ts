@@ -245,10 +245,33 @@ export type DeletedInstance = {
   gameVersion?: string;
   loaderType?: string;
 };
+export type MultiplayerState =
+  | "IDLE"
+  | "PREPARING"
+  | "INSTALLING_HELPER"
+  | "GAME_STARTING"
+  | "WAITING_FOR_LAN"
+  | "LAN_OPENED"
+  | "WAITING_FOR_TUNNEL"
+  | "READY"
+  | "RECONNECTING"
+  | "STOPPING"
+  | "CLOSED"
+  | "ERROR";
+
 export type RoomInfo = {
+  sessionId?: string;
   instanceId: number;
-  state: string;
-  address?: string;
+  state: MultiplayerState;
+  lanPort?: number;
+  publicAddress?: string;
+  provider?: string;
+  helperVersion?: string;
+  errorCode?: string;
+  userMessage?: string;
+  technicalMessage?: string;
+  startedAt?: number;
+  reconnectCount: number;
 };
 export type InstanceHealth = {
   instanceId: number;

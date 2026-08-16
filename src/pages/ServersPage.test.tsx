@@ -48,6 +48,7 @@ function renderPage() {
       onUpdateServer={vi.fn(async () => undefined)}
       onRemoveServer={vi.fn(async () => undefined)}
       onJoin={vi.fn()}
+      onQuickJoin={vi.fn()}
     />,
   );
 }
@@ -56,22 +57,30 @@ describe("ServersPage multiplayer lifecycle", () => {
   beforeEach(() => {
     invokeMock.mockReset();
     invokeMock.mockImplementation(async (command: string) => {
-      if (command === "multiplayer_prepare") return "就绪";
+      if (command === "multiplayer_state") {
+        return { instanceId: 1, state: "IDLE", reconnectCount: 0 };
+      }
       if (command === "multiplayer_start") {
         return {
+          sessionId: "session-a",
           instanceId: 1,
           state: "READY",
-          address: "play.example.e4mc.link",
+          publicAddress: "play.example.e4mc.link",
+          lanPort: 52913,
+          reconnectCount: 0,
         };
       }
       if (command === "multiplayer_stop") {
-        return { instanceId: 1, state: "STOPPED", address: null };
+        return { sessionId: "session-a", instanceId: 1, state: "CLOSED", reconnectCount: 0 };
+      }
+      if (command === "multiplayer_diagnostics") {
+        return { sessionId: "session-a", provider: "e4mc", state: "READY" };
       }
       throw new Error(`unexpected ${command}`);
     });
   });
 
-  it("creates a room, waits for LAN, then stops", async () => {
+  it("creates a room, shows the invite address, then stops", async () => {
     const user = userEvent.setup();
     renderPage();
     await user.click(screen.getByRole("button", { name: "创建房间并启动游戏" }));
@@ -79,19 +88,18 @@ describe("ServersPage multiplayer lifecycle", () => {
       await screen.findByText("play.example.e4mc.link"),
     ).toBeInTheDocument();
     await waitFor(() =>
-      expect(invokeMock).toHaveBeenCalledWith("multiplayer_prepare", {
+      expect(invokeMock).toHaveBeenCalledWith("multiplayer_start", {
         instanceId: 1,
+        accountId: 2,
+        javaPath: "C:/java/bin/java.exe",
       }),
     );
-    expect(invokeMock).toHaveBeenCalledWith("multiplayer_start", {
-      instanceId: 1,
-      accountId: 2,
-      javaPath: "C:/java/bin/java.exe",
-    });
-    await user.click(screen.getByRole("button", { name: "结束联机" }));
+    await user.click(
+      screen.getByRole("button", { name: "结束联机（将关闭当前游戏）" }),
+    );
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("multiplayer_stop", {
-        instanceId: 1,
+        sessionId: "session-a",
       }),
     );
   });
@@ -112,23 +120,97 @@ describe("ServersPage multiplayer lifecycle", () => {
         onUpdateServer={vi.fn(async () => undefined)}
         onRemoveServer={vi.fn(async () => undefined)}
         onJoin={vi.fn()}
+        onQuickJoin={vi.fn()}
       />,
     );
     await user.click(screen.getByRole("button", { name: "创建房间并启动游戏" }));
     expect(
       await screen.findByText(/未检测到可用的 64 位 Java/),
     ).toBeInTheDocument();
-    expect(invokeMock).not.toHaveBeenCalled();
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      "multiplayer_start",
+      expect.anything(),
+    );
   });
 
   it("shows errors when room creation fails", async () => {
     invokeMock.mockImplementation(async (command: string) => {
-      if (command === "multiplayer_prepare") throw new Error("网络不可用");
+      if (command === "multiplayer_state") {
+        return { instanceId: 1, state: "IDLE", reconnectCount: 0 };
+      }
+      if (command === "multiplayer_start") {
+        throw new Error("网络不可用");
+      }
       return undefined;
     });
     const user = userEvent.setup();
     renderPage();
     await user.click(screen.getByRole("button", { name: "创建房间并启动游戏" }));
     expect(await screen.findByText(/网络不可用/)).toBeInTheDocument();
+  });
+
+  it("validates quick join address and delegates launch", async () => {
+    const onQuickJoin = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ServersPage
+        servers={[]}
+        instances={[instance]}
+        accounts={[account]}
+        selectedInstanceId={1}
+        selectedAccountId={2}
+        javaPath="C:/java/bin/java.exe"
+        busy={false}
+        message=""
+        onAddServer={vi.fn(async () => undefined)}
+        onUpdateServer={vi.fn(async () => undefined)}
+        onRemoveServer={vi.fn(async () => undefined)}
+        onJoin={vi.fn()}
+        onQuickJoin={onQuickJoin}
+      />,
+    );
+    const input = screen.getByPlaceholderText(/邀请地址/);
+    await user.type(input, "evil.example.com");
+    await user.click(screen.getByRole("button", { name: "启动并加入" }));
+    expect(
+      await screen.findByText(/邀请地址格式不正确/),
+    ).toBeInTheDocument();
+    expect(onQuickJoin).not.toHaveBeenCalled();
+    await user.clear(input);
+    await user.type(input, "abc.e4mc.link");
+    await user.click(screen.getByRole("button", { name: "启动并加入" }));
+    await waitFor(() =>
+      expect(onQuickJoin).toHaveBeenCalledWith("abc.e4mc.link", 1, 2),
+    );
+  });
+
+  it("shows diagnostics from a failed session", async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "multiplayer_state") {
+        return { instanceId: 1, state: "IDLE", reconnectCount: 0 };
+      }
+      if (command === "multiplayer_start") {
+        return {
+          sessionId: "session-a",
+          instanceId: 1,
+          state: "ERROR",
+          errorCode: "PROVIDER_UNAVAILABLE",
+          userMessage: "e4mc 联机服务出现异常。",
+          reconnectCount: 0,
+        };
+      }
+      if (command === "multiplayer_diagnostics") {
+        return { sessionId: "session-a", provider: "e4mc", state: "ERROR" };
+      }
+      return undefined;
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole("button", { name: "创建房间并启动游戏" }));
+    expect(
+      await screen.findByText("e4mc 联机服务出现异常。"),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "查看诊断" }));
+    expect(await screen.findByText(/联机诊断/)).toBeInTheDocument();
   });
 });

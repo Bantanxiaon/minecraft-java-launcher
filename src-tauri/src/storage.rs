@@ -293,6 +293,25 @@ fn active_download_targets(app: &AppHandle) -> BTreeSet<PathBuf> {
     rows.map(PathBuf::from).collect()
 }
 
+/// 受管理联机 helper（如 e4mc）的落盘路径：垃圾清理时按 InUse 处理，禁止误删。
+fn managed_helper_paths(app: &AppHandle) -> BTreeSet<PathBuf> {
+    let Ok(connection) = open_database(app) else {
+        return BTreeSet::new();
+    };
+    let Ok(mut statement) = connection
+        .prepare("SELECT installed_path FROM managed_content WHERE kind='MULTIPLAYER_HELPER'")
+    else {
+        return BTreeSet::new();
+    };
+    statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(PathBuf::from)
+        .collect()
+}
+
 #[tauri::command]
 pub fn get_storage_overview(_app: AppHandle) -> Result<StorageOverview, LauncherError> {
     let root = launcher_data_directory()?;
@@ -314,10 +333,12 @@ pub fn get_storage_overview(_app: AppHandle) -> Result<StorageOverview, Launcher
 pub fn build_safe_cleanup_plan(app: AppHandle) -> Result<CleanupPlan, LauncherError> {
     let root = launcher_data_directory()?;
     let active = active_download_targets(&app);
+    let managed = managed_helper_paths(&app);
     let mut items = scan_items(&root);
     items.retain(|item| {
         item.safety == DeleteSafety::Safe
             && !active.contains(&item.path)
+            && !managed.contains(&item.path)
             && !item.path.to_string_lossy().contains("\\.staging\\")
     });
     let reclaimable = items.iter().map(|item| item.bytes).sum::<u64>();
@@ -339,10 +360,12 @@ pub fn execute_cleanup_plan(
 ) -> Result<CleanupResult, LauncherError> {
     let root = launcher_data_directory()?;
     let active = active_download_targets(&app);
+    let managed = managed_helper_paths(&app);
     let mut items = scan_items(&root);
     items.retain(|item| {
         item.safety == DeleteSafety::Safe
             && !active.contains(&item.path)
+            && !managed.contains(&item.path)
             && !item.path.to_string_lossy().contains("\\.staging\\")
     });
     if plan_fingerprint(&items) != fingerprint {

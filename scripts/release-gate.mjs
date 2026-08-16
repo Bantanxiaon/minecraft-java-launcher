@@ -23,6 +23,18 @@ if (unchecked.length > 0) {
   fail(`核对表仍有 ${unchecked.length} 个未完成项，禁止发布。`);
 }
 
+// 1b. 联机专项门禁：任何 E2E 未完成项都会阻止把“联机稳定”随 Release 发布。
+const multiplayerChecklist = read("docs/V081_MULTIPLAYER_CHECKLIST.md");
+if (!multiplayerChecklist) fail("缺少 docs/V081_MULTIPLAYER_CHECKLIST.md");
+const multiplayerUnchecked = multiplayerChecklist
+  .split("\n")
+  .filter((line) => /^\s*-\s*\[ \]/.test(line));
+if (multiplayerUnchecked.length > 0) {
+  fail(
+    `联机专项核对表仍有 ${multiplayerUnchecked.length} 个未完成项（含真实双端 E2E），禁止发布。`,
+  );
+}
+
 // 2. 版本一致性：package.json / tauri.conf.json / Cargo.toml 必须一致。
 const pkg = JSON.parse(read("package.json") ?? "{}");
 const tauri = JSON.parse(read("src-tauri/tauri.conf.json") ?? "{}");
