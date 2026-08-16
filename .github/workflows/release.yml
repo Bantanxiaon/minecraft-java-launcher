@@ -97,7 +97,7 @@ jobs:
           cp "$EXE_FILE" release-assets/SHLauncher-setup.exe
           SIG_FILE="$(ls src-tauri/target/release/bundle/nsis/*.sig | head -n1)"
           SIGNATURE="$(cat "$SIG_FILE")"
-          EXE_NAME="$(basename "$EXE_FILE")"
+          EXE_NAME="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" --jq '.assets[] | select(.name | endswith(".exe")) | .name' | head -n1)"
           URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${EXE_NAME}"
           jq -n --arg version "$VERSION" --arg sig "$SIGNATURE" --arg url "$URL" \
             '{version:$version, notes:"SH启动器 " + $version, pub_date:(now|todateiso8601), platforms:{"windows-x86_64":{signature:$sig, url:$url}}}' \
@@ -117,7 +117,7 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           SIG_FILE="$(ls src-tauri/target/release/bundle/nsis/*.sig | head -n1)"
           SIGNATURE="$(cat "$SIG_FILE")"
-          EXE_NAME="$(basename "$(ls src-tauri/target/release/bundle/nsis/*.exe | head -n1)")"
+          EXE_NAME="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" --jq '.assets[] | select(.name | endswith(".exe")) | .name' | head -n1)"
           URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${EXE_NAME}"
           jq -n --arg version "$VERSION" --arg sig "$SIGNATURE" --arg url "$URL" \
             '{version:$version, notes:"SH启动器 " + $version, pub_date:(now|todateiso8601), platforms:{"windows-x86_64":{signature:$sig, url:$url}}}' \
