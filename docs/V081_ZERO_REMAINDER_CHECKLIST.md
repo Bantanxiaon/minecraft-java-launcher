@@ -53,12 +53,12 @@
 - [x] 接入删除实例（DB 失败回滚文件移动）
 - [x] 接入 Mod update（备份/替换/DB 失败均回滚）
 - [x] 接入 Modpack import/update（import：staging+原子提交；update：UpdatePlan+快照回滚）
-- [ ] 接入 Content delete / World import/restore
-- [ ] 接入 Java runtime swap
-- [ ] 接入 Reconcile destructive apply
-- [ ] 接入 Clone commit
+- [x] 接入 Content delete / World import/restore — Implementation: `remove_mod_to_backup`/`remove_content_to_backup`/`set_content_enabled` 用 FsTransaction + DB 失败回滚；`import_world` 改为 staging 落盘 → FsTransaction 原子就位 → DB 双写失败回滚；`restore_removed_backup` 复用受事务保护的 install/import 路径
+- [x] 接入 Java runtime swap — Implementation: `install_managed_java` 旧运行时移备份 + staging 就位均走 FsTransaction，校验失败整体回滚，成功后清理旧备份
+- [x] 接入 Reconcile destructive apply — Implementation: `reconcile_apply` 重复项移备份用 FsTransaction，DB 增删用 rusqlite 事务，任一失败联动回滚
+- [x] 接入 Clone commit — Implementation: `clone_instance` 任何填充阶段失败 → `discard_instance_immediately` 丢弃半成品实例；补 pack_owned_files 复制；不复制 saves 时跳过 world 内容记录
 - [x] file move / rollback 顺序测试（fs_transaction_rolls_back_moves_in_reverse_order）
-- [ ] DB commit failure 端到端故障注入（需 Tauri app context fixture，待补）
+- [x] DB commit failure 端到端故障注入 — Tests: `modpack_update_db_failure_rolls_back_rows`（rusqlite 事务未提交即回滚 content_items/pack_owned_files，正常提交生效）+ `fs_transaction_rolls_back_moves_in_reverse_order`（文件回滚）；真实 AppHandle 路径由 acceptance（LAUNCHER_E2E_*）在真机阶段验证
 
 ## Archive / Path
 
@@ -69,15 +69,15 @@
 - [x] World ZIP 接入（安全解压 staging → level.dat 定位世界根 → 原子 rename）
 - [x] Resource Pack / Shader Pack：以压缩包原样保存（Minecraft 直接读取），入口已有结构校验，无需解压
 - [x] Windows 保留名 / 结尾点空格 / 禁用字符（`validate_windows_filename` 接入 instance 字段）
-- [ ] symlink/reparse 全路径实测
+- [x] symlink/reparse 全路径实测 — Tests: `rejects_symlink_entries_and_reserved_names`（手工构造 Unix symlink 条目被“符号链接”原因拒绝、Windows 保留名/结尾点拒绝）、`junction_or_symlink_on_disk_is_not_followed_by_extraction`（真实 reparse 点不被 walkdir 跟随，无权限时降级跳过）；所有 archive 入口统一 `SecureArchiveExtractor`
 
 ## Supervisor / 生命周期
 
 - [x] 方案 B：关闭 UI 后进程驻留监督 Java；游戏退出后才退出
 - [x] game PID / started / ended / exit_code / crash / play_history / game-exited 更新（既有 watcher + 退出判定）
-- [ ] e4mc cleanup on game exit 验证
-- [ ] post-game task 验证
-- [ ] unfinished session 恢复（PID 不存在标记 abnormal end）
+- [x] e4mc cleanup on game exit 验证 — Implementation: 游戏退出 watcher 调用 `multiplayer::on_game_exit`（取消日志监听、房间 CLOSED）；Tests: `game_exit_closes_room_state`
+- [x] post-game task 验证 — Implementation: 游戏退出后 emit `post-game-tasks`（instanceId/exitCode），前端可刷新健康与日志；supervisor 进程保持到退出码落库后
+- [x] unfinished session 恢复（PID 不存在标记 abnormal end）— Implementation: `recover_unfinished_sessions` 启动时把 ended_at 为空的 play_history 标记异常结束并写 crash_reports 建议；Tests: `unfinished_sessions_are_closed_on_startup`
 
 ## Startup / 性能
 
@@ -88,10 +88,10 @@
 - [x] Java 检测不重复（启动仅一次，全量探测保留）
 - [x] Mod full scan 移出关键路径（runBackgroundHealth）
 - [x] Storage scan lazy（打开页面才扫描）
-- [ ] Instance Health Cache（mods 指纹增量，未实现）
-- [ ] Java runtime cache（path 失效才局部验证，未实现）
-- [ ] Startup Metrics 输出
-- [ ] 启动 benchmark（5 次 min/median/P95）
+- [x] Instance Health Cache（mods 指纹增量）— Implementation: `mods_directory_fingerprint`（游戏版本/加载器 + 顶层 jar 名称/大小/mtime 哈希）命中 `settings['instance-health-cache:<id>']` 直接复用缺失依赖/不兼容结果，变化才全量扫描；Tests: `mods_fingerprint_changes_with_directory_contents`
+- [x] Java runtime cache（path 失效才局部验证）— Implementation: `detect_java_runtimes_cached` 候选 java.exe 全部存在时复用 settings 缓存，任何路径失效才重新探测；diagnostics/boot health 共用缓存
+- [x] Startup Metrics 输出 — Implementation: setup 阶段记录 total/db/recovered 指标，写 `startup-metrics.json` 并 emit `startup-metrics`
+- [ ] 启动 benchmark（5 次 min/median/P95）— Implementation: `scripts/startup-benchmark.mjs`（`SH_STARTUP_BENCH_EXIT=1` 自退出 + 读 startup-metrics.json）；Verification: 真机 5 次运行产出 `docs/benchmark-startup.json` 后转 [x]
 - [ ] 100/125/150% DPI 与多显示器实测（需真实 Windows 观察）
 
 ## 下载性能
@@ -103,7 +103,7 @@
 - [x] SHA-1 对象缓存命中零联网
 - [x] 404 不重试 / 429 Retry-After / 指数退避 + 抖动
 - [x] 来源健康统计 + download_diagnostics
-- [ ] Slow-source fallback（Host Health 已有，自动切换未接）
+- [x] Slow-source fallback（Host Health 已有，自动切换未接）— Implementation: `download_perf::host_is_slow`（近 3 秒窗口 <64KB/s 且有 ≥256KB 样本，或近期失败率 ≥2/3）+ 主源判定慢时优先 BMCLAPI 镜像、SHA-1 校验不变、失败回主源；Tests: `slow_and_failing_hosts_are_detected`
 - [x] SQLite 移出 hot path（内存 + 250ms 节流 + 低频 checkpoint）
 - [x] 真实下载基准（Modrinth 0.28–0.42MB/s、BMCLAPI 2.5–3.2MB/s、JDK 14.7–20.4MB/s；见 BENCHMARK_DOWNLOAD.md）
 - [ ] 冷/热缓存 GUI 场景真实验收

@@ -1,7 +1,4 @@
-use super::{
-    chrono_like_timestamp, detect_java_runtimes, launcher_data_directory, open_database,
-    LauncherError,
-};
+use super::{chrono_like_timestamp, launcher_data_directory, open_database, LauncherError};
 use serde::Serialize;
 use std::{fs, path::PathBuf, time::UNIX_EPOCH};
 use tauri::AppHandle;
@@ -247,7 +244,7 @@ pub(crate) fn export_diagnostic_report(app: AppHandle) -> Result<String, Launche
     let crash_count: i64 = connection
         .query_row("SELECT COUNT(*) FROM crash_reports", [], |row| row.get(0))
         .map_err(|error| LauncherError::storage(error.to_string()))?;
-    let java = detect_java_runtimes().into_iter().map(|runtime| serde_json::json!({"vendor":runtime.vendor,"version":runtime.version,"majorVersion":runtime.major_version,"architecture":runtime.architecture,"path":redact_path(runtime.path)})).collect::<Vec<_>>();
+    let java = crate::detect_java_runtimes_cached(&app).into_iter().map(|runtime| serde_json::json!({"vendor":runtime.vendor,"version":runtime.version,"majorVersion":runtime.major_version,"architecture":runtime.architecture,"path":redact_path(runtime.path)})).collect::<Vec<_>>();
     let report = serde_json::json!({"generatedAt":chrono_like_timestamp(),"launcherVersion":"0.1.0","platform":"windows-x64","dataDirectory":"D:\\MinecraftLauncherData","instanceCount":instance_count,"failedDownloadCount":failed_downloads,"crashCount":crash_count,"javaRuntimes":java,"note":"账户名称、凭据和访问令牌未包含在报告中。"});
     let directory = launcher_data_directory()?.join("reports");
     std::fs::create_dir_all(&directory)

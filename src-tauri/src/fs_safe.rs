@@ -320,6 +320,73 @@ mod tests {
         archive.finish().unwrap();
     }
 
+    fn crc32(data: &[u8]) -> u32 {
+        let mut crc = 0xFFFF_FFFFu32;
+        for &byte in data {
+            crc ^= byte as u32;
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 {
+                    (crc >> 1) ^ 0xEDB8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
+    }
+
+    /// 手工构造“Unix symlink”条目：zip 2.4 的公开写入 API 会把权限掩码截到 0o777，
+    /// 无法表示文件类型位，因此直接拼 ZIP 字节（version made by = Unix，external attrs
+    /// 高 16 位为 0o120777）。
+    fn write_unix_symlink_zip(path: &Path, name: &str, target: &str) {
+        let data = target.as_bytes();
+        let crc = crc32(data);
+        let name_bytes = name.as_bytes();
+        let mut out = Vec::new();
+        out.extend_from_slice(b"PK\x03\x04");
+        out.extend_from_slice(&20u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&crc.to_le_bytes());
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(name_bytes);
+        out.extend_from_slice(data);
+        let cd_offset = out.len() as u32;
+        out.extend_from_slice(b"PK\x01\x02");
+        out.extend_from_slice(&0x031Eu16.to_le_bytes());
+        out.extend_from_slice(&20u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&crc.to_le_bytes());
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(name_bytes.len() as u16).to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&(0o120777u32 << 16).to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(name_bytes);
+        let cd_size = out.len() as u32 - cd_offset;
+        out.extend_from_slice(b"PK\x05\x06");
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&cd_size.to_le_bytes());
+        out.extend_from_slice(&cd_offset.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        std::fs::write(path, out).unwrap();
+    }
+
     #[test]
     fn rejects_traversal_and_absolute_paths() {
         let dir = std::env::temp_dir().join(format!("sh-zip-test-{}", std::process::id()));
@@ -329,6 +396,70 @@ mod tests {
         let result = extract_zip_securely(&zip_path, &dir.join("out"), &ArchiveLimits::default());
         assert!(result.is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rejects_symlink_entries_and_reserved_names() {
+        let dir = std::env::temp_dir().join(format!("sh-zip-link-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let zip_path = dir.join("link.zip");
+        write_unix_symlink_zip(&zip_path, "evil-link", "target");
+        let error = extract_zip_securely(&zip_path, &dir.join("out"), &ArchiveLimits::default())
+            .expect_err("symlink 条目必须被拒绝");
+        assert!(
+            error.message.contains("符号链接"),
+            "应因符号链接被拒，实际：{}",
+            error.message
+        );
+
+        let zip_path = dir.join("reserved.zip");
+        let file = std::fs::File::create(&zip_path).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        archive
+            .start_file("CON.txt", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive.write_all(b"x").unwrap();
+        archive
+            .start_file("trailing.", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive.write_all(b"x").unwrap();
+        archive.finish().unwrap();
+        assert!(
+            extract_zip_securely(&zip_path, &dir.join("out2"), &ArchiveLimits::default()).is_err()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn junction_or_symlink_on_disk_is_not_followed_by_extraction() {
+        let dir = std::env::temp_dir().join(format!("sh-junction-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let outside =
+            std::env::temp_dir().join(format!("sh-junction-target-{}", std::process::id()));
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.txt"), b"secret").unwrap();
+        // 若当前账户可创建目录符号链接（Developer Mode/管理员），验证目标目录内的
+        // 既有 junction/symlink 不会被 walkdir 跟随；无权限则跳过该真实 reparse 部分。
+        #[cfg(windows)]
+        let created = std::os::windows::fs::symlink_dir(&outside, dir.join("link")).is_ok();
+        #[cfg(not(windows))]
+        let created = std::os::unix::fs::symlink(&outside, dir.join("link")).is_ok();
+        if created {
+            let mut seen = Vec::new();
+            for entry in walkdir::WalkDir::new(&dir)
+                .follow_links(false)
+                .into_iter()
+                .flatten()
+            {
+                seen.push(entry.path().display().to_string());
+            }
+            assert!(
+                !seen.iter().any(|path| path.contains("secret.txt")),
+                "walkdir 不应跟随 reparse 点进入目标目录"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&outside);
     }
 
     #[test]

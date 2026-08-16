@@ -216,7 +216,7 @@ pub fn reconcile_apply(
             "实例正在运行，不能执行对账写入。",
         ));
     }
-    let connection = open_database(&app)?;
+    let mut connection = open_database(&app)?;
     let root_path: String = connection
         .query_row(
             "SELECT root_path FROM instances WHERE id=?1",
@@ -237,6 +237,8 @@ pub fn reconcile_apply(
         .join(format!("reconcile-{}-{}", instance_id, unique_timestamp()));
     let mut freed = 0u64;
     let mut deduplicated = 0usize;
+    let mut file_transaction =
+        crate::fs_safe::FsTransaction::new(format!("reconcile-apply-{instance_id}"));
     for group in &fresh.duplicate_groups {
         let keep = group.keep.clone();
         for file in &group.files {
@@ -251,43 +253,65 @@ pub fn reconcile_apply(
                     freed = freed.saturating_add(meta.len());
                 }
                 let backup_path = backup_root.join(file);
-                if std::fs::rename(&path, &backup_path).is_ok() {
+                if file_transaction.move_with_undo(&path, &backup_path).is_ok() {
                     deduplicated += 1;
                 }
             }
         }
     }
-    let mut added = 0usize;
-    for file_name in &fresh.disk_missing_in_db {
-        let path = mods_dir.join(file_name);
-        let Ok(info) = inspect_mod_jar_path(&path) else {
-            continue;
-        };
-        let metadata = serde_json::to_string(&info).unwrap_or_default();
-        let changed = connection
-            .execute(
-                "INSERT OR IGNORE INTO content_items(instance_id,kind,file_name,hash,metadata_json,enabled,source,installed_at)
-                 VALUES(?1,'mod',?2,?3,?4,1,'external',?5)",
-                rusqlite::params![
-                    instance_id,
-                    file_name,
-                    info.sha256,
-                    metadata,
-                    chrono_like_timestamp()
-                ],
-            )
+    let (added, removed) = {
+        let db_transaction = connection
+            .transaction()
             .map_err(|error| LauncherError::storage(error.to_string()))?;
-        added += usize::from(changed > 0);
-    }
-    let mut removed = 0usize;
-    for file_name in &fresh.db_missing_on_disk {
-        removed += connection
-            .execute(
-                "DELETE FROM content_items WHERE instance_id=?1 AND kind='mod' AND file_name=?2",
-                rusqlite::params![instance_id, file_name],
-            )
-            .map_err(|error| LauncherError::storage(error.to_string()))?;
-    }
+        let db_result = (|| -> Result<(usize, usize), LauncherError> {
+            let mut added = 0usize;
+            for file_name in &fresh.disk_missing_in_db {
+                let path = mods_dir.join(file_name);
+                let Ok(info) = inspect_mod_jar_path(&path) else {
+                    continue;
+                };
+                let metadata = serde_json::to_string(&info).unwrap_or_default();
+                let changed = db_transaction
+                    .execute(
+                        "INSERT OR IGNORE INTO content_items(instance_id,kind,file_name,hash,metadata_json,enabled,source,installed_at)
+                         VALUES(?1,'mod',?2,?3,?4,1,'external',?5)",
+                        rusqlite::params![
+                            instance_id,
+                            file_name,
+                            info.sha256,
+                            metadata,
+                            chrono_like_timestamp()
+                        ],
+                    )
+                    .map_err(|error| LauncherError::storage(error.to_string()))?;
+                added += usize::from(changed > 0);
+            }
+            let mut removed = 0usize;
+            for file_name in &fresh.db_missing_on_disk {
+                removed += db_transaction
+                    .execute(
+                        "DELETE FROM content_items WHERE instance_id=?1 AND kind='mod' AND file_name=?2",
+                        rusqlite::params![instance_id, file_name],
+                    )
+                    .map_err(|error| LauncherError::storage(error.to_string()))?;
+            }
+            Ok((added, removed))
+        })();
+        match db_result {
+            Ok(counts) => {
+                db_transaction
+                    .commit()
+                    .map_err(|error| LauncherError::storage(error.to_string()))?;
+                counts
+            }
+            Err(error) => {
+                drop(db_transaction);
+                file_transaction.rollback()?;
+                return Err(error);
+            }
+        }
+    };
+    file_transaction.commit();
     Ok(ReconcileApplyResult {
         added_records: added,
         removed_stale_records: removed,

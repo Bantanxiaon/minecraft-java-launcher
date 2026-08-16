@@ -269,6 +269,20 @@ pub fn multiplayer_state(instance_id: i64) -> RoomInfo {
         })
 }
 
+/// 游戏退出后清理联机会话：取消日志监听并把房间标记为 CLOSED。
+pub fn on_game_exit(instance_id: i64) {
+    if let Some(cancel) = room_cancels().get(&instance_id) {
+        cancel.cancel();
+    }
+    room_cancels().remove(&instance_id);
+    let info = RoomInfo {
+        instance_id,
+        state: "CLOSED".into(),
+        address: None,
+    };
+    room_states().insert(instance_id, info);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,5 +307,23 @@ mod tests {
             Some("abc123.e4mc.link".into())
         );
         assert_eq!(parse_e4mc_address("normal log line"), None);
+    }
+
+    #[test]
+    fn game_exit_closes_room_state() {
+        room_states().insert(
+            42,
+            RoomInfo {
+                instance_id: 42,
+                state: "READY".into(),
+                address: Some("play.example.e4mc.link".into()),
+            },
+        );
+        room_cancels().insert(42, CancellationToken::new());
+        on_game_exit(42);
+        let state = multiplayer_state(42);
+        assert_eq!(state.state, "CLOSED");
+        assert!(state.address.is_none());
+        assert!(!room_cancels().contains_key(&42));
     }
 }

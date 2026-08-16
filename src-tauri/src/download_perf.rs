@@ -98,6 +98,47 @@ pub fn record_host_request(host: &str, success: bool, bytes: u64) {
     }
 }
 
+static HOST_SPEEDS: OnceLock<DashMap<String, Arc<std::sync::Mutex<SpeedMeter>>>> = OnceLock::new();
+
+pub fn record_host_bytes(host: &str, bytes: u64) {
+    let meter = host_speeds()
+        .entry(host.to_string())
+        .or_insert_with(|| Arc::new(std::sync::Mutex::new(SpeedMeter::default())))
+        .clone();
+    let lock = meter.lock();
+    if let Ok(mut inner) = lock {
+        inner.record(bytes);
+    }
+}
+
+fn host_speeds() -> &'static DashMap<String, Arc<std::sync::Mutex<SpeedMeter>>> {
+    HOST_SPEEDS.get_or_init(DashMap::new)
+}
+
+pub fn host_recent_speed(host: &str) -> f64 {
+    host_speeds()
+        .get(host)
+        .and_then(|meter| meter.lock().ok().map(|mut inner| inner.bytes_per_second()))
+        .unwrap_or(0.0)
+}
+
+/// 来源是否被判定为“慢”：近期失败率过高，或近 3 秒窗口吞吐低于 64 KB/s。
+/// 仅在有真实样本时判定，避免冷启动误判。
+pub fn host_is_slow(host: &str) -> bool {
+    if let Some(stats) = host_health().get(host).map(|entry| entry.clone()) {
+        if stats.requests >= 3 && stats.success.saturating_mul(2) < stats.requests {
+            return true;
+        }
+        if stats.bytes >= 256 * 1024 {
+            let speed = host_recent_speed(host);
+            if speed > 0.0 && speed < 64.0 * 1024.0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// 带抖动的指数退避，避免多个 worker 同时重试。
 pub fn retry_delay(attempt: u32) -> Duration {
     let base = 300u64.saturating_mul(1u64 << attempt.min(5));
@@ -192,5 +233,22 @@ mod tests {
         assert_eq!(concurrency.small.available_permits(), 16);
         assert_eq!(concurrency.library.available_permits(), 12);
         assert_eq!(concurrency.large.available_permits(), 4);
+    }
+
+    #[test]
+    fn slow_and_failing_hosts_are_detected() {
+        let host = "slow-host.test";
+        host_health().remove(host);
+        host_speeds().remove(host);
+        // 高失败率：3 次请求 2 次失败。
+        record_host_request(host, true, 0);
+        record_host_request(host, false, 0);
+        record_host_request(host, false, 0);
+        assert!(host_is_slow(host), "失败率过高应判定为慢来源");
+        host_health().remove(host);
+        // 低吞吐：累计样本足够但近 3 秒窗口只有极小流量。
+        record_host_request(host, true, 1024 * 1024);
+        record_host_bytes(host, 1024);
+        assert!(host_is_slow(host), "吞吐过低应判定为慢来源");
     }
 }

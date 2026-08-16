@@ -58,6 +58,82 @@ struct InstanceHealth {
     incompatible_mods: Vec<String>,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+struct ModHealthCache {
+    fingerprint: String,
+    mod_count: usize,
+    missing_dependencies: Vec<String>,
+    incompatible_mods: Vec<String>,
+    updated_at: String,
+}
+
+fn mods_directory_fingerprint(game_version: &str, loader: &str, mods: &Path) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    game_version.hash(&mut hasher);
+    loader.hash(&mut hasher);
+    if let Ok(entries) = fs::read_dir(mods) {
+        let mut listing: Vec<(String, u64, Option<u128>)> = entries
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|value| value.eq_ignore_ascii_case("jar"))
+            })
+            .filter_map(|entry| {
+                let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+                let metadata = entry.metadata().ok()?;
+                let modified = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|value| value.as_nanos());
+                Some((name, metadata.len(), modified))
+            })
+            .collect();
+        listing.sort();
+        for (name, len, modified) in listing {
+            name.hash(&mut hasher);
+            len.hash(&mut hasher);
+            modified.hash(&mut hasher);
+        }
+    } else {
+        "missing".hash(&mut hasher);
+    }
+    format!("{:x}", hasher.finish())
+}
+
+fn load_mod_health_cache(connection: &Connection, instance_id: i64) -> Option<ModHealthCache> {
+    let value: Option<String> = connection
+        .query_row(
+            "SELECT value_json FROM settings WHERE key=?1",
+            [format!("instance-health-cache:{instance_id}")],
+            |row| row.get(0),
+        )
+        .ok()
+        .flatten();
+    value.and_then(|json| serde_json::from_str(&json).ok())
+}
+
+fn store_mod_health_cache(
+    connection: &Connection,
+    instance_id: i64,
+    cache: &ModHealthCache,
+) -> Result<(), LauncherError> {
+    let json =
+        serde_json::to_string(cache).map_err(|error| LauncherError::storage(error.to_string()))?;
+    connection
+        .execute(
+            "INSERT INTO settings(key,value_json) VALUES(?1,?2)
+             ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+            params![format!("instance-health-cache:{instance_id}"), json],
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    Ok(())
+}
+
 #[tauri::command]
 fn build_info() -> BuildInfo {
     BuildInfo {
@@ -112,62 +188,83 @@ fn instance_health(app: AppHandle, instance_id: i64) -> Result<InstanceHealth, L
     let mut missing_ids = Vec::new();
     let mut incompatible_mods = Vec::new();
     if loader_type != "vanilla" && mods.is_dir() {
-        for entry in fs::read_dir(&mods)
-            .map_err(|error| LauncherError::storage(error.to_string()))?
-            .flatten()
-        {
-            if entry
-                .path()
-                .extension()
-                .and_then(|value| value.to_str())
-                .is_none_or(|value| !value.eq_ignore_ascii_case("jar"))
-            {
-                continue;
-            }
-            let Ok(info) = inspect_mod_jar_path(&entry.path()) else {
-                continue;
-            };
-            if info.loader_type == "unknown" {
-                continue;
-            }
-            mod_count += 1;
-            if !info.game_version_requirements.is_empty()
-                && !info
-                    .game_version_requirements
-                    .iter()
-                    .any(|requirement| game_version_matches(requirement, &game_version))
-            {
-                incompatible_mods.push(info.file_name.clone());
-            }
-            if !loaders_compatible(&loader_type, &info.loader_type) {
-                incompatible_mods.push(info.file_name);
-            }
-        }
-        let installed = installed_mod_ids(
-            fs::read_dir(&mods)
+        let fingerprint = mods_directory_fingerprint(&game_version, &loader_type, &mods);
+        let connection = open_database(&app)?;
+        let cached = load_mod_health_cache(&connection, instance_id)
+            .filter(|cache| cache.fingerprint == fingerprint);
+        if let Some(cache) = cached {
+            mod_count = cache.mod_count;
+            missing_ids = cache.missing_dependencies;
+            incompatible_mods = cache.incompatible_mods;
+        } else {
+            for entry in fs::read_dir(&mods)
                 .map_err(|error| LauncherError::storage(error.to_string()))?
                 .flatten()
-                .filter_map(|entry| inspect_mod_jar_path(&entry.path()).ok())
-                .collect::<Vec<_>>()
-                .iter(),
-        );
-        let mut seen = BTreeSet::new();
-        for entry in fs::read_dir(&mods)
-            .map_err(|error| LauncherError::storage(error.to_string()))?
-            .flatten()
-        {
-            let Ok(info) = inspect_mod_jar_path(&entry.path()) else {
-                continue;
-            };
-            for dependency in missing_dependencies(
-                info.dependencies.iter().map(|id| id.as_str()),
-                &installed,
-                has_kotlinforforge_file(&mods),
-            ) {
-                seen.insert(dependency);
+            {
+                if entry
+                    .path()
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .is_none_or(|value| !value.eq_ignore_ascii_case("jar"))
+                {
+                    continue;
+                }
+                let Ok(info) = inspect_mod_jar_path(&entry.path()) else {
+                    continue;
+                };
+                if info.loader_type == "unknown" {
+                    continue;
+                }
+                mod_count += 1;
+                if !info.game_version_requirements.is_empty()
+                    && !info
+                        .game_version_requirements
+                        .iter()
+                        .any(|requirement| game_version_matches(requirement, &game_version))
+                {
+                    incompatible_mods.push(info.file_name.clone());
+                }
+                if !loaders_compatible(&loader_type, &info.loader_type) {
+                    incompatible_mods.push(info.file_name);
+                }
             }
+            let installed = installed_mod_ids(
+                fs::read_dir(&mods)
+                    .map_err(|error| LauncherError::storage(error.to_string()))?
+                    .flatten()
+                    .filter_map(|entry| inspect_mod_jar_path(&entry.path()).ok())
+                    .collect::<Vec<_>>()
+                    .iter(),
+            );
+            let mut seen = BTreeSet::new();
+            for entry in fs::read_dir(&mods)
+                .map_err(|error| LauncherError::storage(error.to_string()))?
+                .flatten()
+            {
+                let Ok(info) = inspect_mod_jar_path(&entry.path()) else {
+                    continue;
+                };
+                for dependency in missing_dependencies(
+                    info.dependencies.iter().map(|id| id.as_str()),
+                    &installed,
+                    has_kotlinforforge_file(&mods),
+                ) {
+                    seen.insert(dependency);
+                }
+            }
+            missing_ids = seen.into_iter().collect();
+            let _ = store_mod_health_cache(
+                &connection,
+                instance_id,
+                &ModHealthCache {
+                    fingerprint,
+                    mod_count,
+                    missing_dependencies: missing_ids.clone(),
+                    incompatible_mods: incompatible_mods.clone(),
+                    updated_at: chrono_like_timestamp(),
+                },
+            );
         }
-        missing_ids = seen.into_iter().collect();
     }
     Ok(InstanceHealth {
         instance_id,
@@ -688,6 +785,36 @@ fn recover_interrupted_download_jobs(connection: &Connection) -> rusqlite::Resul
          WHERE status='downloading'",
         [],
     )
+}
+
+/// 启动时恢复未完成会话：上次进程异常退出会留下 ended_at 为空的 play_history，
+/// 这里统一标记为异常结束并写入崩溃建议，避免状态永远停留在“运行中”。
+fn recover_unfinished_sessions(connection: &Connection) -> rusqlite::Result<usize> {
+    let mut statement =
+        connection.prepare("SELECT id, instance_id FROM play_history WHERE ended_at IS NULL")?;
+    let rows = statement
+        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?
+        .filter_map(Result::ok)
+        .collect::<Vec<_>>();
+    drop(statement);
+    let mut recovered = 0usize;
+    for (history_id, instance_id) in rows {
+        let ended_at = chrono_like_timestamp();
+        connection.execute(
+            "UPDATE play_history SET ended_at=?1, exit_code=NULL WHERE id=?2",
+            params![ended_at, history_id],
+        )?;
+        connection.execute(
+            "INSERT INTO crash_reports(instance_id, occurred_at, exit_code, log_path, suspected_cause, confidence, suggestion)
+             VALUES(?1, ?2, NULL, '', '上次会话被启动器或系统异常关闭，未能记录退出状态。', 'medium', '重新启动游戏即可；若反复出现请查看对应实例日志。')",
+            params![instance_id, ended_at],
+        )?;
+        recovered += 1;
+    }
+    if recovered > 0 {
+        log::warn!("已恢复 {recovered} 条未完成会话记录（标记异常结束）。");
+    }
+    Ok(recovered)
 }
 
 #[tauri::command]
@@ -1569,7 +1696,7 @@ struct Instance {
     source: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct JavaRuntime {
     path: String,
@@ -1578,6 +1705,12 @@ struct JavaRuntime {
     major_version: Option<u32>,
     architecture: String,
     is_64_bit: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct JavaRuntimeCache {
+    paths: Vec<String>,
+    runtimes: Vec<JavaRuntime>,
 }
 
 fn property_from_java_output(output: &str, key: &str) -> Option<String> {
@@ -1633,7 +1766,11 @@ fn collect_java_candidates() -> Vec<PathBuf> {
 }
 
 #[tauri::command]
-fn detect_java_runtimes() -> Vec<JavaRuntime> {
+fn detect_java_runtimes(app: AppHandle) -> Vec<JavaRuntime> {
+    detect_java_runtimes_cached(&app)
+}
+
+fn scan_java_runtimes() -> Vec<JavaRuntime> {
     collect_java_candidates()
         .into_iter()
         .filter_map(|path| {
@@ -1665,6 +1802,46 @@ fn detect_java_runtimes() -> Vec<JavaRuntime> {
             })
         })
         .collect()
+}
+
+/// Java 运行时缓存：候选 java.exe 路径全部仍存在时直接复用，任何路径失效才重新探测。
+fn detect_java_runtimes_cached(app: &AppHandle) -> Vec<JavaRuntime> {
+    if let Ok(connection) = open_database(app) {
+        let cached: Option<JavaRuntimeCache> = connection
+            .query_row(
+                "SELECT value_json FROM settings WHERE key='java-runtime-cache'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .ok()
+            .and_then(|json| serde_json::from_str(&json).ok());
+        if let Some(cache) = cached {
+            if cache.paths.iter().all(|path| Path::new(path).is_file())
+                && !cache.runtimes.is_empty()
+            {
+                return cache.runtimes;
+            }
+        }
+    }
+    let paths = collect_java_candidates();
+    let runtimes = scan_java_runtimes();
+    if let Ok(connection) = open_database(app) {
+        let cache = JavaRuntimeCache {
+            paths: paths
+                .into_iter()
+                .map(|path| path.to_string_lossy().to_string())
+                .collect(),
+            runtimes: runtimes.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&cache) {
+            let _ = connection.execute(
+                "INSERT INTO settings(key,value_json) VALUES('java-runtime-cache',?1)
+                 ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+                [json],
+            );
+        }
+    }
+    runtimes
 }
 
 fn inspect_java_runtime(path: &Path) -> Result<JavaRuntime, LauncherError> {
@@ -2045,22 +2222,33 @@ async fn install_managed_java(major: u32) -> Result<JavaRuntime, LauncherError> 
         .strip_prefix(&staging)
         .map_err(|_| LauncherError::storage("Java 解压路径越界。"))?
         .to_path_buf();
+    let mut transaction = fs_safe::FsTransaction::new(format!("java-swap-{major}"));
+    let backup = runtimes.join(format!("java-{major}-backup-{}", unique_timestamp()));
     if destination.exists() {
-        fs::rename(
-            &destination,
-            runtimes.join(format!("java-{major}-backup-{}", unique_timestamp())),
-        )
-        .map_err(|error| LauncherError::storage(error.to_string()))?;
+        transaction.move_with_undo(&destination, &backup)?;
     }
-    fs::rename(&staging, &destination)
-        .map_err(|error| LauncherError::storage(error.to_string()))?;
-    let runtime = inspect_java_runtime(&destination.join(relative_java))?;
-    if runtime.major_version != Some(major) || !runtime.is_64_bit {
-        return Err(LauncherError::validation(
-            "安装后的 Java 版本或架构与请求不一致。",
-        ));
+    transaction.move_with_undo(&staging, &destination)?;
+    match inspect_java_runtime(&destination.join(relative_java)) {
+        Ok(runtime) if runtime.major_version == Some(major) && runtime.is_64_bit => {
+            transaction.commit();
+            if backup.exists() {
+                let _ = fs::remove_dir_all(&backup);
+            }
+            Ok(runtime)
+        }
+        Ok(_) => {
+            transaction.rollback()?;
+            let _ = fs::remove_dir_all(&staging);
+            Err(LauncherError::validation(
+                "安装后的 Java 版本或架构与请求不一致。",
+            ))
+        }
+        Err(error) => {
+            transaction.rollback()?;
+            let _ = fs::remove_dir_all(&staging);
+            Err(error)
+        }
     }
-    Ok(runtime)
 }
 
 #[derive(Serialize)]
@@ -2138,6 +2326,11 @@ fn hide_launcher_window(app: AppHandle) -> Result<(), LauncherError> {
 pub(crate) fn running_games() -> &'static Mutex<HashMap<i64, u32>> {
     static RUNNING_GAMES: OnceLock<Mutex<HashMap<i64, u32>>> = OnceLock::new();
     RUNNING_GAMES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub(crate) fn startup_instant() -> &'static OnceLock<Instant> {
+    static STARTUP_INSTANT: OnceLock<Instant> = OnceLock::new();
+    &STARTUP_INSTANT
 }
 
 #[tauri::command]
@@ -7571,12 +7764,13 @@ fn remove_mod_to_backup(app: AppHandle, content_id: i64) -> Result<RemovedConten
     fs::create_dir_all(&backup_directory)
         .map_err(|error| LauncherError::storage(error.to_string()))?;
     let backup = backup_directory.join(format!("{}-{}", unique_timestamp(), item.file_name));
-    fs::rename(&source, &backup)
-        .map_err(|error| LauncherError::storage(format!("备份模组失败：{error}")))?;
+    let mut transaction = fs_safe::FsTransaction::new(format!("remove-mod-{content_id}"));
+    transaction.move_with_undo(&source, &backup)?;
     if let Err(error) = connection.execute("DELETE FROM content_items WHERE id=?1", [content_id]) {
-        let _ = fs::rename(&backup, &source);
+        transaction.rollback()?;
         return Err(LauncherError::storage(error.to_string()));
     }
+    transaction.commit();
     Ok(RemovedContent {
         id: content_id,
         backup_path: backup.to_string_lossy().to_string(),
@@ -7679,13 +7873,16 @@ fn set_content_enabled(
     if destination.exists() {
         return Err(LauncherError::validation("目标位置已有同名内容。"));
     }
-    fs::rename(&source, &destination).map_err(|error| LauncherError::storage(error.to_string()))?;
-    connection
-        .execute(
-            "UPDATE content_items SET enabled=?1 WHERE id=?2",
-            params![enabled as i64, content_id],
-        )
-        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let mut transaction = fs_safe::FsTransaction::new(format!("toggle-content-{content_id}"));
+    transaction.move_with_undo(&source, &destination)?;
+    if let Err(error) = connection.execute(
+        "UPDATE content_items SET enabled=?1 WHERE id=?2",
+        params![enabled as i64, content_id],
+    ) {
+        transaction.rollback()?;
+        return Err(LauncherError::storage(error.to_string()));
+    }
+    transaction.commit();
     item.enabled = enabled;
     Ok(item)
 }
@@ -7710,10 +7907,13 @@ fn remove_content_to_backup(
     fs::create_dir_all(&backup_directory)
         .map_err(|error| LauncherError::storage(error.to_string()))?;
     let backup = backup_directory.join(format!("{}-{}", unique_timestamp(), item.file_name));
-    fs::rename(&source, &backup).map_err(|error| LauncherError::storage(error.to_string()))?;
-    connection
-        .execute("DELETE FROM content_items WHERE id=?1", [content_id])
-        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let mut transaction = fs_safe::FsTransaction::new(format!("remove-content-{content_id}"));
+    transaction.move_with_undo(&source, &backup)?;
+    if let Err(error) = connection.execute("DELETE FROM content_items WHERE id=?1", [content_id]) {
+        transaction.rollback()?;
+        return Err(LauncherError::storage(error.to_string()));
+    }
+    transaction.commit();
     Ok(RemovedContent {
         id: content_id,
         backup_path: backup.to_string_lossy().to_string(),
@@ -7884,22 +8084,36 @@ fn import_world(
         destination_name = format!("{}-imported-{}", destination_name, unique_timestamp());
         destination = saves.join(&destination_name);
     }
+    let staging = saves.join(format!(".incoming-{}", unique_timestamp()));
+    fs::create_dir_all(&staging).map_err(|error| LauncherError::storage(error.to_string()))?;
     let count = if let Some(world) = source_world {
-        copy_world_directory(&world, &destination)?
+        copy_world_directory(&world, &staging.join("world"))?
     } else {
-        fs::create_dir_all(&destination)
-            .map_err(|error| LauncherError::storage(error.to_string()))?;
-        extract_world_zip(&source, &destination)?
+        extract_world_zip(&source, &staging)?
     };
-    if !destination.join("level.dat").is_file() {
+    let world_root = locate_world_directory(&staging)?;
+    if !world_root.join("level.dat").is_file() {
+        let _ = fs::remove_dir_all(&staging);
         return Err(LauncherError::validation(
             "导入结果缺少 level.dat；不完整目录已保留以便恢复。",
         ));
     }
+    let mut transaction = fs_safe::FsTransaction::new(format!("import-world-{instance_id}"));
+    transaction.move_with_undo(&world_root, &destination)?;
     let hash = sha256_file_sync(&destination.join("level.dat"))?;
     let installed_at = chrono_like_timestamp();
     let metadata = serde_json::json!({"fileCount":count}).to_string();
-    connection.execute("INSERT INTO content_items(instance_id,kind,file_name,hash,metadata_json,enabled,source,installed_at) VALUES(?1,'world',?2,?3,?4,1,'local',?5)", params![instance_id,destination_name,hash,metadata,installed_at]).map_err(|error| LauncherError::storage(error.to_string()))?;
+    if let Err(error) = connection.execute(
+        "INSERT INTO content_items(instance_id,kind,file_name,hash,metadata_json,enabled,source,installed_at)
+         VALUES(?1,'world',?2,?3,?4,1,'local',?5)",
+        params![instance_id, destination_name, hash, metadata, installed_at],
+    ) {
+        transaction.rollback()?;
+        let _ = fs::remove_dir_all(&staging);
+        return Err(LauncherError::storage(error.to_string()));
+    }
+    transaction.commit();
+    let _ = fs::remove_dir_all(&staging);
     Ok(ContentItem {
         id: connection.last_insert_rowid(),
         instance_id,
@@ -8583,7 +8797,7 @@ fn boot_health_check(app: AppHandle) -> Result<BootHealthReport, LauncherError> 
         });
         mods.push(scan_boot_mods(id, &root_path, &loader_type, &game_version));
     }
-    let runtimes = detect_java_runtimes();
+    let runtimes = detect_java_runtimes_cached(&app);
     let has_64_bit = runtimes.iter().any(|runtime| runtime.is_64_bit);
     let recommended_major = runtimes
         .iter()
@@ -8774,112 +8988,133 @@ fn clone_instance(
     ).map_err(|_| LauncherError::validation("实例不存在。"))?;
     drop(connection);
     let mut cloned = create_instance_profile(app.clone(), name, version, loader.clone())?;
-    let source_game = PathBuf::from(source_root).join(".minecraft");
-    let target_game = PathBuf::from(&cloned.root_path).join(".minecraft");
-    for directory in ["mods", "config", "resourcepacks", "shaderpacks", "versions"] {
-        copy_directory_contents(&source_game.join(directory), &target_game.join(directory))?;
-    }
-    if copy_saves {
-        copy_directory_contents(&source_game.join("saves"), &target_game.join("saves"))?;
-    }
-    // libraries/assets 体积最大：优先 CoW reflink 共享底层数据块，失败回退普通复制。
-    for directory in ["libraries", "assets"] {
-        copy_directory_contents_deduped(
-            &source_game.join(directory),
-            &target_game.join(directory),
-        )?;
-    }
-    let cloned_status = if loader == "vanilla" {
-        "missing"
-    } else {
-        "loader_missing"
-    };
-    let connection = open_database(&app)?;
-    connection
-        .execute(
-            "UPDATE instances SET loader_version=?1,memory_mb=?2,resolution=?3,icon=?4,java_profile=?5,status=?6,source='clone' WHERE id=?7",
-            params![
-                loader_version,
-                memory_mb,
-                resolution,
-                icon,
-                java_profile,
-                cloned_status,
-                cloned.id
-            ],
-        )
-        .map_err(|error| LauncherError::storage(error.to_string()))?;
-    connection
-        .execute(
-            "INSERT INTO instance_launch_settings(instance_id, memory_min_mb, memory_max_mb, java_mode, java_path, jvm_args_json, game_args_json, width, height, account_id)
-             SELECT ?1, memory_min_mb, memory_max_mb, java_mode, java_path, jvm_args_json, game_args_json, width, height, account_id
-             FROM instance_launch_settings WHERE instance_id=?2",
-            params![cloned.id, instance_id],
-        )
-        .map_err(|error| LauncherError::storage(error.to_string()))?;
-    connection
-        .execute(
-            "INSERT INTO instance_pack_source(instance_id, provider, project_id, version_id, pack_version, source_url, installed_at)
-             SELECT ?1, provider, project_id, version_id, pack_version, source_url, installed_at
-             FROM instance_pack_source WHERE instance_id=?2",
-            params![cloned.id, instance_id],
-        )
-        .map_err(|error| LauncherError::storage(error.to_string()))?;
-    {
-        let mut statement = connection
-            .prepare("SELECT kind,file_name,hash,metadata_json,enabled FROM content_items WHERE instance_id=?1")
+    let cloned_id = cloned.id;
+    let cloned_root = cloned.root_path.clone();
+    let fill_result: Result<Instance, LauncherError> = (|| {
+        let source_game = PathBuf::from(&source_root).join(".minecraft");
+        let target_game = PathBuf::from(&cloned.root_path).join(".minecraft");
+        for directory in ["mods", "config", "resourcepacks", "shaderpacks", "versions"] {
+            copy_directory_contents(&source_game.join(directory), &target_game.join(directory))?;
+        }
+        if copy_saves {
+            copy_directory_contents(&source_game.join("saves"), &target_game.join("saves"))?;
+        }
+        // libraries/assets 体积最大：优先 CoW reflink 共享底层数据块，失败回退普通复制。
+        for directory in ["libraries", "assets"] {
+            copy_directory_contents_deduped(
+                &source_game.join(directory),
+                &target_game.join(directory),
+            )?;
+        }
+        let cloned_status = if loader == "vanilla" {
+            "missing"
+        } else {
+            "loader_missing"
+        };
+        let connection = open_database(&app)?;
+        connection
+            .execute(
+                "UPDATE instances SET loader_version=?1,memory_mb=?2,resolution=?3,icon=?4,java_profile=?5,status=?6,source='clone' WHERE id=?7",
+                params![
+                    loader_version,
+                    memory_mb,
+                    resolution,
+                    icon,
+                    java_profile,
+                    cloned_status,
+                    cloned.id
+                ],
+            )
             .map_err(|error| LauncherError::storage(error.to_string()))?;
-        let rows = statement
-            .query_map([instance_id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                    row.get::<_, i64>(4)?,
-                ))
-            })
-            .map_err(|error| LauncherError::storage(error.to_string()))?
-            .filter_map(Result::ok)
-            .collect::<Vec<_>>();
-        drop(statement);
-        for (kind, file_name, hash, metadata_json, enabled) in rows {
-            connection
-                .execute(
-                    "INSERT OR IGNORE INTO content_items(instance_id,kind,file_name,hash,metadata_json,enabled,source,installed_at)
-                     VALUES(?1,?2,?3,?4,?5,?6,'clone',?7)",
-                    rusqlite::params![
-                        cloned.id,
-                        kind,
-                        file_name,
-                        hash,
-                        metadata_json,
-                        enabled,
-                        chrono_like_timestamp()
-                    ],
-                )
+        connection
+            .execute(
+                "INSERT INTO instance_launch_settings(instance_id, memory_min_mb, memory_max_mb, java_mode, java_path, jvm_args_json, game_args_json, width, height, account_id)
+                 SELECT ?1, memory_min_mb, memory_max_mb, java_mode, java_path, jvm_args_json, game_args_json, width, height, account_id
+                 FROM instance_launch_settings WHERE instance_id=?2",
+                params![cloned.id, instance_id],
+            )
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        connection
+            .execute(
+                "INSERT INTO instance_pack_source(instance_id, provider, project_id, version_id, pack_version, source_url, installed_at)
+                 SELECT ?1, provider, project_id, version_id, pack_version, source_url, installed_at
+                 FROM instance_pack_source WHERE instance_id=?2",
+                params![cloned.id, instance_id],
+            )
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        {
+            let mut statement = connection
+                .prepare("SELECT kind,file_name,hash,metadata_json,enabled FROM content_items WHERE instance_id=?1")
                 .map_err(|error| LauncherError::storage(error.to_string()))?;
+            let rows = statement
+                .query_map([instance_id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                })
+                .map_err(|error| LauncherError::storage(error.to_string()))?
+                .filter_map(Result::ok)
+                .collect::<Vec<_>>();
+            drop(statement);
+            for (kind, file_name, hash, metadata_json, enabled) in rows {
+                if !copy_saves && kind == "world" {
+                    continue;
+                }
+                connection
+                    .execute(
+                        "INSERT OR IGNORE INTO content_items(instance_id,kind,file_name,hash,metadata_json,enabled,source,installed_at)
+                         VALUES(?1,?2,?3,?4,?5,?6,'clone',?7)",
+                        rusqlite::params![
+                            cloned.id,
+                            kind,
+                            file_name,
+                            hash,
+                            metadata_json,
+                            enabled,
+                            chrono_like_timestamp()
+                        ],
+                    )
+                    .map_err(|error| LauncherError::storage(error.to_string()))?;
+            }
+        }
+        connection
+            .execute(
+                "INSERT INTO managed_content(id, instance_id, kind, provider, project_id, version_id, file_sha1, file_sha256, installed_path, installed_by_launcher, created_at)
+                 SELECT 'clone-' || ?1 || '-' || id, ?1, kind, provider, project_id, version_id, file_sha1, file_sha256, installed_path, 0, ?2
+                 FROM managed_content WHERE instance_id=?3",
+                params![cloned.id, chrono_like_timestamp(), instance_id],
+            )
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        connection
+            .execute(
+                "INSERT INTO pack_owned_files(instance_id, relative_path, sha1, sha256, source, installed_at)
+                 SELECT ?1, relative_path, sha1, sha256, 'clone', ?2 FROM pack_owned_files WHERE instance_id=?3",
+                params![cloned.id, chrono_like_timestamp(), instance_id],
+            )
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        cloned.memory_mb = memory_mb;
+        cloned.status = cloned_status.into();
+        cloned.source = "clone".into();
+        let report = content_reconcile::reconcile_scan(app.clone(), cloned.id)?;
+        log::info!(
+            "克隆完成，对账结果：db_missing_on_disk={} disk_missing_in_db={} duplicates={}",
+            report.db_missing_on_disk.len(),
+            report.disk_missing_in_db.len(),
+            report.duplicate_groups.len()
+        );
+        Ok(cloned)
+    })();
+    match fill_result {
+        Ok(instance) => Ok(instance),
+        Err(error) => {
+            discard_instance_immediately(&app, cloned_id, &cloned_root);
+            Err(error)
         }
     }
-    connection
-        .execute(
-            "INSERT INTO managed_content(id, instance_id, kind, provider, project_id, version_id, file_sha1, file_sha256, installed_path, installed_by_launcher, created_at)
-             SELECT 'clone-' || ?1 || '-' || id, ?1, kind, provider, project_id, version_id, file_sha1, file_sha256, installed_path, 0, ?2
-             FROM managed_content WHERE instance_id=?3",
-            params![cloned.id, chrono_like_timestamp(), instance_id],
-        )
-        .map_err(|error| LauncherError::storage(error.to_string()))?;
-    cloned.memory_mb = memory_mb;
-    cloned.status = cloned_status.into();
-    cloned.source = "clone".into();
-    let report = content_reconcile::reconcile_scan(app, cloned.id)?;
-    log::info!(
-        "克隆完成，对账结果：db_missing_on_disk={} disk_missing_in_db={} duplicates={}",
-        report.db_missing_on_disk.len(),
-        report.disk_missing_in_db.len(),
-        report.duplicate_groups.len()
-    );
-    Ok(cloned)
 }
 
 /// 立即丢弃一个刚创建、尚未交付给用户的新实例（用于事务回滚），不写入回收站。
@@ -10504,6 +10739,35 @@ async fn download_verified_file_with_progress(
             return Ok(size);
         }
     }
+    // 慢来源自动切换：主源近期吞吐过低或失败率过高时，优先走 BMCLAPI 镜像，
+    // SHA-1 校验不变，失败再回主源，保证可用性优先且不出错。
+    if let Ok(parsed) = validate_resource_url(url) {
+        if parsed
+            .host_str()
+            .is_some_and(|host| download_perf::host_is_slow(host))
+        {
+            if let Some(mirror) = bmclapi_mirror_url(&parsed) {
+                log::info!(
+                    "下载源 {} 判定为慢速，本次自动改用镜像。",
+                    parsed.host_str().unwrap_or("unknown")
+                );
+                if let Ok(size) = download_verified_file_attempt(
+                    app,
+                    instance_id,
+                    mirror.as_str(),
+                    expected_sha1,
+                    expected_size,
+                    target,
+                    emit_file_progress,
+                    false,
+                )
+                .await
+                {
+                    return Ok(size);
+                }
+            }
+        }
+    }
     let first = download_verified_file_attempt(
         app,
         instance_id,
@@ -10749,6 +11013,7 @@ async fn download_verified_file_attempt(
     let completed_bytes = Arc::new(AtomicU64::new(resume_from));
     let progress_bytes = completed_bytes.clone();
     let source_url = url.to_string();
+    let source_host = url.host_str().unwrap_or("unknown").to_string();
     let file_name = target
         .file_name()
         .and_then(|value| value.to_str())
@@ -10810,6 +11075,7 @@ async fn download_verified_file_attempt(
             }
             hasher.update(&chunk);
             download_perf::record_network_bytes(chunk.len() as u64);
+            download_perf::record_host_bytes(&source_host, chunk.len() as u64);
             file.write_all(&chunk)
                 .await
                 .map_err(|error| LauncherError::storage(error.to_string()))?;
@@ -12160,6 +12426,12 @@ async fn launch_instance(
             event_name,
             serde_json::json!({ "instanceId": instance_id, "exitCode": exit_code }),
         );
+        // 联机会话清理 + 游戏退出后的收尾任务通知（健康扫描等由前端响应）。
+        multiplayer::on_game_exit(instance_id);
+        let _ = watcher_app.emit(
+            "post-game-tasks",
+            serde_json::json!({ "instanceId": instance_id, "exitCode": exit_code }),
+        );
         // “启动后关闭启动器”：UI 只是隐藏窗口，supervisor（本进程）活到游戏退出后
         // 才真正退出，保证 play_history / crash report / game-exited 不丢失。
         if get_settings(watcher_app.clone())
@@ -12279,12 +12551,41 @@ pub(crate) fn unique_timestamp() -> u128 {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    startup_instant().get_or_init(Instant::now);
     tauri::Builder::default()
         .setup(|_app| {
+            let db_started = Instant::now();
+            let mut recovered_downloads = 0usize;
+            let mut recovered_sessions = 0usize;
             if let Ok(connection) = open_database(_app.handle()) {
-                let _ = recover_interrupted_download_jobs(&connection);
+                recovered_downloads =
+                    recover_interrupted_download_jobs(&connection).unwrap_or_default();
+                recovered_sessions = recover_unfinished_sessions(&connection).unwrap_or_default();
             }
             recover_interrupted_modpack_operations(_app.handle());
+            let db_ms = db_started.elapsed().as_millis() as u64;
+            let total_ms = startup_instant()
+                .get()
+                .map(|instant| instant.elapsed().as_millis() as u64)
+                .unwrap_or(0);
+            let metrics = serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "totalMs": total_ms,
+                "dbMs": db_ms,
+                "recoveredDownloads": recovered_downloads,
+                "recoveredSessions": recovered_sessions,
+                "timestamp": chrono_like_timestamp()
+            });
+            if let Ok(root) = launcher_data_directory() {
+                let _ = fs::write(
+                    root.join("startup-metrics.json"),
+                    serde_json::to_vec_pretty(&metrics).unwrap_or_default(),
+                );
+            }
+            let _ = _app.handle().emit("startup-metrics", &metrics);
+            if std::env::var("SH_STARTUP_BENCH_EXIT").is_ok_and(|value| value == "1") {
+                _app.handle().exit(0);
+            }
             #[cfg(debug_assertions)]
             {
                 let app = _app;
@@ -13553,6 +13854,136 @@ side="BOTH"
         assert_eq!(
             fs::read(target.join("indexes").join("2.json")).unwrap(),
             b"asset-two"
+        );
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn modpack_update_db_failure_rolls_back_rows() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        run_migrations(&mut connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO instances(id,name,root_path,game_version,loader_type,status,source,created_at)
+                 VALUES(1,'QA','D:/tmp/qa','1.20.1','forge','ready','qa','1')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO content_items(instance_id,kind,file_name,hash,enabled,source,installed_at)
+                 VALUES(1,'mod','old.jar','oldhash',1,'modrinth','1')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO pack_owned_files(instance_id,relative_path,sha1,sha256,source,installed_at)
+                 VALUES(1,'mods/old.jar','sha','oldhash','modrinth','1')",
+                [],
+            )
+            .unwrap();
+        let game = Path::new("D:/tmp/qa/.minecraft");
+        // 模拟 DB 事务在提交前失败：drop 即回滚。
+        {
+            let transaction = connection.transaction().unwrap();
+            sync_mod_content_row(&transaction, 1, "mods/old.jar", ModSync::Remove, game).unwrap();
+            transaction
+                .execute(
+                    "DELETE FROM pack_owned_files WHERE instance_id=1 AND relative_path='mods/old.jar'",
+                    [],
+                )
+                .unwrap();
+            drop(transaction);
+        }
+        let content_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM content_items WHERE instance_id=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let owned_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM pack_owned_files WHERE instance_id=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(content_count, 1, "DB 失败后 content_items 应回滚");
+        assert_eq!(owned_count, 1, "DB 失败后 pack_owned_files 应回滚");
+        // 正常提交应生效。
+        let transaction = connection.transaction().unwrap();
+        sync_mod_content_row(&transaction, 1, "mods/old.jar", ModSync::Remove, game).unwrap();
+        transaction.commit().unwrap();
+        let content_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM content_items WHERE instance_id=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(content_count, 0, "正常提交应删除行");
+    }
+
+    #[test]
+    fn unfinished_sessions_are_closed_on_startup() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        run_migrations(&mut connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO instances(id,name,root_path,game_version,loader_type,status,source,created_at)
+                 VALUES(7,'QA','D:/tmp/qa7','1.20.1','forge','ready','qa','1')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO play_history(id,instance_id,started_at) VALUES(1,7,'1')",
+                [],
+            )
+            .unwrap();
+        let recovered = recover_unfinished_sessions(&connection).unwrap();
+        assert_eq!(recovered, 1);
+        let ended: Option<String> = connection
+            .query_row("SELECT ended_at FROM play_history WHERE id=1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(ended.is_some(), "异常会话应被标记结束");
+        let crash_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM crash_reports WHERE instance_id=7",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(crash_count, 1, "异常会话应写入崩溃建议");
+        // 已结束的会话不应重复处理。
+        assert_eq!(recover_unfinished_sessions(&connection).unwrap(), 0);
+    }
+
+    #[test]
+    fn mods_fingerprint_changes_with_directory_contents() {
+        let directory = std::env::temp_dir().join(format!("sh-fingerprint-{}", unique_timestamp()));
+        let mods = directory.join("mods");
+        fs::create_dir_all(&mods).unwrap();
+        let before = mods_directory_fingerprint("1.20.1", "forge", &mods);
+        fs::write(mods.join("a.jar"), b"jar-a").unwrap();
+        let with_a = mods_directory_fingerprint("1.20.1", "forge", &mods);
+        fs::write(mods.join("b.jar"), b"jar-b").unwrap();
+        let with_ab = mods_directory_fingerprint("1.20.1", "forge", &mods);
+        assert_ne!(before, with_a, "新增模组应改变指纹");
+        assert_ne!(with_a, with_ab, "再新增模组应改变指纹");
+        assert_eq!(
+            mods_directory_fingerprint("1.20.1", "forge", &mods),
+            with_ab,
+            "目录未变时指纹应稳定"
+        );
+        assert_ne!(
+            mods_directory_fingerprint("1.20.1", "fabric", &mods),
+            with_ab,
+            "加载器变化应改变指纹"
         );
         let _ = fs::remove_dir_all(&directory);
     }
