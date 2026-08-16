@@ -1,0 +1,7 @@
+[14:20:01] [Server thread/INFO]: Local game hosted on port 64123
+[14:20:02] [Server thread/INFO] [e4mc/]: broker req: https://broker.e4mc.link/getBestRelay GET
+[14:20:02] [Server thread/INFO] [e4mc/]: broker resp: (GET https://broker.e4mc.link/getBestRelay) 200
+[14:20:03] [Server thread/INFO] [e4mc/]: using relay asia-east
+[14:20:04] [Server thread/INFO] [e4mc/]: control channel open: [id: 0x2a, L:/192.0.2.3:54321 - R:asia.e4mc.link/192.0.2.30:25575]
+[14:20:04] [Server thread/INFO] [e4mc/]: probing capabilities
+[14:20:05] [Server thread/INFO] [e4mc/]: Domain assigned: neoforge-abc.e4mc.link

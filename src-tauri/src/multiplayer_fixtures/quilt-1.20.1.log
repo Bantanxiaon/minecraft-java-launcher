@@ -1,0 +1,7 @@
+[14:30:01] [Server thread/INFO]: Local game hosted on port 65321
+[14:30:02] [Server thread/INFO] [e4mc]: broker req: https://broker.e4mc.link/getBestRelay GET
+[14:30:02] [Server thread/INFO] [e4mc]: broker resp: (GET https://broker.e4mc.link/getBestRelay) 200
+[14:30:03] [Server thread/INFO] [e4mc]: using relay eu-west
+[14:30:04] [Server thread/INFO] [e4mc]: control channel open: [id: 0x33, L:/192.0.2.4:54321 - R:eu.e4mc.link/192.0.2.40:25575]
+[14:30:04] [Server thread/INFO] [e4mc]: probing capabilities
+[14:30:05] [Server thread/INFO] [e4mc]: Domain assigned: quilt-abc.e4mc.link

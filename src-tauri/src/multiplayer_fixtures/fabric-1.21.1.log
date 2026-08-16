@@ -1,0 +1,10 @@
+[14:10:01] [Server thread/INFO]: Local game hosted on port 63012
+[14:10:02] [Server thread/INFO] [e4mc]: broker req: https://broker.e4mc.link/getBestRelay GET
+[14:10:02] [Server thread/INFO] [e4mc]: broker resp: (GET https://broker.e4mc.link/getBestRelay) 200
+[14:10:02] [Server thread/INFO] [e4mc]: relaymap req: https://natives.e4mc.link/relaymap.json GET
+[14:10:03] [Server thread/INFO] [e4mc]: relaymap resp: (GET https://natives.e4mc.link/relaymap.json) 200
+[14:10:03] [Server thread/INFO] [e4mc]: using relay na-east
+[14:10:04] [Server thread/INFO] [e4mc]: Starting DialtoneAmbientSession!
+[14:10:04] [Server thread/INFO] [e4mc]: control channel open: [id: 0x11, L:/192.0.2.2:54321 - R:na.e4mc.link/192.0.2.20:25575]
+[14:10:04] [Server thread/INFO] [e4mc]: probing capabilities
+[14:10:05] [Server thread/INFO] [e4mc]: Domain assigned: fabric-abc.e4mc.link

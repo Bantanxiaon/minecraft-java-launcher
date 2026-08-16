@@ -1,0 +1,9 @@
+[14:02:10] [Server thread/INFO]: Local game hosted on port 52913
+[14:02:11] [Server thread/INFO] [e4mc/]: broker req: https://broker.e4mc.link/getBestRelay GET
+[14:02:11] [Server thread/INFO] [e4mc/]: broker resp: (GET https://broker.e4mc.link/getBestRelay) 200
+[14:02:11] [Server thread/INFO] [e4mc/]: using relay eu-central
+[14:02:12] [Server thread/INFO] [e4mc/]: control channel open: [id: 0x7f, L:/192.0.2.1:54321 - R:eu.e4mc.link/192.0.2.10:25575]
+[14:02:12] [Server thread/INFO] [e4mc/]: probing capabilities
+[14:02:12] [Server thread/INFO] [e4mc/]: control channel write complete
+[14:02:13] [Server thread/INFO] [e4mc/]: Domain assigned: sunset-abc.e4mc.link
+[14:02:13] [Server thread/INFO] [System] [CHAT] Local game hosted on domain [sunset-abc.e4mc.link]
