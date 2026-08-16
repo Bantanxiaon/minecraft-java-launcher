@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import {
+  getCurrentWebviewWindow,
+  WebviewWindow,
+} from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
@@ -34,7 +37,7 @@ import { SettingsPage } from "./pages/SettingsPage";
 import { StoragePage } from "./pages/StoragePage";
 import { InstanceLibraryPage } from "./pages/InstanceLibraryPage";
 import { HomeUpdateCard } from "./components/HomeUpdateCard";
-import { SplashScreen } from "./components/SplashScreen";
+import { SplashView } from "./components/SplashScreen";
 import { VersionHighlightsModal } from "./components/VersionHighlightsModal";
 import { ChangelogModal } from "./components/ChangelogModal";
 import { TutorialModal } from "./components/TutorialModal";
@@ -47,8 +50,6 @@ import { checkForUpdate, updaterEnabled } from "./updater";
 import type { Update } from "./updater";
 import type {
   BootHealthReport,
-  BootStep,
-  BootStepKey,
 } from "./types/splash";
 import { APP_VERSION, RELEASE_CHANNEL_LABEL } from "./version";
 import { highlightsFor } from "./versionHighlights";
@@ -94,18 +95,6 @@ import {
 import "./App.css";
 import "./overrides.css";
 import ui2Css from "./ui2.css?inline";
-
-function deriveProgress(steps: BootStep[]) {
-  if (!steps.length) return 0;
-  const weight = 100 / steps.length;
-  return steps.reduce((total, step) => {
-    if (step.state === "done" || step.state === "warn" || step.state === "error") {
-      return total + weight;
-    }
-    if (step.state === "running") return total + weight * 0.55;
-    return total;
-  }, 0);
-}
 
 function formatBytes(value: number): string {
   if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(2)} GB`;
@@ -186,10 +175,16 @@ function DesktopTitleBar() {
     if (action === "minimize") await window.minimize();
     if (action === "maximize") await window.toggleMaximize();
     if (action === "close") {
+      const gameRunning =
+        document.documentElement.dataset.gameRunning === "true";
+      if (gameRunning) {
+        await invoke("hide_launcher_window");
+        return;
+      }
       try {
         await window.close();
       } catch {
-        await invoke("exit_launcher");
+        await invoke("hide_launcher_window");
       }
     }
   };
@@ -251,17 +246,6 @@ export default function App() {
   const [downloading, setDownloading] = useState(false);
   const [message, setMessage] = useState("");
   const [showDownloadDetails, setShowDownloadDetails] = useState(false);
-  const [booting, setBooting] = useState(true);
-  const [splashFinishing, setSplashFinishing] = useState(false);
-  const [bootProgress, setBootProgress] = useState(0);
-  const [bootSteps, setBootSteps] = useState<BootStep[]>([
-    { key: "game", label: "游戏文件检查", detail: "", state: "pending" },
-    { key: "instances", label: "游戏库检查", detail: "", state: "pending" },
-    { key: "mods", label: "模组与整合包检查", detail: "", state: "pending" },
-    { key: "java", label: "Java 环境检测", detail: "", state: "pending" },
-    { key: "settings", label: "账户与设置", detail: "", state: "pending" },
-    { key: "update", label: "启动器更新检查", detail: "", state: "pending" },
-  ]);
   const [bootUpdate, setBootUpdate] = useState<Update | null | undefined>(
     undefined,
   );
@@ -342,6 +326,7 @@ export default function App() {
   const [onlinePackProjects, setOnlinePackProjects] = useState<OnlineProject[]>([]);
   const [microsoftLoginAvailable, setMicrosoftLoginAvailable] = useState(false);
   const [gameRunning, setGameRunning] = useState(false);
+  const [isSplash, setIsSplash] = useState(false);
   const current = accounts.find((account) => account.id === selectedAccountId) ?? accounts[0];
   const activeDownloadJobs = downloadJobs.filter(
     (job) => job.status === "downloading",
@@ -368,6 +353,12 @@ export default function App() {
   }, [activeNav]);
 
   useEffect(() => {
+    if (isTauri()) {
+      setIsSplash(getCurrentWindow().label === "splash");
+    }
+  }, []);
+
+  useEffect(() => {
     document.documentElement.dataset.uiTheme = settings.uiTheme;
     const existing = document.getElementById("ui2-theme");
     if (settings.uiTheme === "modern") {
@@ -382,19 +373,8 @@ export default function App() {
     }
   }, [settings.uiTheme]);
 
-  const applyStep = (key: BootStepKey, patch: Partial<BootStep>) => {
-    setBootSteps((current) =>
-      current.map((step) => (step.key === key ? { ...step, ...patch } : step)),
-    );
-  };
-
-  useEffect(() => {
-    setBootProgress(deriveProgress(bootSteps));
-  }, [bootSteps]);
-
   useEffect(() => {
     if (!isTauri()) {
-      setBooting(false);
       return;
     }
     let cancelled = false;
@@ -402,15 +382,12 @@ export default function App() {
       new Promise<void>((resolve) => setTimeout(resolve, ms));
     void (async () => {
       const startedAt = Date.now();
-      const MIN_SPLASH_MS = 1700;
+      const MIN_SPLASH_MS = 350;
       try {
         await runBootChecks();
       } finally {
         const remaining = Math.max(0, MIN_SPLASH_MS - (Date.now() - startedAt));
         await wait(remaining);
-        if (cancelled) return;
-        setSplashFinishing(true);
-        await wait(480);
         if (cancelled) return;
         try {
           if (localStorage.getItem("sh-onboarding-seen") !== "1") {
@@ -431,7 +408,20 @@ export default function App() {
           // 存储不可用时本次启动直接弹出
           setShowHighlights(true);
         }
-        setBooting(false);
+        if (isTauri()) {
+          const mainWindow = getCurrentWindow();
+          try {
+            await mainWindow.show();
+          } catch {
+            // 窗口已可见时忽略
+          }
+          try {
+            const splash = await WebviewWindow.getByLabel("splash");
+            await splash?.close();
+          } catch {
+            // Splash 可能已不存在
+          }
+        }
       }
     })();
     return () => {
@@ -443,18 +433,12 @@ export default function App() {
   }, []);
 
   async function runBootChecks() {
-    for (const key of ["game", "instances", "mods", "java", "settings"] as BootStepKey[]) {
-      applyStep(key, { state: "running", detail: "检查中…" });
-    }
-    applyStep("update", { state: "running", detail: "连接更新服务…" });
-
     const [
       accountsResult,
       instancesResult,
       javaResult,
       settingsResult,
       loginResult,
-      healthResult,
       serversResult,
       archivesResult,
     ] = await Promise.allSettled([
@@ -463,7 +447,6 @@ export default function App() {
       invoke<JavaRuntime[]>("detect_java_runtimes"),
       invoke<LauncherSettings>("get_settings"),
       invoke<boolean>("microsoft_login_available"),
-      invoke<BootHealthReport>("boot_health_check"),
       invoke<ServerEntry[]>("list_servers"),
       invoke<ModpackArchive[]>("list_modpack_archives"),
     ]);
@@ -518,47 +501,21 @@ export default function App() {
       setMessage(errorText(archivesResult.reason, "无法读取已下载整合包列表。"));
     }
 
-    if (healthResult.status === "fulfilled") {
-      const report = healthResult.value;
-      const totalCount = report.instances.length;
-      const readyCount = report.instances.filter(
-        (instance) => instance.status === "ready",
-      ).length;
-      applyStep("game", {
-        state: "done",
-        detail: `${totalCount} 个配置 · ${readyCount} 个就绪`,
-      });
-      applyStep("instances", {
-        state: "done",
-        detail: `${totalCount} 个实例已载入`,
-      });
-      const modCount = report.mods.reduce(
-        (sum, item) => sum + item.modCount,
-        0,
-      );
-      const missingCount = report.mods.reduce(
-        (sum, item) => sum + item.missingDependencies.length,
-        0,
-      );
-      const incompatibleCount = report.mods.reduce(
-        (sum, item) => sum + item.incompatibleMods.length,
-        0,
-      );
-      applyStep("mods", {
-        state: missingCount > 0 || incompatibleCount > 0 ? "warn" : "done",
-        detail:
-          incompatibleCount > 0
-            ? `共 ${modCount} 个模组 · ${missingCount} 个缺失前置 · ${incompatibleCount} 个加载器不兼容`
-            : missingCount > 0
-              ? `共 ${modCount} 个模组 · ${missingCount} 个缺失前置`
-              : `共 ${modCount} 个模组 · 前置完整`,
-      });
-      applyStep("java", {
-        state: report.java.has64Bit ? "done" : "warn",
-        detail: report.java.has64Bit
-          ? `已找到 64 位 Java${report.java.recommendedMajor ? ` ${report.java.recommendedMajor}` : ""}`
-          : "未找到 64 位 Java，可在设置安装",
-      });
+    // 健康检查（完整 Mod 扫描）不阻塞首屏，Main 显示后后台执行。
+    void runBackgroundHealth();
+
+    if (!isTauri() || !updaterEnabled) {
+    } else {
+      // 更新检查在后台异步进行，不拖慢启动动画
+      void runUpdateCheck();
+    }
+  }
+
+  async function runBackgroundHealth() {
+    if (!isTauri()) return;
+    try {
+      const report = await invoke<BootHealthReport>("boot_health_check");
+      if (bootCancelledRef.current) return;
       const nameById = new Map(
         report.instances.map((item) => [item.id, item.name]),
       );
@@ -587,14 +544,16 @@ export default function App() {
         }
       }
       setBootProblems(problems);
-      const groups = report.mods
-        .filter((summary) => summary.incompatibleMods.length)
-        .map((summary) => ({
-          instanceId: summary.instanceId,
-          instanceName: nameById.get(summary.instanceId) ?? `实例 ${summary.instanceId}`,
-          mods: summary.incompatibleMods,
-        }));
-      setIncompatibleGroups(groups);
+      setIncompatibleGroups(
+        report.mods
+          .filter((summary) => summary.incompatibleMods.length)
+          .map((summary) => ({
+            instanceId: summary.instanceId,
+            instanceName:
+              nameById.get(summary.instanceId) ?? `实例 ${summary.instanceId}`,
+            mods: summary.incompatibleMods,
+          })),
+      );
       const problemMaps: Record<number, Record<string, string>> = {};
       for (const summary of report.mods) {
         if (summary.problemMods.length) {
@@ -604,59 +563,23 @@ export default function App() {
         }
       }
       setModProblemMaps(problemMaps);
-    } else {
-      for (const key of ["game", "instances", "mods", "java"] as BootStepKey[]) {
-        applyStep(key, { state: "error", detail: "检查失败" });
-      }
-      if (healthResult.status === "rejected") {
-        setMessage(errorText(healthResult.reason, "无法读取本地数据。"));
-      }
-    }
-
-    applyStep("settings", {
-      state:
-        accountsResult.status === "fulfilled" &&
-        settingsResult.status === "fulfilled"
-          ? "done"
-          : "warn",
-      detail: `${
-        accountsResult.status === "fulfilled"
-          ? `${accountsResult.value.length} 个账户`
-          : "账户读取失败"
-      } · 设置${
-        settingsResult.status === "fulfilled" ? "已载入" : "读取失败"
-      }`,
-    });
-
-    if (!isTauri() || !updaterEnabled) {
-      applyStep("update", { state: "done", detail: "当前版本已是最新" });
-    } else {
-      // 更新检查在后台异步进行，不拖慢启动动画
-      void runUpdateCheck();
+    } catch {
+      // 健康检查失败不阻塞启动器使用
     }
   }
 
   async function runUpdateCheck() {
     setUpdateChecking(true);
     setUpdateCheckError(false);
-    applyStep("update", { state: "running", detail: "连接更新服务…" });
     try {
       const found = await checkForUpdate(12_000);
       if (bootCancelledRef.current) return;
       setBootUpdate(found ?? null);
       setUpdateCheckError(false);
-      applyStep("update", {
-        state: "done",
-        detail: found ? `发现新版本 v${found.version}` : "已是最新版本",
-      });
     } catch {
       if (bootCancelledRef.current) return;
       setUpdateCheckError(true);
       setBootUpdate(null);
-      applyStep("update", {
-        state: "warn",
-        detail: "暂时无法连接更新服务",
-      });
     } finally {
       setUpdateChecking(false);
     }
@@ -2669,17 +2592,12 @@ export default function App() {
     javaRuntimes.find((runtime) => runtime.path === selectedJavaPath) ??
     javaRuntimes.find((runtime) => runtime.is64Bit);
   const navIcons = [House, LibraryBig, Puzzle, Package, ImageIcon, Sun, Box, Server, Download, HardDrive, Settings];
+  if (isSplash) {
+    return <SplashView />;
+  }
   return (
     <div className="app-frame">
       <DesktopTitleBar />
-      {booting ? (
-        <SplashScreen
-          steps={bootSteps}
-          progress={bootProgress}
-          version={APP_VERSION}
-          finishing={splashFinishing}
-        />
-      ) : null}
       <main className="shell">
       <aside>
         <div className="brand">

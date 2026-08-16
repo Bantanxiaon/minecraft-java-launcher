@@ -2,6 +2,18 @@
 
 版本号固定三位：主版本.次版本.补丁版本。最右一位是小补丁/Bug 修复，中间一位是稍大补丁更新，最左一位是包含 UI 与新增内容的大型更新。每个版本在 `src/versionHighlights.ts` 维护“版本亮点”，软件首页自动展示。
 
+## SH启动器 0.8.1 Beta - 2026-08-16
+
+- 启动体验重构：独立居中小启动窗口（白色品牌 + 一次性 Logo 动画），主窗口初始隐藏、就绪后自然衔接；移除 1700ms 强制等待与假百分比/步骤列表；启动动画不再盖在主窗口之上。
+- 启动性能：更新检查、完整 Mod 健康扫描、存储扫描全部移出首屏关键路径，后台执行；点击启动到 java.exe spawn 不联网、不做全量 Mod 哈希。
+- 下载性能：任务级 3 秒滑动窗口测速（多 worker 聚合）；SHA-1 内容寻址对象缓存命中零联网并自动填充；404 不重试、429 尊重 Retry-After、指数退避 + 抖动；下载来源健康统计与 `download_diagnostics` 诊断。
+- 内容对账：`reconcile_scan` / `reconcile_apply` 对磁盘与数据库做一致性检查，识别时间戳重复 JAR（按 SHA-256 + 规范名），应用时移入可恢复备份，fingerprint 防 TOCTOU。
+- 统一安全解压：`fs_safe::extract_zip_securely`（Zip Slip / 绝对路径 / 盘符 / UNC / 符号链接 / Zip Bomb / 保留设备名），Java 安装已切换到该引擎。
+- 旧版启动参数：新增 shell-like 分词器，支持引号、转义引号与含空格路径，替代 `split_whitespace`。
+- 生命周期：点“启动后关闭启动器”改为隐藏主窗口，游戏退出后进程才退出，`play_history`、退出码、崩溃报告、联机清理不再丢失；游戏运行时关闭按钮自动改为隐藏。
+- 语言入口：界面语言固定简体中文，未完成的 English 入口已隐藏，避免假功能。
+- 移除 lottie 依赖与放大式加载动画资产使用，前端主包从约 718KB 降至约 374KB。
+
 ## SH启动器 0.8.0 Beta - 2026-08-16
 
 - 依赖解析可信化：不再从 modId 盲猜 Modrinth slug；内置已核对的 provider 别名映射（KotlinForForge、Bookshelf、Prism、Alex's Caves、Iron's Spells、TaCZ、ExpandAbility、fzzy_config、L2Library、Goety），Fabric/Quilt 的 provides 声明参与依赖满足判断。

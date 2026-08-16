@@ -1,7 +1,7 @@
 //! Windows 路径与文件名的统一安全层。
 
 use crate::LauncherError;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 const WINDOWS_RESERVED: &[&str] = &[
     "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
@@ -46,4 +46,169 @@ pub fn ensure_canonical_child(root: &Path, target: &Path) -> Result<PathBuf, Lau
         return Err(LauncherError::validation("路径越出了允许的目录范围。"));
     }
     Ok(target)
+}
+
+#[derive(Debug, Clone)]
+pub struct ArchiveLimits {
+    pub max_entries: usize,
+    pub max_total_uncompressed: u64,
+    pub max_single_file: u64,
+    pub max_compression_ratio: f64,
+    pub reject_symlinks: bool,
+}
+
+impl Default for ArchiveLimits {
+    fn default() -> Self {
+        Self {
+            max_entries: 100_000,
+            max_total_uncompressed: 10 * 1024 * 1024 * 1024,
+            max_single_file: 2 * 1024 * 1024 * 1024,
+            max_compression_ratio: 200.0,
+            reject_symlinks: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ArchiveExtractReport {
+    pub entries: usize,
+    pub files: usize,
+    pub bytes: u64,
+}
+
+/// 统一安全 ZIP 解压：防 Zip Slip、绝对路径、盘符、UNC、符号链接、Zip Bomb 与单文件超限。
+pub fn extract_zip_securely(
+    archive_path: &Path,
+    destination: &Path,
+    limits: &ArchiveLimits,
+) -> Result<ArchiveExtractReport, LauncherError> {
+    let file = std::fs::File::open(archive_path)
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|error| LauncherError::validation(format!("ZIP 无效：{error}")))?;
+    if archive.len() > limits.max_entries {
+        return Err(LauncherError::validation("压缩包条目数超过安全限制。"));
+    }
+    std::fs::create_dir_all(destination)
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let mut total_uncompressed = 0u64;
+    let mut files = 0usize;
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| LauncherError::validation(error.to_string()))?;
+        if limits.reject_symlinks
+            && entry
+                .unix_mode()
+                .is_some_and(|mode| mode & 0o170000 == 0o120000)
+        {
+            return Err(LauncherError::validation("压缩包包含符号链接条目。"));
+        }
+        let name = entry.name().to_string();
+        let path = Path::new(&name);
+        if path.is_absolute()
+            || path.components().any(|component| {
+                matches!(
+                    component,
+                    Component::Prefix(_) | Component::ParentDir | Component::RootDir
+                )
+            })
+            || name.contains("..\\")
+            || name.starts_with("\\\\")
+        {
+            return Err(LauncherError::validation("压缩包包含非法路径条目。"));
+        }
+        let Some(stem) = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .and_then(|value| value.split('.').next())
+        else {
+            continue;
+        };
+        if WINDOWS_RESERVED.contains(&stem.to_ascii_uppercase().as_str())
+            || name.ends_with('.')
+            || name.ends_with(' ')
+        {
+            return Err(LauncherError::validation("压缩包包含 Windows 非法文件名。"));
+        }
+        let size = entry.size();
+        if size > limits.max_single_file {
+            return Err(LauncherError::validation("压缩包单个文件超过安全限制。"));
+        }
+        total_uncompressed = total_uncompressed.saturating_add(size);
+        if total_uncompressed > limits.max_total_uncompressed {
+            return Err(LauncherError::validation("压缩包解压后超过安全限制。"));
+        }
+        if entry.compressed_size() > 0
+            && (size as f64 / entry.compressed_size() as f64) > limits.max_compression_ratio
+        {
+            return Err(LauncherError::validation(
+                "压缩包压缩比异常，可能是 Zip Bomb。",
+            ));
+        }
+        let output = destination.join(path);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&output)
+                .map_err(|error| LauncherError::storage(error.to_string()))?;
+            continue;
+        }
+        if let Some(parent) = output.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| LauncherError::storage(error.to_string()))?;
+        }
+        let mut out = std::fs::File::create(&output)
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        std::io::copy(&mut entry, &mut out)
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        files += 1;
+    }
+    Ok(ArchiveExtractReport {
+        entries: archive.len(),
+        files,
+        bytes: total_uncompressed,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write as _;
+
+    fn write_zip(path: &Path, entries: &[(&str, &[u8])]) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+        for (name, content) in entries {
+            archive.start_file(*name, options).unwrap();
+            archive.write_all(content).unwrap();
+        }
+        archive.finish().unwrap();
+    }
+
+    #[test]
+    fn rejects_traversal_and_absolute_paths() {
+        let dir = std::env::temp_dir().join(format!("sh-zip-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let zip_path = dir.join("evil.zip");
+        write_zip(&zip_path, &[("../evil.txt", b"x"), ("C:\\evil.txt", b"x")]);
+        let result = extract_zip_securely(&zip_path, &dir.join("out"), &ArchiveLimits::default());
+        assert!(result.is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn extracts_safe_archive() {
+        let dir = std::env::temp_dir().join(format!("sh-zip-ok-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let zip_path = dir.join("ok.zip");
+        write_zip(
+            &zip_path,
+            &[("mods/a.jar", b"jar"), ("config/x.txt", b"cfg")],
+        );
+        let report =
+            extract_zip_securely(&zip_path, &dir.join("out"), &ArchiveLimits::default()).unwrap();
+        assert_eq!(report.files, 2);
+        assert!(dir.join("out").join("mods").join("a.jar").is_file());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

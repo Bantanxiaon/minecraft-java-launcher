@@ -24,7 +24,6 @@ use std::{
     },
     time::Instant,
 };
-#[cfg(debug_assertions)]
 use tauri::Manager;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -82,7 +81,9 @@ pub(crate) fn legacy_offline_uuid(player_name: &str) -> String {
 #[cfg(debug_assertions)]
 mod acceptance;
 mod auth;
+mod content_reconcile;
 mod diagnostics;
+mod download_perf;
 mod exports;
 mod fs_safe;
 mod multiplayer;
@@ -1804,55 +1805,29 @@ async fn download_sha256_file(
 }
 
 fn extract_managed_java(archive_path: &Path, destination: &Path) -> Result<PathBuf, LauncherError> {
-    let file =
-        fs::File::open(archive_path).map_err(|error| LauncherError::storage(error.to_string()))?;
-    let mut archive = zip::ZipArchive::new(file)
-        .map_err(|error| LauncherError::validation(format!("Java ZIP 无效：{error}")))?;
-    if archive.len() > 100_000 {
-        return Err(LauncherError::validation("Java ZIP 条目数超过安全限制。"));
-    }
-    fs::create_dir_all(destination).map_err(|error| LauncherError::storage(error.to_string()))?;
-    let mut expanded = 0u64;
-    let mut java_path = None;
-    for index in 0..archive.len() {
-        let mut entry = archive
-            .by_index(index)
-            .map_err(|error| LauncherError::validation(error.to_string()))?;
-        let relative = safe_relative_download_path(entry.name())?;
-        expanded = expanded.saturating_add(entry.size());
-        if expanded > 2 * 1024 * 1024 * 1024
-            || (entry.compressed_size() > 0 && entry.size() / entry.compressed_size().max(1) > 200)
-        {
-            return Err(LauncherError::validation("Java ZIP 解压规模异常。"));
-        }
-        let output = destination.join(&relative);
-        if entry.is_dir() {
-            fs::create_dir_all(&output)
-                .map_err(|error| LauncherError::storage(error.to_string()))?;
-            continue;
-        }
-        if let Some(parent) = output.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| LauncherError::storage(error.to_string()))?;
-        }
-        let mut output_file =
-            fs::File::create(&output).map_err(|error| LauncherError::storage(error.to_string()))?;
-        std::io::copy(&mut entry, &mut output_file)
-            .map_err(|error| LauncherError::storage(error.to_string()))?;
-        if output
-            .file_name()
-            .and_then(|value| value.to_str())
-            .is_some_and(|name| name.eq_ignore_ascii_case("java.exe"))
-            && output
-                .parent()
+    let limits = fs_safe::ArchiveLimits {
+        max_entries: 100_000,
+        max_total_uncompressed: 2 * 1024 * 1024 * 1024,
+        max_single_file: 512 * 1024 * 1024,
+        max_compression_ratio: 200.0,
+        reject_symlinks: true,
+    };
+    let report = fs_safe::extract_zip_securely(archive_path, destination, &limits)?;
+    log::info!(
+        "Java 解压完成：entries={} files={} bytes={}",
+        report.entries,
+        report.files,
+        report.bytes
+    );
+    collect_files_named(destination, "java.exe", 3)?
+        .into_iter()
+        .find(|path| {
+            path.parent()
                 .and_then(Path::file_name)
                 .and_then(|value| value.to_str())
                 .is_some_and(|name| name.eq_ignore_ascii_case("bin"))
-        {
-            java_path = Some(output);
-        }
-    }
-    java_path.ok_or_else(|| LauncherError::validation("Java ZIP 中未找到 bin/java.exe。"))
+        })
+        .ok_or_else(|| LauncherError::validation("Java ZIP 中未找到 bin/java.exe。"))
 }
 
 fn collect_files_named(
@@ -1992,6 +1967,16 @@ struct BackupItem {
 #[tauri::command]
 fn exit_launcher(app: AppHandle) {
     app.exit(0);
+}
+
+#[tauri::command]
+fn hide_launcher_window(app: AppHandle) -> Result<(), LauncherError> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| LauncherError::storage("主窗口不存在。"))?;
+    window
+        .hide()
+        .map_err(|error| LauncherError::storage(error.to_string()))
 }
 
 pub(crate) fn running_games() -> &'static Mutex<HashMap<i64, u32>> {
@@ -8822,6 +8807,47 @@ fn create_download_job(
     Ok(connection.last_insert_rowid())
 }
 
+fn object_cache_path(expected_sha1: &str) -> Option<PathBuf> {
+    if expected_sha1.len() < 4 {
+        return None;
+    }
+    let directory = launcher_data_directory().ok()?;
+    Some(
+        directory
+            .join("cache")
+            .join("objects")
+            .join("sha1")
+            .join(&expected_sha1[..2])
+            .join(&expected_sha1[2..]),
+    )
+}
+
+async fn reuse_object_cache(
+    target: &Path,
+    expected_sha1: &str,
+) -> Result<Option<u64>, LauncherError> {
+    let Some(cached) = object_cache_path(expected_sha1) else {
+        return Ok(None);
+    };
+    if !cached.is_file() {
+        return Ok(None);
+    }
+    let observed = sha1_file(&cached).await?;
+    if !observed.eq_ignore_ascii_case(expected_sha1) {
+        return Ok(None);
+    }
+    let size = fs::metadata(&cached)
+        .map(|metadata| metadata.len())
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|error| LauncherError::storage(error.to_string()))?;
+    }
+    tokio::fs::copy(&cached, target)
+        .await
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    Ok(Some(size))
+}
+
 fn update_download_job_progress(
     app: &AppHandle,
     job_id: i64,
@@ -8894,6 +8920,11 @@ fn download_cancel_tokens() -> &'static DashMap<i64, CancellationToken> {
     TOKENS.get_or_init(DashMap::new)
 }
 
+fn job_speed_meters() -> &'static DashMap<i64, Mutex<download_perf::SpeedMeter>> {
+    static METERS: OnceLock<DashMap<i64, Mutex<download_perf::SpeedMeter>>> = OnceLock::new();
+    METERS.get_or_init(DashMap::new)
+}
+
 #[tauri::command]
 fn cancel_active_downloads() {
     download_cancel_flag().store(true, Ordering::Release);
@@ -8931,19 +8962,41 @@ async fn send_download_request(
         match request.send().await {
             Ok(response)
                 if !(response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
-                    || response.status().is_server_error()) =>
+                    || response.status().is_server_error()
+                    || response.status() == reqwest::StatusCode::NOT_FOUND) =>
             {
+                download_perf::record_host_request(
+                    url.host_str().unwrap_or("unknown"),
+                    response.status().is_success() || response.status().is_redirection(),
+                    0,
+                );
                 return Ok(response);
             }
             Ok(response) => {
+                download_perf::record_host_request(url.host_str().unwrap_or("unknown"), false, 0);
                 last_error = format!("HTTP {}", response.status());
+                if response.status() == reqwest::StatusCode::NOT_FOUND {
+                    break;
+                }
+                if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                    if let Some(retry_after) = response
+                        .headers()
+                        .get(reqwest::header::RETRY_AFTER)
+                        .and_then(|value| value.to_str().ok())
+                        .and_then(|value| value.parse::<u64>().ok())
+                    {
+                        tokio::time::sleep(Duration::from_secs(retry_after.min(30))).await;
+                        continue;
+                    }
+                }
             }
             Err(error) => {
+                download_perf::record_host_request(url.host_str().unwrap_or("unknown"), false, 0);
                 last_error = error.to_string();
             }
         }
         if attempt < 3 {
-            tokio::time::sleep(Duration::from_millis(300 * 2u64.pow(attempt))).await;
+            tokio::time::sleep(download_perf::retry_delay(attempt)).await;
         }
     }
     Err(LauncherError::storage(format!(
@@ -9232,6 +9285,12 @@ async fn download_verified_file_attempt(
         return Err(LauncherError::validation("下载文件 SHA-1 无效。"));
     }
     let url = validate_resource_url(url)?;
+    if !expected_sha1.is_empty() {
+        if let Some(size) = reuse_object_cache(target, expected_sha1).await? {
+            download_perf::record_network_bytes(0);
+            return Ok(size);
+        }
+    }
     if expected_sha1.is_empty() {
         if let Some(size) = expected_size {
             if tokio::fs::try_exists(target)
@@ -9329,7 +9388,6 @@ async fn download_verified_file_attempt(
         return Err(LauncherError::validation("下载文件超过安全大小限制。"));
     }
     let job_id = create_download_job(app, url.as_str(), target, resume_from, total, expected_sha1)?;
-    let started = std::time::Instant::now();
     let completed_bytes = Arc::new(AtomicU64::new(resume_from));
     let progress_bytes = completed_bytes.clone();
     let source_url = url.to_string();
@@ -9365,6 +9423,7 @@ async fn download_verified_file_attempt(
             }
         }
         let mut downloaded = resume_from;
+        let mut last_recorded = resume_from;
         let mut last_emit = std::time::Instant::now();
         loop {
             let next = tokio::time::timeout(Duration::from_secs(180), stream.next())
@@ -9392,13 +9451,28 @@ async fn download_verified_file_attempt(
                 return Err(LauncherError::validation("下载文件超过安全大小限制。"));
             }
             hasher.update(&chunk);
+            download_perf::record_network_bytes(chunk.len() as u64);
             file.write_all(&chunk)
                 .await
                 .map_err(|error| LauncherError::storage(error.to_string()))?;
             if last_emit.elapsed() >= Duration::from_millis(250) {
-                let elapsed = started.elapsed().as_secs_f64().max(0.001);
-                let speed =
-                    (downloaded.saturating_sub(resume_from) as f64 / elapsed).round() as u64;
+                let delta = downloaded.saturating_sub(last_recorded);
+                if let Some(mut meter) = job_speed_meters().get_mut(&job_id) {
+                    if let Ok(inner) = meter.value_mut().get_mut() {
+                        inner.record(delta);
+                    }
+                }
+                let speed = job_speed_meters()
+                    .get_mut(&job_id)
+                    .and_then(|mut meter| {
+                        meter
+                            .value_mut()
+                            .get_mut()
+                            .ok()
+                            .map(|inner| inner.bytes_per_second().round() as u64)
+                    })
+                    .unwrap_or(0);
+                last_recorded = downloaded;
                 let eta = total.and_then(|total| {
                     let remaining = total.saturating_sub(downloaded);
                     if speed > 0 {
@@ -9444,6 +9518,16 @@ async fn download_verified_file_attempt(
         tokio::fs::rename(&part, target)
             .await
             .map_err(|error| LauncherError::storage(error.to_string()))?;
+        if !expected_sha1.is_empty() {
+            if let Some(object) = object_cache_path(expected_sha1) {
+                if let Some(parent) = object.parent() {
+                    let _ = tokio::fs::create_dir_all(parent).await;
+                }
+                if !tokio::fs::try_exists(&object).await.unwrap_or(false) {
+                    let _ = tokio::fs::copy(target, &object).await;
+                }
+            }
+        }
         if let Some(cache_target) = cache_target {
             if let Some(parent) = cache_target.parent() {
                 let _ = tokio::fs::create_dir_all(parent).await;
@@ -10280,13 +10364,57 @@ fn build_vanilla_launch_arguments(
         .get("minecraftArguments")
         .and_then(|value| value.as_str())
     {
-        for value in legacy.split_whitespace() {
+        for value in tokenize_arguments(legacy) {
             arguments.push(substitute_argument(value.to_string(), &replacements)?);
         }
     } else {
         return Err(LauncherError::storage("版本元数据缺少游戏参数。"));
     }
     Ok(arguments)
+}
+
+/// shell-like 参数分词：支持双引号、单引号、转义和连续空白，
+/// 每个参数独立传给 `Command::arg`，不拼 shell 字符串。
+fn tokenize_arguments(input: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut chars = input.chars().peekable();
+    let mut in_token = false;
+    let mut quote: Option<char> = None;
+    while let Some(character) = chars.next() {
+        match quote {
+            Some(active_quote) => {
+                if character == active_quote {
+                    quote = None;
+                } else if character == '\\' && active_quote == '"' && chars.peek() == Some(&'"') {
+                    chars.next();
+                    current.push('"');
+                } else {
+                    current.push(character);
+                }
+            }
+            None => match character {
+                '"' | '\'' => {
+                    quote = Some(character);
+                    in_token = true;
+                }
+                value if value.is_whitespace() => {
+                    if in_token {
+                        tokens.push(std::mem::take(&mut current));
+                        in_token = false;
+                    }
+                }
+                value => {
+                    current.push(value);
+                    in_token = true;
+                }
+            },
+        }
+    }
+    if in_token || !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
 }
 
 fn append_server_join_arguments(arguments: &mut Vec<String>, address: &str, port: u16) {
@@ -10591,6 +10719,14 @@ async fn launch_instance(
             event_name,
             serde_json::json!({ "instanceId": instance_id, "exitCode": exit_code }),
         );
+        // “启动后关闭启动器”：UI 只是隐藏窗口，supervisor（本进程）活到游戏退出后
+        // 才真正退出，保证 play_history / crash report / game-exited 不丢失。
+        if get_settings(watcher_app.clone())
+            .map(|settings| settings.close_launcher_after_game_start)
+            .unwrap_or(false)
+        {
+            watcher_app.exit(0);
+        }
     });
     Ok(LaunchResult {
         process_id,
@@ -10806,6 +10942,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             build_info,
             exit_launcher,
+            hide_launcher_window,
             terminate_game,
             list_accounts,
             create_offline_account,
@@ -10840,6 +10977,7 @@ pub fn run() {
             install_vanilla_client,
             cancel_active_downloads,
             cancel_download_job,
+            download_perf::download_diagnostics,
             launch_instance,
             multiplayer::multiplayer_prepare,
             multiplayer::multiplayer_start,
@@ -10885,6 +11023,8 @@ pub fn run() {
             storage::list_deleted_instances,
             storage::restore_deleted_instance,
             storage::permanently_delete_instance_backup,
+            content_reconcile::reconcile_scan,
+            content_reconcile::reconcile_apply,
             list_removed_backups,
             restore_removed_backup,
             exports::export_instance_modpack,
@@ -11739,6 +11879,25 @@ side="BOTH"
         assert_ne!(
             minecraft_offline_uuid("Notch"),
             minecraft_offline_uuid("Alex")
+        );
+    }
+
+    #[test]
+    fn legacy_arguments_tokenize_quotes_and_spaces() {
+        let tokens = tokenize_arguments(
+            r#"--username Alex --gameDir "C:\Users\张三\My Games\world" --demo "quoted \"arg\"" 'single'"#,
+        );
+        assert_eq!(
+            tokens,
+            vec![
+                "--username",
+                "Alex",
+                "--gameDir",
+                r"C:\Users\张三\My Games\world",
+                "--demo",
+                r#"quoted "arg""#,
+                "single",
+            ]
         );
     }
 

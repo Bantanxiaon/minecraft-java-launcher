@@ -2504,6 +2504,89 @@ button.global-progress-bar:hover {
   color: #fff;
 }
 
+/* ============ 独立启动 Splash 窗口 ============ */
+.splash-root {
+  width: 100vw;
+  height: 100vh;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, .98);
+  border-radius: 18px;
+  overflow: hidden;
+}
+
+.splash-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px;
+}
+
+.splash-logo {
+  width: 64px;
+  height: 64px;
+  margin-bottom: 16px;
+  image-rendering: pixelated;
+  animation: splash-logo-enter 420ms cubic-bezier(.2, .8, .2, 1) both;
+}
+
+.splash-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -.02em;
+  color: #171a1f;
+  animation: splash-text-enter 360ms cubic-bezier(.2, .8, .2, 1) both;
+  animation-delay: 180ms;
+}
+
+.splash-subtitle {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #727a84;
+  animation: splash-text-enter 360ms cubic-bezier(.2, .8, .2, 1) both;
+  animation-delay: 220ms;
+}
+
+.splash-status {
+  margin: 18px 0 0;
+  min-height: 18px;
+  font-size: 11px;
+  color: #8a929d;
+}
+
+@keyframes splash-logo-enter {
+  from {
+    opacity: 0;
+    transform: scale(.92);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes splash-text-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .splash-logo,
+  .splash-title,
+  .splash-subtitle {
+    animation: none;
+  }
+}
+
 @media (max-width: 900px) {
   .download-detail-grid {
     grid-template-columns: 1fr;

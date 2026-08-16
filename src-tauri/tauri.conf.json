@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "SH启动器",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "identifier": "com.shlauncher.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -12,6 +12,20 @@
   "app": {
     "windows": [
       {
+        "label": "splash",
+        "title": "SH启动器",
+        "width": 400,
+        "height": 260,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "center": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": true
+      },
+      {
+        "label": "main",
         "title": "SH启动器",
         "width": 1280,
         "height": 800,
@@ -19,7 +33,9 @@
         "minHeight": 700,
         "decorations": false,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "center": true,
+        "visible": false
       }
     ],
     "security": {

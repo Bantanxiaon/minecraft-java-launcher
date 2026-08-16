@@ -315,15 +315,9 @@ export function SettingsPage({
           ))}
         </div>
         <label>
-          <span>界面语言</span>
-          <select
-            value={settings.language}
-            onChange={(event) =>
-              onChange({ ...settings, language: event.target.value })
-            }
-          >
+          <span>界面语言<small>当前仅提供简体中文；英文界面将在完整翻译后开放</small></span>
+          <select disabled value="zh-CN">
             <option value="zh-CN">简体中文</option>
-            <option value="en-US">English</option>
           </select>
         </label>
         <label className="checkbox-setting">
