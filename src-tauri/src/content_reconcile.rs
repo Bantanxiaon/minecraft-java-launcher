@@ -230,11 +230,31 @@ pub fn reconcile_apply(
             "内容已发生变化，请重新扫描后再应用。",
         ));
     }
+    let backup_base = launcher_data_directory()?.join("backups");
+    apply_reconcile_core(
+        &mut connection,
+        instance_id,
+        &root_path,
+        &fresh,
+        &backup_base,
+    )
+}
+
+/// 对账应用核心：文件移动走 FsTransaction、DB 增删走 rusqlite 事务，任一失败联动回滚。
+/// 独立于 Tauri 上下文，便于在临时实例目录 + 内存 DB 上做往返集成测试。
+fn apply_reconcile_core(
+    connection: &mut rusqlite::Connection,
+    instance_id: i64,
+    root_path: &str,
+    fresh: &ReconcileReport,
+    backup_base: &std::path::Path,
+) -> Result<ReconcileApplyResult, LauncherError> {
     let mods_dir = PathBuf::from(&root_path).join(".minecraft").join("mods");
-    let backup_root = launcher_data_directory()?
-        .join("backups")
-        .join("removed-content")
-        .join(format!("reconcile-{}-{}", instance_id, unique_timestamp()));
+    let backup_root = backup_base.join("removed-content").join(format!(
+        "reconcile-{}-{}",
+        instance_id,
+        unique_timestamp()
+    ));
     let mut freed = 0u64;
     let mut deduplicated = 0usize;
     let mut file_transaction =
@@ -323,6 +343,25 @@ pub fn reconcile_apply(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write as _;
+
+    fn write_fabric_jar(path: &std::path::Path, mod_id: &str, payload: &[u8]) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+        archive.start_file("fabric.mod.json", options).unwrap();
+        archive
+            .write_all(
+                format!(
+                    r#"{{"schemaVersion":1,"id":"{mod_id}","version":"1.0.0","name":"{mod_id}"}}"#
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        archive.start_file("payload.bin", options).unwrap();
+        archive.write_all(payload).unwrap();
+        archive.finish().unwrap();
+    }
 
     #[test]
     fn canonical_name_strips_timestamp_prefix() {
@@ -334,5 +373,81 @@ mod tests {
             canonical_name("artifacts-forge-9.5.13.jar"),
             "artifacts-forge-9.5.13.jar"
         );
+    }
+
+    #[test]
+    fn reconcile_round_trip_on_temp_instance() {
+        let directory = std::env::temp_dir().join(format!("sh-reconcile-{}", unique_timestamp()));
+        let mods = directory.join(".minecraft").join("mods");
+        std::fs::create_dir_all(&mods).unwrap();
+        // a.jar 与 b.jar 内容完全一致（重复组）；c.jar 仅在磁盘。
+        write_fabric_jar(&mods.join("a.jar"), "shared", b"same-content");
+        write_fabric_jar(&mods.join("b.jar"), "shared", b"same-content");
+        write_fabric_jar(&mods.join("c.jar"), "gamma", b"other-content");
+
+        let mut connection = rusqlite::Connection::open_in_memory().unwrap();
+        crate::run_migrations(&mut connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO instances(id,name,root_path,game_version,loader_type,status,source,created_at)
+                 VALUES(1,'QA',?1,'1.20.1','fabric','ready','qa','1')",
+                [directory.to_string_lossy().to_string()],
+            )
+            .unwrap();
+        let alpha_hash = crate::sha256_file_sync(&mods.join("a.jar")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO content_items(instance_id,kind,file_name,hash,enabled,source,installed_at)
+                 VALUES(1,'mod','a.jar',?1,1,'modrinth','1')",
+                [&alpha_hash],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO content_items(instance_id,kind,file_name,hash,enabled,source,installed_at)
+                 VALUES(1,'mod','stale.jar','stale-hash',1,'modrinth','1')",
+                [],
+            )
+            .unwrap();
+
+        let root = directory.to_string_lossy().to_string();
+        let before = build_report(1, &root, &connection).unwrap();
+        assert_eq!(before.duplicate_groups.len(), 1, "应发现 1 个重复组");
+        assert_eq!(
+            before.db_missing_on_disk,
+            vec!["stale.jar".to_string()],
+            "应发现数据库有但磁盘无的过期记录"
+        );
+        assert_eq!(
+            before.disk_missing_in_db,
+            vec!["c.jar".to_string()],
+            "应发现磁盘有但数据库无的模组"
+        );
+
+        let backup_base = directory.join(".backups");
+        apply_reconcile_core(&mut connection, 1, &root, &before, &backup_base).unwrap();
+
+        let after = build_report(1, &root, &connection).unwrap();
+        assert!(after.duplicate_groups.is_empty(), "应用后不应再有重复组");
+        assert!(after.db_missing_on_disk.is_empty(), "应用后过期记录应清理");
+        assert!(
+            after.disk_missing_in_db.is_empty(),
+            "应用后磁盘模组应全部入库"
+        );
+        let count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM content_items WHERE instance_id=1 AND kind='mod'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2, "保留 a.jar 与 c.jar 两条记录");
+        let backup_files = walkdir::WalkDir::new(&backup_base)
+            .into_iter()
+            .flatten()
+            .filter(|entry| entry.file_type().is_file())
+            .count();
+        assert_eq!(backup_files, 1, "重复文件应移入备份目录");
+        let _ = std::fs::remove_dir_all(&directory);
     }
 }

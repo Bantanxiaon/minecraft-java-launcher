@@ -21,7 +21,7 @@
 
 - [x] Reconciler scan（db_missing_on_disk / disk_missing_in_db / duplicate_groups / fingerprint）— Tests: `canonical_name_strips_timestamp_prefix`
 - [x] Reconciler apply（重扫指纹、运行中禁止、重复项移备份、DB 增删）— Verification: cargo test
-- [ ] Reconciler 完整集成测试（临时实例目录往返 + apply 后 rescan 一致）
+- [x] Reconciler 完整集成测试（临时实例目录往返 + apply 后 rescan 一致）— Tests: `reconcile_round_trip_on_temp_instance`（临时实例目录 + 内存 DB：重复组/过期记录/磁盘新增检测 → `apply_reconcile_core` 应用 → 重扫一致、重复文件进备份、计数正确）；核心重构为无 Tauri 上下文的 `apply_reconcile_core`
 
 ## Modpack / Update
 
@@ -114,11 +114,11 @@
 - [x] 存储页（真实数据）
 - [x] 联机页（创建房间/邀请地址/结束）
 - [x] 实例详情页（游戏库 → 详情：概览健康状态 / 设置内存 / 日志 / 磁盘对账），后端 instance_health
-- [ ] 实例详情内嵌模组/资源包/光影/存档 钻取式 IA（仍为全局页选择实例）
-- [ ] Mod UX 升级（图标 + 简洁名称，技术文件名进详情）
+- [x] 实例详情内嵌模组/资源包/光影/存档 钻取式 IA — Implementation: InstanceDetailPage 新增“内容”标签，按 kind 分组钻取，模组启用/停用/更新、资源包光影启用/移除、存档备份/复制/移除，全部经真实命令 + 可恢复备份；另有整合包更新入口与计划卡片
+- [x] Mod UX 升级（图标 + 简洁名称，技术文件名进详情）— Implementation: 显示名取 metadata.name（回退 modId/文件名），技术文件名 + 版本 + 来源为次级行；有 Modrinth 项目编号时用 CDN 图标懒加载（失败隐藏），否则类别徽标
 - [x] 下载诊断 UI（下载页显示来源健康：请求数/成功/失败/流量）
 - [x] 无假按钮 / 隐藏未完成 English
-- [ ] 前端行为测试扩展（Instance Detail / Reconcile / Ambiguous / UpdatePlan / Cleanup / Restore / Fallback / Startup handoff / Multiplayer lifecycle / Error recovery / Settings）
+- [x] 前端行为测试扩展（Instance Detail / Reconcile / Ambiguous / UpdatePlan / Cleanup / Restore / Fallback / Startup handoff / Multiplayer lifecycle / Error recovery / Settings）— Tests: `InstanceDetailPage.test.tsx`（健康/对账指纹应用/内容钻取/移除确认/更新计划保护文件/错误恢复）、`StoragePage.test.tsx`（清理指纹/恢复/永久删除双确认/错误恢复）、`ServersPage.test.tsx`（联机生命周期/无 Java 拦截/失败恢复）、`SettingsPage.test.tsx`（设置传播/错误反馈）；Ambiguous/Resolver 行为由 Rust `resolver_rejects_ambiguous_same_slug_projects` 等覆盖；下载 fallback 由 Rust `slow_and_failing_hosts_are_detected` 覆盖
 
 ## 测试与发布
 

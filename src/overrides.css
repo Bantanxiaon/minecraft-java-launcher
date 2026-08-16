@@ -348,6 +348,66 @@ button:disabled {
   font-weight: 650;
   font-style: normal;
 }
+
+.instance-content-group {
+  padding: 8px 24px 22px;
+}
+
+.instance-content-group h3 {
+  margin: 12px 0 6px;
+  font-size: 13px;
+  color: #5e6a75;
+}
+
+.mod-rows .content-detail-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 13px 4px;
+}
+
+.content-detail-identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.content-detail-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  object-fit: cover;
+  flex: none;
+  background: #eef1f3;
+}
+
+.content-detail-badge {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: #eef3ee;
+  color: #5e8f62;
+  font-weight: 700;
+  flex: none;
+}
+
+.content-detail-file {
+  display: block;
+  margin-top: 3px;
+  color: #7b8590;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.content-detail-actions {
+  display: flex;
+  gap: 8px;
+  flex: none;
+}
 .mod-problem-reason {
   grid-column: 1 / -1;
   color: #b23b2e !important;

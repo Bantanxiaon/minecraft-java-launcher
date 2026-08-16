@@ -456,7 +456,7 @@ fn database_path(_app: &AppHandle) -> Result<PathBuf, LauncherError> {
     Ok(directory.join("launcher.sqlite3"))
 }
 
-fn run_migrations(connection: &mut Connection) -> rusqlite::Result<()> {
+pub(crate) fn run_migrations(connection: &mut Connection) -> rusqlite::Result<()> {
     connection.execute_batch("PRAGMA foreign_keys = ON;
     CREATE TABLE IF NOT EXISTS migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS accounts (id INTEGER PRIMARY KEY, account_type TEXT NOT NULL CHECK(account_type IN ('OFFLINE','MICROSOFT','EXTERNAL')), display_name TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_used_at TEXT, safe_secret_ref TEXT, auth_server TEXT);
@@ -2404,7 +2404,7 @@ fn safe_jar_file_name(path: &Path) -> Result<String, LauncherError> {
     Ok(name.to_string())
 }
 
-fn sha256_file_sync(path: &Path) -> Result<String, LauncherError> {
+pub(crate) fn sha256_file_sync(path: &Path) -> Result<String, LauncherError> {
     let mut file =
         fs::File::open(path).map_err(|error| LauncherError::storage(error.to_string()))?;
     let mut hasher = Sha256::new();
@@ -7736,15 +7736,16 @@ fn set_mod_enabled(
             "目标位置已存在同名文件，操作已取消。",
         ));
     }
-    fs::rename(&source, &destination)
-        .map_err(|error| LauncherError::storage(format!("移动模组失败：{error}")))?;
+    let mut transaction = fs_safe::FsTransaction::new(format!("toggle-mod-{content_id}"));
+    transaction.move_with_undo(&source, &destination)?;
     if let Err(error) = connection.execute(
         "UPDATE content_items SET enabled=?1 WHERE id=?2",
         params![enabled as i64, content_id],
     ) {
-        let _ = fs::rename(&destination, &source);
+        transaction.rollback()?;
         return Err(LauncherError::storage(error.to_string()));
     }
+    transaction.commit();
     item.enabled = enabled;
     Ok(item)
 }
@@ -8141,17 +8142,15 @@ fn remove_world_to_backup(
     fs::create_dir_all(&backup_directory)
         .map_err(|error| LauncherError::storage(error.to_string()))?;
     let backup = backup_directory.join(format!("{}-{}", unique_timestamp(), file_name));
-    fs::rename(&source, &backup).map_err(|error| LauncherError::storage(error.to_string()))?;
+    let mut transaction = fs_safe::FsTransaction::new(format!("remove-world-{content_id}"));
+    transaction.move_with_undo(&source, &backup)?;
     if let Err(error) = connection.execute("DELETE FROM content_items WHERE id=?1", [content_id]) {
-        let rollback = fs::rename(&backup, &source);
-        return Err(LauncherError::storage(match rollback {
-            Ok(()) => format!("存档记录更新失败，文件移动已回滚：{error}"),
-            Err(rollback_error) => format!(
-                "存档记录更新失败且文件回滚失败：{error}；备份仍位于 {}（{rollback_error}）",
-                backup.display()
-            ),
-        }));
+        transaction.rollback()?;
+        return Err(LauncherError::storage(format!(
+            "存档记录更新失败，文件移动已回滚：{error}"
+        )));
     }
+    transaction.commit();
     Ok(RemovedContent {
         id: content_id,
         backup_path: backup.to_string_lossy().to_string(),
@@ -12568,7 +12567,7 @@ pub fn run() {
                 .get()
                 .map(|instant| instant.elapsed().as_millis() as u64)
                 .unwrap_or(0);
-            let metrics = serde_json::json!({
+            let mut metrics = serde_json::json!({
                 "version": env!("CARGO_PKG_VERSION"),
                 "totalMs": total_ms,
                 "dbMs": db_ms,
@@ -12576,6 +12575,32 @@ pub fn run() {
                 "recoveredSessions": recovered_sessions,
                 "timestamp": chrono_like_timestamp()
             });
+            if let Some(window) = _app.get_webview_window("main") {
+                if let Some(object) = metrics.as_object_mut() {
+                    object.insert(
+                        "scaleFactor".into(),
+                        serde_json::json!(window.scale_factor().unwrap_or(1.0)),
+                    );
+                    object.insert(
+                        "monitorCount".into(),
+                        serde_json::json!(window
+                            .available_monitors()
+                            .map(|monitors| monitors.len())
+                            .unwrap_or(0)),
+                    );
+                    object.insert(
+                        "physicalSize".into(),
+                        serde_json::json!(window
+                            .outer_size()
+                            .ok()
+                            .map(|size| serde_json::json!({
+                                "width": size.width,
+                                "height": size.height
+                            }))
+                            .unwrap_or(serde_json::Value::Null)),
+                    );
+                }
+            }
             if let Ok(root) = launcher_data_directory() {
                 let _ = fs::write(
                     root.join("startup-metrics.json"),
@@ -13986,5 +14011,63 @@ side="BOTH"
             "加载器变化应改变指纹"
         );
         let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn migration_fixture_v080_upgrades_in_place_without_data_loss() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        run_migrations(&mut connection).unwrap();
+        // 回退到 v0.8.0 形态：去掉 v9 引入的 pack_owned_files 与迁移记录。
+        connection
+            .execute("DROP TABLE pack_owned_files", [])
+            .unwrap();
+        connection
+            .execute("DELETE FROM migrations WHERE version=9", [])
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO instances(id,name,root_path,game_version,loader_type,memory_mb,status,source,created_at)
+                 VALUES(3,'既有实例','D:/data/instances/3','1.20.1','forge',6144,'ready','modrinth','1')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO content_items(instance_id,kind,file_name,hash,enabled,source,installed_at)
+                 VALUES(3,'mod','jei.jar','jei-hash',1,'modrinth','1')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO play_history(instance_id,started_at,ended_at,exit_code)
+                 VALUES(3,'1','2',0)",
+                [],
+            )
+            .unwrap();
+        // 原地升级：真实 open_database 会先备份再跑迁移，这里直接重跑迁移核心。
+        run_migrations(&mut connection).unwrap();
+        let version_9: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM migrations WHERE version=9)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(version_9, "v9 迁移应补建 pack_owned_files");
+        let name: String = connection
+            .query_row("SELECT name FROM instances WHERE id=3", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(name, "既有实例", "升级不得丢失既有实例");
+        let mod_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM content_items WHERE instance_id=3",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(mod_count, 1, "升级不得丢失内容记录");
     }
 }

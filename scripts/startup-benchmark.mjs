@@ -44,7 +44,13 @@ async function singleRun(index) {
         } catch {
           // 已退出
         }
-        return { run: index, totalMs, dbMs: Number(metrics.dbMs ?? 0) };
+        return {
+          run: index,
+          totalMs,
+          dbMs: Number(metrics.dbMs ?? 0),
+          scaleFactor: Number(metrics.scaleFactor ?? 0),
+          monitorCount: Number(metrics.monitorCount ?? 0),
+        };
       }
     } catch {
       // 文件尚未写入
