@@ -1,11 +1,11 @@
 {
-  "version": "0.9.2",
-  "notes": "SH启动器 0.9.2",
-  "pub_date": "2026-08-16T18:21:57Z",
+  "version": "0.9.3",
+  "notes": "SH启动器 0.9.3",
+  "pub_date": "2026-08-16T19:08:12Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRNlEzRFNJdU9Sa081eDNDS1J3c1c4TlJXcitDV0pJd2RZNmdLWWpydDFTU2VEQzVqSVAyVk92OWJLVnZJaFRIVndkS2lXSlBodCszM1dFYzJtZVhmUnl2VzdVRWhya2dNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2OTA0NTEyCWZpbGU6U0jlkK/liqjlmahfMC45LjJfeDY0LXNldHVwLmV4ZQpmZGhhQ2xBQ1NzRm1RN0FROWVSOENQakZDc3kwbHdVSnM4b1pROGhoUGVsSXJZNXI2c1BDaXhwWU1IU1kwWmFuOUZSbE4zb0c5QURSRTMzNURnS2pEdz09Cg==",
-      "url": "https://github.com/Bantanxiaon/minecraft-java-launcher/releases/download/v0.9.2/SH._0.9.2_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRNlEzRFNJdU9Sa0syVStuak5yZUhmZ2t4N0RxbHRmcHM5eVdZbnk4TXdBSTNuVDFrZXhVR25xRmtzd2ZvRkdMaXg5eFUwUmt5UTdYNFlXdEFpNmdVMXk5VVV3eEZiMXdNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2OTA3Mjg1CWZpbGU6U0jlkK/liqjlmahfMC45LjNfeDY0LXNldHVwLmV4ZQpzNmdGa0FmWW5HMWZHUGFXUkNmN0dOMTh6Z2dUT3EreEJpWGQ0NmVkVTczSDN1V1BQd3pJWDRzMjhKV0MyVnlPbXl0M1BycTRwNWJmdjlBUGR5YlhBQT09Cg==",
+      "url": "https://github.com/Bantanxiaon/minecraft-java-launcher/releases/download/v0.9.3/SH._0.9.3_x64-setup.exe"
     }
   }
 }
