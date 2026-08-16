@@ -9549,6 +9549,20 @@ pub(crate) fn validate_resource_url(value: &str) -> Result<reqwest::Url, Launche
             | Some("www.curseforge.com")
             | Some("edge.forgecdn.net")
     );
+    #[cfg(test)]
+    {
+        // 仅测试:允许指向本地 mock 服务器的明文 HTTP(用于极慢源 fallback 回归),
+        // 生产构建不受影响;host 白名单与官方下载完全一致。
+        if TEST_ALLOW_HTTP_MOCK.load(Ordering::Relaxed)
+            && url.scheme() == "http"
+            && matches!(
+                url.host_str(),
+                Some("piston-data.mojang.com" | "bmclapi2.bangbang93.com")
+            )
+        {
+            return Ok(url);
+        }
+    }
     if url.scheme() != "https" || !allowed_host {
         return Err(LauncherError::validation(
             "仅允许 Minecraft 官方 HTTPS 下载来源。",
@@ -9587,7 +9601,14 @@ fn bmclapi_mirror_url(original: &reqwest::Url) -> Option<reqwest::Url> {
         | "maven.neoforged.net" => format!("https://bmclapi2.bangbang93.com/maven{path}"),
         _ => return None,
     };
-    reqwest::Url::parse(&mirror).ok()
+    let parsed = reqwest::Url::parse(&mirror).ok()?;
+    #[cfg(test)]
+    if TEST_ALLOW_HTTP_MOCK.load(Ordering::Relaxed) {
+        let mut mock = parsed.clone();
+        let _ = mock.set_scheme("http");
+        return Some(mock);
+    }
+    Some(parsed)
 }
 
 fn validate_loader_token(value: &str) -> Result<(), LauncherError> {
@@ -10725,7 +10746,7 @@ pub(crate) async fn download_verified_file(
     target: &std::path::Path,
 ) -> Result<u64, LauncherError> {
     download_verified_file_with_progress(
-        app,
+        Some(app),
         instance_id,
         url,
         expected_sha1,
@@ -10866,8 +10887,14 @@ async fn download_verified_file_parallel(
     Ok(actual_size)
 }
 
+/// 单连接连续无数据超时（秒）：超时即失败并保留 .part，外层可续传重试。
+const NO_PROGRESS_TIMEOUT_SECS: u64 = 90;
+/// 极慢源判定：本连接开始接收后，连续这些秒内收到的字节不足下限即断开重连。
+const EXTREME_SLOW_ABORT_SECS: u64 = 12;
+const EXTREME_SLOW_ABORT_MIN_BYTES: u64 = 48 * 1024;
+
 async fn download_verified_file_with_progress(
-    app: &AppHandle,
+    app: Option<&AppHandle>,
     instance_id: i64,
     url: &str,
     expected_sha1: &str,
@@ -10921,6 +10948,54 @@ async fn download_verified_file_with_progress(
     )
     .await;
     if first.is_err() {
+        if first
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.error_code() == "EXTREME_SLOW_SOURCE")
+        {
+            // 极慢源：断开连接后立即用保留的 .part 续传重试（可能命中更快的边缘），
+            // 仍慢时切换到可信镜像；官方/provider hash 校验全程不变。
+            log::warn!(
+                "下载源 {} 判定为极慢（时间+极低吞吐），已断开并重连。",
+                validate_resource_url(url)
+                    .ok()
+                    .and_then(|parsed| parsed.host_str().map(str::to_string))
+                    .unwrap_or_else(|| url.to_string())
+            );
+            if let Ok(size) = download_verified_file_attempt(
+                app,
+                instance_id,
+                url,
+                expected_sha1,
+                expected_size,
+                target,
+                emit_file_progress,
+                true,
+            )
+            .await
+            {
+                return Ok(size);
+            }
+            if let Ok(parsed) = validate_resource_url(url) {
+                if let Some(mirror) = bmclapi_mirror_url(&parsed) {
+                    if let Ok(size) = download_verified_file_attempt(
+                        app,
+                        instance_id,
+                        mirror.as_str(),
+                        expected_sha1,
+                        expected_size,
+                        target,
+                        emit_file_progress,
+                        false,
+                    )
+                    .await
+                    {
+                        return Ok(size);
+                    }
+                }
+            }
+            return first;
+        }
         // 1) 先用同一地址重新开一个连接重试一次，缓解断流、超时和残留部分文件。
         if let Ok(size) = download_verified_file_attempt(
             app,
@@ -11020,7 +11095,7 @@ async fn fetch_version_details_from(
 
 #[allow(clippy::too_many_arguments)]
 async fn download_verified_file_attempt(
-    app: &AppHandle,
+    app: Option<&AppHandle>,
     instance_id: i64,
     url: &str,
     expected_sha1: &str,
@@ -11036,7 +11111,7 @@ async fn download_verified_file_attempt(
         return Err(LauncherError::validation("下载文件 SHA-1 无效。"));
     }
     let url = validate_resource_url(url)?;
-    if !expected_sha1.is_empty() {
+    if !expected_sha1.is_empty() && app.is_some() {
         if let Some(size) = reuse_object_cache(target, expected_sha1).await? {
             download_perf::record_network_bytes(0);
             return Ok(size);
@@ -11069,7 +11144,7 @@ async fn download_verified_file_attempt(
     }
     // Content-addressed cache lets different instances and repeated installs reuse
     // an already verified file instead of downloading it again.
-    let cache_target = if expected_sha1.is_empty() {
+    let cache_target = if expected_sha1.is_empty() || app.is_none() {
         None
     } else {
         launcher_data_directory().ok().map(|root| {
@@ -11150,7 +11225,17 @@ async fn download_verified_file_attempt(
     if total.is_some_and(|size| size > MAX_DOWNLOAD_BYTES) {
         return Err(LauncherError::validation("下载文件超过安全大小限制。"));
     }
-    let job_id = create_download_job(app, url.as_str(), target, resume_from, total, expected_sha1)?;
+    let job_id = match app {
+        Some(app) => Some(create_download_job(
+            app,
+            url.as_str(),
+            target,
+            resume_from,
+            total,
+            expected_sha1,
+        )?),
+        None => None,
+    };
     let completed_bytes = Arc::new(AtomicU64::new(resume_from));
     let progress_bytes = completed_bytes.clone();
     let source_url = url.to_string();
@@ -11189,16 +11274,24 @@ async fn download_verified_file_attempt(
         let mut downloaded = resume_from;
         let mut last_recorded = resume_from;
         let mut last_emit = std::time::Instant::now();
+        let request_started = std::time::Instant::now();
+        let mut bytes_this_request: u64 = 0;
         loop {
-            let next = tokio::time::timeout(Duration::from_secs(180), stream.next())
-                .await
-                .map_err(|_| {
-                    LauncherError::storage(
-                        "下载连续 180 秒没有收到数据。请检查网络后重试；已下载的部分会保留。",
-                    )
-                })?;
+            let next =
+                tokio::time::timeout(Duration::from_secs(NO_PROGRESS_TIMEOUT_SECS), stream.next())
+                    .await
+                    .map_err(|_| {
+                        LauncherError::classified(
+                            "NO_PROGRESS",
+                            format!(
+                            "下载连续 {} 秒没有收到数据。请检查网络后重试；已下载的部分会保留。",
+                            NO_PROGRESS_TIMEOUT_SECS
+                        ),
+                            true,
+                        )
+                    })?;
             let Some(chunk) = next else { break };
-            if download_job_cancelled(job_id) {
+            if job_id.is_some_and(download_job_cancelled) {
                 file.flush()
                     .await
                     .map_err(|error| LauncherError::storage(error.to_string()))?;
@@ -11209,6 +11302,7 @@ async fn download_verified_file_attempt(
             let chunk =
                 chunk.map_err(|error| LauncherError::storage(format!("下载中断：{error}")))?;
             downloaded = downloaded.saturating_add(chunk.len() as u64);
+            bytes_this_request = bytes_this_request.saturating_add(chunk.len() as u64);
             progress_bytes.store(downloaded, Ordering::Relaxed);
             if downloaded > MAX_DOWNLOAD_BYTES {
                 let _ = tokio::fs::remove_file(&part).await;
@@ -11220,21 +11314,38 @@ async fn download_verified_file_attempt(
             file.write_all(&chunk)
                 .await
                 .map_err(|error| LauncherError::storage(error.to_string()))?;
+            if request_started.elapsed() >= Duration::from_secs(EXTREME_SLOW_ABORT_SECS)
+                && bytes_this_request < EXTREME_SLOW_ABORT_MIN_BYTES
+            {
+                file.flush()
+                    .await
+                    .map_err(|error| LauncherError::storage(error.to_string()))?;
+                return Err(LauncherError::classified(
+                    "EXTREME_SLOW_SOURCE",
+                    format!(
+                        "下载源速度极慢（{} 秒仅收到 {} KB），已断开；已下载部分会保留并自动重连。",
+                        EXTREME_SLOW_ABORT_SECS,
+                        bytes_this_request / 1024
+                    ),
+                    true,
+                ));
+            }
             if last_emit.elapsed() >= Duration::from_millis(250) {
                 let delta = downloaded.saturating_sub(last_recorded);
-                if let Some(mut meter) = job_speed_meters().get_mut(&job_id) {
-                    if let Ok(inner) = meter.value_mut().get_mut() {
-                        inner.record(delta);
-                    }
-                }
-                let speed = job_speed_meters()
-                    .get_mut(&job_id)
-                    .and_then(|mut meter| {
-                        meter
-                            .value_mut()
-                            .get_mut()
-                            .ok()
-                            .map(|inner| inner.bytes_per_second().round() as u64)
+                let speed = job_id
+                    .and_then(|job_id| {
+                        if let Some(mut meter) = job_speed_meters().get_mut(&job_id) {
+                            if let Ok(inner) = meter.value_mut().get_mut() {
+                                inner.record(delta);
+                            }
+                        }
+                        job_speed_meters().get_mut(&job_id).and_then(|mut meter| {
+                            meter
+                                .value_mut()
+                                .get_mut()
+                                .ok()
+                                .map(|inner| inner.bytes_per_second().round() as u64)
+                        })
                     })
                     .unwrap_or(0);
                 last_recorded = downloaded;
@@ -11246,21 +11357,23 @@ async fn download_verified_file_attempt(
                         None
                     }
                 });
-                update_download_job_progress(app, job_id, downloaded, total, speed, eta);
-                if emit_file_progress && should_emit_download_progress() {
-                    let _ = app.emit(
-                        "download-progress",
-                        DownloadProgress {
-                            instance_id,
-                            downloaded_bytes: downloaded,
-                            total_bytes: total,
-                            job_id: Some(job_id),
-                            source_url: Some(source_url.clone()),
-                            file_name: file_name.clone(),
-                            speed_bytes_per_second: Some(speed),
-                            eta_seconds: eta,
-                        },
-                    );
+                if let (Some(app), Some(job_id)) = (app, job_id) {
+                    update_download_job_progress(app, job_id, downloaded, total, speed, eta);
+                    if emit_file_progress && should_emit_download_progress() {
+                        let _ = app.emit(
+                            "download-progress",
+                            DownloadProgress {
+                                instance_id,
+                                downloaded_bytes: downloaded,
+                                total_bytes: total,
+                                job_id: Some(job_id),
+                                source_url: Some(source_url.clone()),
+                                file_name: file_name.clone(),
+                                speed_bytes_per_second: Some(speed),
+                                eta_seconds: eta,
+                            },
+                        );
+                    }
                 }
                 last_emit = std::time::Instant::now();
             }
@@ -11283,7 +11396,7 @@ async fn download_verified_file_attempt(
         tokio::fs::rename(&part, target)
             .await
             .map_err(|error| LauncherError::storage(error.to_string()))?;
-        if !expected_sha1.is_empty() {
+        if !expected_sha1.is_empty() && app.is_some() {
             if let Some(object) = object_cache_path(expected_sha1) {
                 if let Some(parent) = object.parent() {
                     let _ = tokio::fs::create_dir_all(parent).await;
@@ -11304,13 +11417,15 @@ async fn download_verified_file_attempt(
         Ok(downloaded)
     }
     .await;
-    finish_download_job(
-        app,
-        job_id,
-        &download_result,
-        completed_bytes.load(Ordering::Relaxed),
-        total,
-    );
+    if let (Some(app), Some(job_id)) = (app, job_id) {
+        finish_download_job(
+            app,
+            job_id,
+            &download_result,
+            completed_bytes.load(Ordering::Relaxed),
+            total,
+        );
+    }
     download_result
 }
 
@@ -11326,7 +11441,17 @@ fn emit_install_percent(app: &AppHandle, instance_id: i64, percent: u64) {
     );
 }
 
+#[cfg(test)]
+static TEST_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+#[cfg(test)]
+static TEST_ALLOW_HTTP_MOCK: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 fn shared_download_client() -> Result<reqwest::Client, LauncherError> {
+    #[cfg(test)]
+    if let Some(client) = TEST_HTTP_CLIENT.get() {
+        return Ok(client.clone());
+    }
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     if let Some(client) = CLIENT.get() {
         return Ok(client.clone());
@@ -11510,7 +11635,7 @@ async fn install_vanilla_components(
         .ok_or_else(|| LauncherError::storage("版本元数据缺少 client。"))?;
     let (client_url, client_sha1, client_size) = download_fields(client)?;
     total_downloaded += download_verified_file_with_progress(
-        app,
+        Some(app),
         instance_id,
         client_url,
         client_sha1,
@@ -11589,7 +11714,7 @@ async fn install_vanilla_components(
                 if let Some((path, url, sha1, size)) = artifact {
                     downloaded = downloaded.saturating_add(
                         download_verified_file_with_progress(
-                            &app,
+                            Some(&app),
                             instance_id,
                             &url,
                             &sha1,
@@ -11608,7 +11733,7 @@ async fn install_vanilla_components(
                         .join(safe_relative_download_path(&path)?);
                     downloaded = downloaded.saturating_add(
                         download_verified_file_with_progress(
-                            &app,
+                            Some(&app),
                             instance_id,
                             &url,
                             &sha1,
@@ -11654,7 +11779,7 @@ async fn install_vanilla_components(
         .join("indexes")
         .join(format!("{asset_id}.json"));
     total_downloaded += download_verified_file_with_progress(
-        app,
+        Some(app),
         instance_id,
         index_url,
         index_sha1,
@@ -11718,7 +11843,7 @@ async fn install_vanilla_components(
                     .await
                     .map_err(|_| LauncherError::storage("下载并发控制异常。"))?;
                 let result = download_verified_file_with_progress(
-                    app,
+                    Some(app),
                     instance_id,
                     &url,
                     &hash,
@@ -13908,6 +14033,145 @@ side="BOTH"
                 "404 不得反复重试"
             );
         });
+    }
+
+    #[test]
+    fn extreme_slow_source_aborts_in_seconds_and_switches_to_trusted_mirror() {
+        use sha1::Digest as _;
+        use std::io::{Read as _, Write as _};
+        // 固定内容 + 官方/provider SHA-1:全程必须通过 hash 校验,不得改校验逻辑。
+        let payload: Vec<u8> = (0..256 * 1024).map(|index| (index % 251) as u8).collect();
+        let expected_sha1 = format!("{:x}", sha1::Sha1::digest(&payload));
+
+        fn parse_range(head: &str) -> Option<usize> {
+            let lower = head.to_ascii_lowercase();
+            let after = lower.split("range: bytes=").nth(1)?;
+            after
+                .split('-')
+                .next()
+                .and_then(|value| value.trim().parse::<usize>().ok())
+        }
+
+        // 测试用明文 HTTP mock(仅 cfg(test) 放行):同一监听端口,按 Host 区分行为。
+        // - Host: piston-data.mojang.com → 持续约 1.5KB/s(每 500ms 768B)的极慢主源;
+        // - Host: bmclapi2.bangbang93.com → 立即完整响应的可信备用镜像。
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mock_addr = listener.local_addr().unwrap();
+        let accept = listener.try_clone().unwrap();
+        accept.set_nonblocking(true).unwrap();
+        let server_payload = payload.clone();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop_flag = stop.clone();
+        let mock_server = std::thread::spawn(move || loop {
+            if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+            match accept.accept() {
+                Ok((stream, _)) => {
+                    let payload = server_payload.clone();
+                    std::thread::spawn(move || {
+                        let mut socket = stream;
+                        let mut head = Vec::new();
+                        let mut buffer = [0u8; 4096];
+                        {
+                            loop {
+                                match socket.read(&mut buffer) {
+                                    Ok(0) => return,
+                                    Ok(count) => {
+                                        head.extend_from_slice(&buffer[..count]);
+                                        if head.windows(4).any(|window| window == b"\r\n\r\n") {
+                                            break;
+                                        }
+                                    }
+                                    Err(_) => return,
+                                }
+                            }
+                        }
+                        let header_text = String::from_utf8_lossy(&head);
+                        let is_slow = header_text
+                            .lines()
+                            .any(|line| line.eq_ignore_ascii_case("host: piston-data.mojang.com"));
+                        let start = parse_range(&header_text).unwrap_or(0);
+                        let body = &payload[start..];
+                        let status = if start > 0 {
+                            "206 Partial Content"
+                        } else {
+                            "200 OK"
+                        };
+                        let header = format!(
+                            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        );
+                        if socket.write_all(header.as_bytes()).is_err() {
+                            return;
+                        }
+                        if is_slow {
+                            for chunk in body.chunks(768) {
+                                if socket.write_all(chunk).is_err() {
+                                    return;
+                                }
+                                std::thread::sleep(Duration::from_millis(500));
+                            }
+                        } else if socket.write_all(body).is_err() {
+                        }
+                    });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(_) => {
+                    break;
+                }
+            }
+        });
+
+        let client = reqwest::Client::builder()
+            .resolve("piston-data.mojang.com", mock_addr)
+            .resolve("bmclapi2.bangbang93.com", mock_addr)
+            .http1_only()
+            .build()
+            .unwrap();
+        TEST_HTTP_CLIENT.set(client.clone()).ok();
+        TEST_ALLOW_HTTP_MOCK.store(true, Ordering::Relaxed);
+
+        let directory =
+            std::env::temp_dir().join(format!("sh-extreme-slow-{}", unique_timestamp()));
+        fs::create_dir_all(&directory).unwrap();
+        let target = directory.join("client.jar");
+        let url = format!("http://piston-data.mojang.com/v1/objects/{expected_sha1}/client.jar");
+        let started = std::time::Instant::now();
+        tauri::async_runtime::block_on(async {
+            let size = download_verified_file_with_progress(
+                None,
+                0,
+                &url,
+                &expected_sha1,
+                Some(payload.len() as u64),
+                &target,
+                false,
+            )
+            .await
+            .expect("极慢源应通过镜像完成下载");
+            assert_eq!(size, payload.len() as u64);
+        });
+        TEST_ALLOW_HTTP_MOCK.store(false, Ordering::Relaxed);
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(60),
+            "极慢源必须秒级切换,实际耗时 {elapsed:?}"
+        );
+        let mut file = fs::File::open(&target).unwrap();
+        let mut downloaded = Vec::new();
+        file.read_to_end(&mut downloaded).unwrap();
+        assert_eq!(
+            format!("{:x}", sha1::Sha1::digest(&downloaded)),
+            expected_sha1,
+            "镜像下载必须通过官方 SHA-1 校验"
+        );
+        drop(listener);
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = mock_server.join();
+        let _ = fs::remove_dir_all(&directory);
     }
 
     #[test]

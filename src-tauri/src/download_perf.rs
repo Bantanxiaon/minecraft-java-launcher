@@ -11,7 +11,13 @@ use std::time::{Duration, Instant};
 use tauri::AppHandle;
 use tokio::sync::Semaphore;
 
-/// 2~5 秒滑动窗口测速器，多个 worker 写入同一个实例。
+/// 极慢源时间驱动检测阈值：连续观测达到该时长、窗口内字节极少且吞吐极低时，
+/// 不要求先积累 256KB 样本即可判定慢源（1.3KB/s 下积累 256KB 需要约 197 秒）。
+pub const EXTREME_SLOW_OBSERVE_SECS: u64 = 8;
+pub const EXTREME_SLOW_MAX_BPS: f64 = 8.0 * 1024.0;
+pub const EXTREME_SLOW_MAX_WINDOW_BYTES: u64 = 64 * 1024;
+
+/// 滑动窗口测速器，多个 worker 写入同一个实例。
 pub struct SpeedMeter {
     window: Duration,
     samples: VecDeque<(Instant, u64)>,
@@ -56,6 +62,23 @@ impl SpeedMeter {
         let elapsed = now.duration_since(*first).as_secs_f64().max(0.1);
         let bytes: u64 = self.samples.iter().map(|(_, bytes)| *bytes).sum();
         bytes as f64 / elapsed
+    }
+
+    /// 首个样本到当前时刻的连续观测时长；无样本时为 0。
+    pub fn observed_span(&mut self) -> Duration {
+        let now = Instant::now();
+        self.trim(now);
+        match self.samples.front() {
+            Some((first, _)) => now.saturating_duration_since(*first),
+            None => Duration::ZERO,
+        }
+    }
+
+    /// 当前窗口内的字节总量。
+    pub fn window_bytes(&mut self) -> u64 {
+        let now = Instant::now();
+        self.trim(now);
+        self.samples.iter().map(|(_, bytes)| *bytes).sum()
     }
 }
 
@@ -103,7 +126,11 @@ static HOST_SPEEDS: OnceLock<DashMap<String, Arc<std::sync::Mutex<SpeedMeter>>>>
 pub fn record_host_bytes(host: &str, bytes: u64) {
     let meter = host_speeds()
         .entry(host.to_string())
-        .or_insert_with(|| Arc::new(std::sync::Mutex::new(SpeedMeter::default())))
+        .or_insert_with(|| {
+            Arc::new(std::sync::Mutex::new(SpeedMeter::new(Duration::from_secs(
+                12,
+            ))))
+        })
         .clone();
     let lock = meter.lock();
     if let Ok(mut inner) = lock {
@@ -122,13 +149,38 @@ pub fn host_recent_speed(host: &str) -> f64 {
         .unwrap_or(0.0)
 }
 
-/// 来源是否被判定为“慢”：近期失败率过高，或近 3 秒窗口吞吐低于 64 KB/s。
-/// 仅在有真实样本时判定，避免冷启动误判。
+/// 极慢源时间驱动判定（纯函数，便于注入时间测试）：
+/// 连续观测达到阈值时长、窗口字节极少且吞吐极低，不要求先积累 256KB。
+pub fn is_extreme_slow(span: Duration, window_bytes: u64, speed: f64) -> bool {
+    span >= Duration::from_secs(EXTREME_SLOW_OBSERVE_SECS)
+        && window_bytes > 0
+        && window_bytes < EXTREME_SLOW_MAX_WINDOW_BYTES
+        && speed > 0.0
+        && speed < EXTREME_SLOW_MAX_BPS
+}
+
+/// 来源是否被判定为“慢”：
+/// 1. 近期失败率过高（≥3 次请求且失败 ≥2/3）；
+/// 2. 极慢源时间驱动判定：连续观测 ≥8s、窗口字节 <64KB 且吞吐 <8KB/s，
+///    不要求先积累 256KB 样本；
+/// 3. 常规慢源判定：累计样本 ≥256KB 且近期窗口吞吐 <64KB/s。
 pub fn host_is_slow(host: &str) -> bool {
     if let Some(stats) = host_health().get(host).map(|entry| entry.clone()) {
         if stats.requests >= 3 && stats.success.saturating_mul(2) < stats.requests {
             return true;
         }
+    }
+    if let Some(meter) = host_speeds().get(host) {
+        if let Ok(mut inner) = meter.lock() {
+            let span = inner.observed_span();
+            let window_bytes = inner.window_bytes();
+            let speed = inner.bytes_per_second();
+            if is_extreme_slow(span, window_bytes, speed) {
+                return true;
+            }
+        }
+    }
+    if let Some(stats) = host_health().get(host).map(|entry| entry.clone()) {
         if stats.bytes >= 256 * 1024 {
             let speed = host_recent_speed(host);
             if speed > 0.0 && speed < 64.0 * 1024.0 {
@@ -250,5 +302,31 @@ mod tests {
         record_host_request(host, true, 1024 * 1024);
         record_host_bytes(host, 1024);
         assert!(host_is_slow(host), "吞吐过低应判定为慢来源");
+    }
+
+    #[test]
+    fn extreme_slow_host_detected_by_time_without_256kb_sample() {
+        // 1.3KB/s 持续 10 秒：约 13KB 样本，远低于 256KB，也必须判定为极慢。
+        assert!(is_extreme_slow(
+            Duration::from_secs(10),
+            13 * 1024,
+            1.3 * 1024.0
+        ));
+    }
+
+    #[test]
+    fn healthy_burst_after_slow_start_is_not_flagged() {
+        // 短暂慢启动后立即爆发：窗口字节超过阈值，或速度高于阈值，不应误判。
+        assert!(!is_extreme_slow(
+            Duration::from_secs(10),
+            128 * 1024,
+            12.8 * 1024.0
+        ));
+        assert!(!is_extreme_slow(
+            Duration::from_secs(4),
+            8 * 1024,
+            2.0 * 1024.0
+        ));
+        assert!(!is_extreme_slow(Duration::from_secs(10), 0, 0.0));
     }
 }

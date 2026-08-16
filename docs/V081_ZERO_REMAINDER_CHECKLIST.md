@@ -103,7 +103,7 @@
 - [x] SHA-1 对象缓存命中零联网
 - [x] 404 不重试 / 429 Retry-After / 指数退避 + 抖动
 - [x] 来源健康统计 + download_diagnostics
-- [x] Slow-source fallback（Host Health 已有，自动切换未接）— Implementation: `download_perf::host_is_slow`（近 3 秒窗口 <64KB/s 且有 ≥256KB 样本，或近期失败率 ≥2/3）+ 主源判定慢时优先 BMCLAPI 镜像、SHA-1 校验不变、失败回主源；Tests: `slow_and_failing_hosts_are_detected`
+- [x] Slow-source fallback（含极慢源时间驱动检测）— Implementation: `download_perf::host_is_slow`（近期失败率 ≥2/3；常规慢源 ≥256KB 样本且窗口 <64KB/s；极慢源连续观测 ≥8s、窗口字节 <64KB 且 <8KB/s，不再要求先积累 256KB）+ 主源判定慢时优先 BMCLAPI 镜像、SHA-1 校验不变、失败回主源；下载流内新增 `EXTREME_SLOW_SOURCE`（连续 12s 收到 <48KB 即断开，保留 .part 续传重连）与 `NO_PROGRESS`（90s 无数据，保留续传）；Tests: `slow_and_failing_hosts_are_detected`、`extreme_slow_host_detected_by_time_without_256kb_sample`、`healthy_burst_after_slow_start_is_not_flagged`、`extreme_slow_source_aborts_in_seconds_and_switches_to_trusted_mirror`（mock HTTP：主源 1.5KB/s、镜像正常、24s 完成切换并通过 SHA-1）；真实诊断：cdn.modrinth.com TTFB 645ms/首字节 835ms，但 5/10/30s 均仅 169B（连接后停滞），旧逻辑需 197s 积累 256KB 才能判慢，新逻辑 12s 断开并成功重连（实测第二次连接 ~100KB/s）
 - [x] SQLite 移出 hot path（内存 + 250ms 节流 + 低频 checkpoint）
 - [x] 真实下载基准（Modrinth 0.28–0.42MB/s、BMCLAPI 2.5–3.2MB/s、JDK 14.7–20.4MB/s；见 BENCHMARK_DOWNLOAD.md）
 - [x] 冷/热缓存 GUI 场景真实验收 — Verification: 真实 debug GUI 全量安装验收冷启动通过（23MB client + 88 libraries）；热缓存复测 44.0s → 修复分段下载路径未接对象缓存后 29.5s（client.jar 由 cache/sha1 命中，Windows 相关库 63/63 全部命中，剩余 25 项为 Linux/macOS natives 被规则跳过）；CLI A/B：serial-cold 118.6s vs concurrent-cold 30.8s vs concurrent-hot 1.1ms 零联网；跨实例 libraries/assets 复用改为 CoW reflink
