@@ -5,9 +5,11 @@ use dashmap::DashMap;
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
+use tokio::sync::Semaphore;
 
 /// 2~5 秒滑动窗口测速器，多个 worker 写入同一个实例。
 pub struct SpeedMeter {
@@ -115,6 +117,30 @@ pub fn record_network_bytes(bytes: u64) {
     TOTAL_NETWORK_BYTES.fetch_add(bytes, Ordering::Relaxed);
 }
 
+/// 按资源类型分级并发：metadata 不堵下载，大文件不占满所有连接。
+pub struct DownloadConcurrency {
+    pub metadata: Arc<Semaphore>,
+    pub small: Arc<Semaphore>,
+    pub library: Arc<Semaphore>,
+    pub large: Arc<Semaphore>,
+}
+
+impl DownloadConcurrency {
+    pub fn new() -> Self {
+        Self {
+            metadata: Arc::new(Semaphore::new(6)),
+            small: Arc::new(Semaphore::new(16)),
+            library: Arc::new(Semaphore::new(12)),
+            large: Arc::new(Semaphore::new(4)),
+        }
+    }
+}
+
+pub fn download_concurrency() -> &'static DownloadConcurrency {
+    static CONCURRENCY: OnceLock<DownloadConcurrency> = OnceLock::new();
+    CONCURRENCY.get_or_init(DownloadConcurrency::new)
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadDiagnostics {
@@ -157,5 +183,14 @@ mod tests {
         let second = retry_delay(2);
         assert!(second > first);
         assert!(retry_delay(10).as_millis() <= 300 * 32 + 250);
+    }
+
+    #[test]
+    fn concurrency_classes_have_independent_limits() {
+        let concurrency = download_concurrency();
+        assert_eq!(concurrency.metadata.available_permits(), 6);
+        assert_eq!(concurrency.small.available_permits(), 16);
+        assert_eq!(concurrency.library.available_permits(), 12);
+        assert_eq!(concurrency.large.available_permits(), 4);
     }
 }

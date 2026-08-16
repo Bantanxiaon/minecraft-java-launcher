@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { X } from "lucide-react";
 import type { CrashReport, DownloadJob, GameLog } from "../types";
 
@@ -162,6 +163,28 @@ export function DiagnosticsPage({
   const [selectedLog, setSelectedLog] = useState("");
   const [level, setLevel] = useState("all");
   const [query, setQuery] = useState("");
+  const [hosts, setHosts] = useState<
+    Array<{
+      host: string;
+      requests: number;
+      success: number;
+      failure: number;
+      bytes: number;
+      lastSuccessAtMs?: number;
+      lastFailureAtMs?: number;
+    }>
+  >([]);
+  const [totalNetworkBytes, setTotalNetworkBytes] = useState(0);
+  useEffect(() => {
+    void invoke<{ totalNetworkBytes: number; hosts: typeof hosts }>(
+      "download_diagnostics",
+    )
+      .then((value) => {
+        setHosts(value.hosts);
+        setTotalNetworkBytes(value.totalNetworkBytes);
+      })
+      .catch(() => {});
+  }, [message]);
   const readSelected = () => {
     const [instanceId, ...nameParts] = selectedLog.split(":");
     const target = logs.find(
@@ -190,6 +213,23 @@ export function DiagnosticsPage({
           </button>
         </div>
       </header>
+      <section className="diagnostic-card">
+        <div className="section-heading">
+          <div>
+            <h2>下载来源健康</h2>
+            <p>累计请求、成功/失败与流量（共 {formatBytes(totalNetworkBytes)}）</p>
+          </div>
+        </div>
+        <div className="mod-rows">
+          {hosts.length ? hosts.slice(0, 12).map((host) => (
+            <div key={host.host}>
+              <strong>{host.host}</strong>
+              <span>{host.requests} 请求 · 成功 {host.success} · 失败 {host.failure}</span>
+              <span>{formatBytes(host.bytes)}</span>
+            </div>
+          )) : <p className="mod-message">暂无下载统计；开始一次下载后会显示来源健康度。</p>}
+        </div>
+      </section>
       <section className="diagnostic-grid">
         <div className="diagnostic-card">
           <div className="section-heading">

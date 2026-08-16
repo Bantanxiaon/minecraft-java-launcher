@@ -96,7 +96,8 @@
 ## 下载性能
 
 - [x] 持久 HTTP client / 连接池
-- [ ] 分级并发 semaphore（metadata/small/library/large，未实现）
+- [x] 分级并发 semaphore（metadata 6 / small 16 / library 12 / large 4，接入 metadata、Libraries、Assets 与大文件）
+- [x] Vanilla Libraries 由串行改为受控并发（此前是逐个 await，是历史慢下载主因之一）
 - [x] 任务级滑动窗口测速（SpeedMeter + 测试）
 - [x] SHA-1 对象缓存命中零联网
 - [x] 404 不重试 / 429 Retry-After / 指数退避 + 抖动
@@ -114,7 +115,7 @@
 - [x] 实例详情页（游戏库 → 详情：概览健康状态 / 设置内存 / 日志 / 磁盘对账），后端 instance_health
 - [ ] 实例详情内嵌模组/资源包/光影/存档 钻取式 IA（仍为全局页选择实例）
 - [ ] Mod UX 升级（图标 + 简洁名称，技术文件名进详情）
-- [ ] 下载诊断 UI（后端命令已有，页面未接）
+- [x] 下载诊断 UI（下载页显示来源健康：请求数/成功/失败/流量）
 - [x] 无假按钮 / 隐藏未完成 English
 - [ ] 前端行为测试扩展（Instance Detail / Reconcile / Ambiguous / UpdatePlan / Cleanup / Restore / Fallback / Startup handoff / Multiplayer lifecycle / Error recovery / Settings）
 

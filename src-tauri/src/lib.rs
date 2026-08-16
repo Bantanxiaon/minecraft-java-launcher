@@ -3213,6 +3213,12 @@ async fn fetch_modrinth_json(url: reqwest::Url) -> Result<serde_json::Value, Lau
     {
         return Err(LauncherError::validation("仅允许 Modrinth 官方 API。"));
     }
+    let _permit = download_perf::download_concurrency()
+        .metadata
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| LauncherError::storage("元数据并发控制异常。"))?;
     let response = send_download_request(&quick_http_client()?, &url, None)
         .await?
         .error_for_status()
@@ -8919,6 +8925,12 @@ async fn prefetch_installer_libraries(
             let app = app.clone();
             let game = game.clone();
             async move {
+                let _permit = download_perf::download_concurrency()
+                    .library
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| LauncherError::storage("下载并发控制异常。"))?;
                 let expected = match sha1 {
                     Some(value) => value,
                     None => fetch_sha1_sidecar(&format!("{url}.sha1")).await?,
@@ -9809,6 +9821,18 @@ async fn download_verified_file_attempt(
     let response = response
         .error_for_status()
         .map_err(|error| LauncherError::storage(format!("下载服务返回错误：{error}")))?;
+    let _large_permit = if expected_size.is_some_and(|size| size >= 16 * 1024 * 1024) {
+        Some(
+            download_perf::download_concurrency()
+                .large
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| LauncherError::storage("大文件并发控制异常。"))?,
+        )
+    } else {
+        None
+    };
     const MAX_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
     let total = expected_size.or_else(|| {
         response
@@ -10195,69 +10219,111 @@ async fn install_vanilla_components(
         .and_then(|value| value.as_array())
         .ok_or_else(|| LauncherError::storage("版本元数据缺少 libraries。"))?;
     let natives_directory = game.join("versions").join(version).join("natives");
-    let allowed_library_count = libraries
-        .iter()
-        .filter(|library| rules_allow_windows(library))
-        .count()
-        .max(1);
-    let mut processed_libraries = 0usize;
+    type LibraryItem = (
+        Option<(String, String, String, u64)>,
+        Option<(String, String, String, u64)>,
+    );
+    let mut library_tasks = Vec::new();
     for library in libraries
         .iter()
         .filter(|library| rules_allow_windows(library))
     {
-        if let Some(artifact) = library.pointer("/downloads/artifact") {
-            let path = artifact
-                .get("path")
-                .and_then(|value| value.as_str())
-                .ok_or_else(|| LauncherError::storage("Library 缺少路径。"))?;
-            let (url, sha1, size) = download_fields(artifact)?;
-            total_downloaded += download_verified_file_with_progress(
-                app,
-                instance_id,
-                url,
-                sha1,
-                Some(size),
-                &game
-                    .join("libraries")
-                    .join(safe_relative_download_path(path)?),
-                false,
-            )
-            .await?;
-        }
-        let Some(native_template) = library
+        let artifact = library
+            .pointer("/downloads/artifact")
+            .map(|artifact| {
+                let path = artifact
+                    .get("path")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| LauncherError::storage("Library 缺少路径。"))?
+                    .to_string();
+                let (url, sha1, size) = download_fields(artifact)?;
+                Ok::<_, LauncherError>((path, url.to_string(), sha1.to_string(), size))
+            })
+            .transpose()?;
+        let native = library
             .pointer("/natives/windows")
             .and_then(|value| value.as_str())
-        else {
-            continue;
-        };
-        let classifier = native_template.replace("${arch}", "64");
-        let Some(native) = library.pointer(&format!("/downloads/classifiers/{classifier}")) else {
-            continue;
-        };
-        let path = native
-            .get("path")
-            .and_then(|value| value.as_str())
-            .ok_or_else(|| LauncherError::storage("Native library 缺少路径。"))?;
-        let (url, sha1, size) = download_fields(native)?;
-        let target = game
-            .join("libraries")
-            .join(safe_relative_download_path(path)?);
-        total_downloaded += download_verified_file_with_progress(
-            app,
-            instance_id,
-            url,
-            sha1,
-            Some(size),
-            &target,
-            false,
-        )
-        .await?;
-        extract_native_jar(&target, &natives_directory)?;
+            .map(|native_template| {
+                let classifier = native_template.replace("${arch}", "64");
+                let native = library
+                    .pointer(&format!("/downloads/classifiers/{classifier}"))
+                    .ok_or_else(|| LauncherError::storage("Native library 缺少分类文件。"))?;
+                let path = native
+                    .get("path")
+                    .and_then(|value| value.as_str())
+                    .ok_or_else(|| LauncherError::storage("Native library 缺少路径。"))?
+                    .to_string();
+                let (url, sha1, size) = download_fields(native)?;
+                Ok::<_, LauncherError>((path, url.to_string(), sha1.to_string(), size))
+            })
+            .transpose()?;
+        library_tasks.push((artifact, native) as LibraryItem);
+    }
+    let library_count = library_tasks.len().max(1) as u64;
+    let app_clone = app.clone();
+    let game_clone = game.clone();
+    let natives_clone = natives_directory.clone();
+    let results =
+        futures_util::stream::iter(library_tasks.into_iter().map(|(artifact, native)| {
+            let app = app_clone.clone();
+            let game = game_clone.clone();
+            let natives = natives_clone.clone();
+            async move {
+                let _permit = download_perf::download_concurrency()
+                    .library
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| LauncherError::storage("下载并发控制异常。"))?;
+                let mut downloaded = 0u64;
+                if let Some((path, url, sha1, size)) = artifact {
+                    downloaded = downloaded.saturating_add(
+                        download_verified_file_with_progress(
+                            &app,
+                            instance_id,
+                            &url,
+                            &sha1,
+                            Some(size),
+                            &game
+                                .join("libraries")
+                                .join(safe_relative_download_path(&path)?),
+                            false,
+                        )
+                        .await?,
+                    );
+                }
+                if let Some((path, url, sha1, size)) = native {
+                    let target = game
+                        .join("libraries")
+                        .join(safe_relative_download_path(&path)?);
+                    downloaded = downloaded.saturating_add(
+                        download_verified_file_with_progress(
+                            &app,
+                            instance_id,
+                            &url,
+                            &sha1,
+                            Some(size),
+                            &target,
+                            false,
+                        )
+                        .await?,
+                    );
+                    extract_native_jar(&target, &natives)?;
+                }
+                Ok::<u64, LauncherError>(downloaded)
+            }
+        }))
+        .buffer_unordered(concurrency.clamp(1, 64))
+        .collect::<Vec<_>>()
+        .await;
+    let mut processed_libraries = 0u64;
+    for result in results {
+        total_downloaded = total_downloaded.saturating_add(result?);
         processed_libraries += 1;
         emit_install_percent(
             app,
             instance_id,
-            20 + (processed_libraries as u64 * 25 / allowed_library_count as u64),
+            20 + (processed_libraries * 25 / library_count),
         );
     }
 
@@ -10335,6 +10401,12 @@ async fn install_vanilla_components(
         futures_util::stream::iter(asset_tasks.into_iter().map(|(url, hash, size, target)| {
             let asset_done = Arc::clone(&asset_done);
             async move {
+                let _permit = download_perf::download_concurrency()
+                    .small
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| LauncherError::storage("下载并发控制异常。"))?;
                 let result = download_verified_file_with_progress(
                     app,
                     instance_id,
