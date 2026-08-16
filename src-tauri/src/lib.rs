@@ -689,6 +689,62 @@ pub(crate) fn run_migrations(connection: &mut Connection) -> rusqlite::Result<()
         )?;
         tx.commit()?;
     }
+    // v10：修复历史版本 v6 迁移把 instance_launch_settings 的外键写成临时表
+    // accounts_identity_old（v7 会删除该表）导致级联删除实例失败的 Bug。
+    let has_v10: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM migrations WHERE version=10)",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_v10 {
+        let broken_schema: bool = connection
+            .query_row(
+                "SELECT sql LIKE '%accounts_identity_old%' FROM sqlite_master
+                 WHERE type='table' AND name='instance_launch_settings'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        if broken_schema {
+            connection.execute_batch("PRAGMA foreign_keys = OFF;")?;
+            let tx = connection.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE instance_launch_settings_rebuilt (
+                    instance_id INTEGER PRIMARY KEY,
+                    memory_min_mb INTEGER,
+                    memory_max_mb INTEGER,
+                    java_mode TEXT NOT NULL DEFAULT 'AUTO',
+                    java_path TEXT,
+                    jvm_args_json TEXT NOT NULL DEFAULT '[]',
+                    game_args_json TEXT NOT NULL DEFAULT '[]',
+                    width INTEGER,
+                    height INTEGER,
+                    account_id INTEGER,
+                    FOREIGN KEY(instance_id) REFERENCES instances(id) ON DELETE CASCADE,
+                    FOREIGN KEY(account_id) REFERENCES accounts(id) ON DELETE SET NULL
+                );
+                INSERT INTO instance_launch_settings_rebuilt
+                    (instance_id, memory_min_mb, memory_max_mb, java_mode, java_path,
+                     jvm_args_json, game_args_json, width, height, account_id)
+                SELECT instance_id, memory_min_mb, memory_max_mb, java_mode, java_path,
+                       jvm_args_json, game_args_json, width, height, account_id
+                FROM instance_launch_settings;
+                DROP TABLE instance_launch_settings;
+                ALTER TABLE instance_launch_settings_rebuilt RENAME TO instance_launch_settings;",
+            )?;
+            tx.execute(
+                "INSERT INTO migrations(version, applied_at) VALUES(10, strftime('%s','now'))",
+                [],
+            )?;
+            tx.commit()?;
+            connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+        } else {
+            connection.execute(
+                "INSERT INTO migrations(version, applied_at) VALUES(10, strftime('%s','now'))",
+                [],
+            )?;
+        }
+    }
     // 补齐离线账户的标准 UUID 与旧 SHA-256 UUID，仅处理缺失的旧数据。
     {
         let mut statement = connection.prepare(
@@ -725,7 +781,10 @@ pub(crate) fn open_database(app: &AppHandle) -> Result<Connection, LauncherError
              PRAGMA busy_timeout = 5000;",
         )
         .map_err(|error| LauncherError::storage(error.to_string()))?;
-    run_migrations(&mut connection).map_err(|error| LauncherError::storage(error.to_string()))?;
+    run_migrations(&mut connection).map_err(|error| {
+        log::error!("数据库迁移失败（{}）：{error}", db_path.display());
+        LauncherError::storage(error.to_string())
+    })?;
     Ok(connection)
 }
 
@@ -10395,10 +10454,8 @@ fn object_cache_path(expected_sha1: &str) -> Option<PathBuf> {
     Some(
         directory
             .join("cache")
-            .join("objects")
             .join("sha1")
-            .join(&expected_sha1[..2])
-            .join(&expected_sha1[2..]),
+            .join(expected_sha1.to_ascii_lowercase()),
     )
 }
 
@@ -10613,6 +10670,11 @@ async fn download_verified_file_parallel(
     if expected_size < 16 * 1024 * 1024 {
         return Err(LauncherError::validation("文件过小，不需要分段下载。"));
     }
+    // 热缓存：对象缓存命中时零联网复用，避免大文件反复下载。
+    if let Some(size) = reuse_object_cache(target, expected_sha1).await? {
+        download_perf::record_network_bytes(0);
+        return Ok(size);
+    }
     let url = validate_resource_url(url)?;
     let client = shared_download_client()?;
     if let Some(parent) = target.parent() {
@@ -10714,6 +10776,14 @@ async fn download_verified_file_parallel(
     {
         let _ = tokio::fs::remove_file(target).await;
         return Err(LauncherError::validation("下载文件大小或 SHA-1 校验失败。"));
+    }
+    if let Some(object) = object_cache_path(expected_sha1) {
+        if let Some(parent) = object.parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
+        }
+        if !tokio::fs::try_exists(&object).await.unwrap_or(false) {
+            let _ = tokio::fs::copy(target, &object).await;
+        }
     }
     for index in 0..segments {
         let _ = tokio::fs::remove_file(target.with_extension(format!("part{index}"))).await;
@@ -11721,11 +11791,12 @@ fn import_existing_minecraft_files(
             &source_game.join("versions").join(version),
             &target_game.join("versions").join(version),
         )?;
-        copy_directory_contents(
+        // libraries/assets 通常数 GB：CoW reflink 共享底层数据块，避免重复占用磁盘。
+        copy_directory_contents_deduped(
             &source_game.join("libraries"),
             &target_game.join("libraries"),
         )?;
-        copy_directory_contents(&source_game.join("assets"), &target_game.join("assets"))?;
+        copy_directory_contents_deduped(&source_game.join("assets"), &target_game.join("assets"))?;
         return Ok(true);
     }
     Ok(false)
@@ -14066,5 +14137,114 @@ side="BOTH"
             )
             .unwrap();
         assert_eq!(mod_count, 1, "升级不得丢失内容记录");
+    }
+
+    #[test]
+    fn instance_deletion_cascades_without_broken_foreign_key() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        run_migrations(&mut connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO accounts(id,account_type,display_name,created_at)
+                 VALUES(1,'OFFLINE','Player','1')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO instances(id,name,root_path,game_version,loader_type,status,source,created_at)
+                 VALUES(9,'QA','D:/qa9','1.20.1','forge','ready','qa','1')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO instance_launch_settings(instance_id,memory_max_mb,java_mode,account_id)
+                 VALUES(9,4096,'AUTO',1)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute("DELETE FROM instances WHERE id=9", [])
+            .expect("级联删除实例不得因外键引用失败");
+        let settings: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM instance_launch_settings WHERE instance_id=9",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(settings, 0, "启动设置应随实例级联删除");
+        let accounts: i64 = connection
+            .query_row("SELECT COUNT(*) FROM accounts", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(accounts, 1, "账户记录不得被级联删除");
+    }
+
+    #[test]
+    fn migration_v10_repairs_broken_launch_settings_foreign_key() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        run_migrations(&mut connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO accounts(id,account_type,display_name,created_at)
+                 VALUES(1,'OFFLINE','Player','1')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO instances(id,name,root_path,game_version,loader_type,status,source,created_at)
+                 VALUES(8,'QA','D:/qa8','1.20.1','forge','ready','qa','1')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO instance_launch_settings(instance_id,memory_max_mb,account_id)
+                 VALUES(8,4096,1)",
+                [],
+            )
+            .unwrap();
+        // 模拟历史损坏：外键指向 accounts_identity_old 且 v10 未应用。
+        connection
+            .execute_batch(
+                "PRAGMA foreign_keys = OFF;
+                 ALTER TABLE instance_launch_settings RENAME TO instance_launch_settings_old;
+                 CREATE TABLE instance_launch_settings (
+                    instance_id INTEGER PRIMARY KEY,
+                    memory_min_mb INTEGER,
+                    memory_max_mb INTEGER,
+                    java_mode TEXT NOT NULL DEFAULT 'AUTO',
+                    java_path TEXT,
+                    jvm_args_json TEXT NOT NULL DEFAULT '[]',
+                    game_args_json TEXT NOT NULL DEFAULT '[]',
+                    width INTEGER,
+                    height INTEGER,
+                    account_id INTEGER,
+                    FOREIGN KEY(instance_id) REFERENCES instances(id) ON DELETE CASCADE,
+                    FOREIGN KEY(account_id) REFERENCES \"accounts_identity_old\"(id) ON DELETE SET NULL
+                 );
+                 INSERT INTO instance_launch_settings
+                    SELECT instance_id, memory_min_mb, memory_max_mb, java_mode, java_path,
+                           jvm_args_json, game_args_json, width, height, account_id
+                    FROM instance_launch_settings_old;
+                 DROP TABLE instance_launch_settings_old;
+                 DELETE FROM migrations WHERE version=10;
+                 PRAGMA foreign_keys = ON;",
+            )
+            .unwrap();
+        run_migrations(&mut connection).unwrap();
+        connection
+            .execute("DELETE FROM instances WHERE id=8", [])
+            .expect("v10 修复后级联删除应成功");
+        let settings: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM instance_launch_settings WHERE instance_id=8",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(settings, 0);
     }
 }

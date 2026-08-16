@@ -1,0 +1,46 @@
+{
+  "generatedAt": "2026-08-16T03:15:42.953Z",
+  "exe": "D:\\minecraft-java-launcher\\src-tauri\\target\\release\\app.exe",
+  "runs": 5,
+  "samples": [
+    {
+      "run": 1,
+      "totalMs": 480,
+      "dbMs": 29,
+      "scaleFactor": 1,
+      "monitorCount": 1
+    },
+    {
+      "run": 2,
+      "totalMs": 394,
+      "dbMs": 3,
+      "scaleFactor": 1,
+      "monitorCount": 1
+    },
+    {
+      "run": 3,
+      "totalMs": 412,
+      "dbMs": 4,
+      "scaleFactor": 1,
+      "monitorCount": 1
+    },
+    {
+      "run": 4,
+      "totalMs": 404,
+      "dbMs": 2,
+      "scaleFactor": 1,
+      "monitorCount": 1
+    },
+    {
+      "run": 5,
+      "totalMs": 394,
+      "dbMs": 3,
+      "scaleFactor": 1,
+      "monitorCount": 1
+    }
+  ],
+  "minMs": 394,
+  "medianMs": 404,
+  "p95Ms": 480,
+  "maxMs": 480
+}
