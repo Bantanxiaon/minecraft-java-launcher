@@ -1,0 +1,56 @@
+{
+  "bmclapi-forge": [
+    {
+      "bytes": 2508714,
+      "bytes_per_second": 3328617.365050575,
+      "cache_hit": false,
+      "total_ms": 753.6804999999999,
+      "ttfb_ms": 458.2894,
+      "url": "https://bmclapi2.bangbang93.com/maven/net/minecraftforge/forge/1.20.1-47.4.22/forge-1.20.1-47.4.22-universal.jar"
+    },
+    {
+      "bytes": 2508714,
+      "bytes_per_second": 2606999.172295112,
+      "cache_hit": false,
+      "total_ms": 962.2995,
+      "ttfb_ms": 612.1545000000001,
+      "url": "https://bmclapi2.bangbang93.com/maven/net/minecraftforge/forge/1.20.1-47.4.22/forge-1.20.1-47.4.22-universal.jar"
+    }
+  ],
+  "modrinth-small": [
+    {
+      "bytes": 7442998,
+      "bytes_per_second": 298453.47207562026,
+      "cache_hit": false,
+      "total_ms": 24938.5539,
+      "ttfb_ms": 1928.8337,
+      "url": "https://cdn.modrinth.com/data/ordsPcFz/versions/Zsh14XeQ/kotlinforforge-4.12.0-all.jar"
+    },
+    {
+      "bytes": 7442998,
+      "bytes_per_second": 443304.4778749463,
+      "cache_hit": false,
+      "total_ms": 16789.8101,
+      "ttfb_ms": 2288.1272,
+      "url": "https://cdn.modrinth.com/data/ordsPcFz/versions/Zsh14XeQ/kotlinforforge-4.12.0-all.jar"
+    }
+  ],
+  "openjdk-large": [
+    {
+      "bytes": 186915220,
+      "bytes_per_second": 15433698.514393391,
+      "cache_hit": false,
+      "total_ms": 12110.8508,
+      "ttfb_ms": 1080.9245999999998,
+      "url": "https://aka.ms/download-jdk/microsoft-jdk-17-windows-x64.zip"
+    },
+    {
+      "bytes": 186915220,
+      "bytes_per_second": 21433436.84683652,
+      "cache_hit": false,
+      "total_ms": 8720.7302,
+      "ttfb_ms": 1228.4637,
+      "url": "https://aka.ms/download-jdk/microsoft-jdk-17-windows-x64.zip"
+    }
+  ]
+}

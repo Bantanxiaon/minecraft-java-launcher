@@ -2467,15 +2467,28 @@ fn inspect_mod_jar_path(path: &Path) -> Result<ModInspection, LauncherError> {
                 let value: toml::Value = toml::from_str(text).map_err(|error| {
                     LauncherError::validation(format!("Mod descriptor 无效：{error}"))
                 })?;
-                let first = value
+                let mod_entries = value
                     .get("mods")
                     .and_then(|value| value.as_array())
-                    .and_then(|mods| mods.first());
+                    .cloned()
+                    .unwrap_or_default();
+                let first = mod_entries.first();
                 loader_type = loader.into();
                 mod_id = first
                     .and_then(|value| value.get("modId"))
                     .and_then(|value| value.as_str())
                     .map(str::to_string);
+                if let Some(primary) = mod_id.as_deref() {
+                    for entry in mod_entries.iter().skip(1) {
+                        if let Some(extra) = entry
+                            .get("modId")
+                            .and_then(|value| value.as_str())
+                            .filter(|extra| !extra.eq_ignore_ascii_case(primary))
+                        {
+                            provides.push(extra.to_string());
+                        }
+                    }
+                }
                 display_name = first
                     .and_then(|value| value.get("displayName"))
                     .and_then(|value| value.as_str())
@@ -2484,10 +2497,13 @@ fn inspect_mod_jar_path(path: &Path) -> Result<ModInspection, LauncherError> {
                     .and_then(|value| value.get("version"))
                     .and_then(|value| value.as_str())
                     .map(str::to_string);
-                if let Some(id) = mod_id.as_deref() {
+                for entry in &mod_entries {
+                    let Some(id) = entry.get("modId").and_then(|value| value.as_str()) else {
+                        continue;
+                    };
                     if let Some(items) = value
                         .get("dependencies")
-                        .and_then(|entry| entry.get(id))
+                        .and_then(|deps| deps.get(id))
                         .and_then(|entry| entry.as_array())
                     {
                         for dependency in items {
@@ -4681,11 +4697,14 @@ async fn update_modrinth_mod(
     fs::create_dir_all(&backup_directory)
         .map_err(|error| LauncherError::storage(error.to_string()))?;
     let backup = backup_directory.join(format!("{}-{}", unique_timestamp(), item.file_name));
-    fs::rename(&old_path, &backup)
-        .map_err(|error| LauncherError::storage(format!("备份旧模组失败：{error}")))?;
-    if let Err(error) = fs::rename(&staged, &destination) {
-        let _ = fs::rename(&backup, &old_path);
-        return Err(LauncherError::storage(format!("替换模组失败：{error}")));
+    let mut transaction = fs_safe::FsTransaction::new(format!("mod-update-{content_id}"));
+    transaction.move_with_undo(&old_path, &backup)?;
+    if let Err(error) = transaction.move_with_undo(&staged, &destination) {
+        transaction.rollback()?;
+        return Err(LauncherError::storage(format!(
+            "替换模组失败：{}",
+            error.message
+        )));
     }
 
     metadata = serde_json::to_value(&inspection)
@@ -4704,10 +4723,10 @@ async fn update_modrinth_mod(
         "UPDATE content_items SET file_name=?1,hash=?2,metadata_json=?3,installed_at=?4 WHERE id=?5",
         params![filename, inspection.sha256, metadata_json, installed_at, content_id],
     ) {
-        let _ = fs::remove_file(&destination);
-        let _ = fs::rename(&backup, &old_path);
+        transaction.rollback()?;
         return Err(LauncherError::storage(error.to_string()));
     }
+    transaction.commit();
     item.file_name = filename;
     item.hash = inspection.sha256;
     item.metadata_json = Some(metadata_json);
@@ -7613,15 +7632,17 @@ fn clone_instance(
     {
         return Err(LauncherError::validation("实例正在运行，不能复制。"));
     }
-    let (source_root, version, loader, loader_version, memory_mb, resolution): (
+    let (source_root, version, loader, loader_version, memory_mb, resolution, icon, java_profile): (
         String,
         String,
         String,
         Option<String>,
         i64,
         Option<String>,
+        Option<String>,
+        Option<String>,
     ) = connection.query_row(
-        "SELECT root_path,game_version,loader_type,loader_version,memory_mb,resolution FROM instances WHERE id=?1",
+        "SELECT root_path,game_version,loader_type,loader_version,memory_mb,resolution,icon,java_profile FROM instances WHERE id=?1",
         [instance_id],
         |row| {
             Ok((
@@ -7631,6 +7652,8 @@ fn clone_instance(
                 row.get(3)?,
                 row.get(4)?,
                 row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
             ))
         },
     ).map_err(|_| LauncherError::validation("实例不存在。"))?;
@@ -7658,14 +7681,76 @@ fn clone_instance(
     let connection = open_database(&app)?;
     connection
         .execute(
-            "UPDATE instances SET loader_version=?1,memory_mb=?2,resolution=?3,status=?4,source='clone' WHERE id=?5",
+            "UPDATE instances SET loader_version=?1,memory_mb=?2,resolution=?3,icon=?4,java_profile=?5,status=?6,source='clone' WHERE id=?7",
             params![
                 loader_version,
                 memory_mb,
                 resolution,
+                icon,
+                java_profile,
                 cloned_status,
                 cloned.id
             ],
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    connection
+        .execute(
+            "INSERT INTO instance_launch_settings(instance_id, memory_min_mb, memory_max_mb, java_mode, java_path, jvm_args_json, game_args_json, width, height, account_id)
+             SELECT ?1, memory_min_mb, memory_max_mb, java_mode, java_path, jvm_args_json, game_args_json, width, height, account_id
+             FROM instance_launch_settings WHERE instance_id=?2",
+            params![cloned.id, instance_id],
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    connection
+        .execute(
+            "INSERT INTO instance_pack_source(instance_id, provider, project_id, version_id, pack_version, source_url, installed_at)
+             SELECT ?1, provider, project_id, version_id, pack_version, source_url, installed_at
+             FROM instance_pack_source WHERE instance_id=?2",
+            params![cloned.id, instance_id],
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    {
+        let mut statement = connection
+            .prepare("SELECT kind,file_name,hash,metadata_json,enabled FROM content_items WHERE instance_id=?1")
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        let rows = statement
+            .query_map([instance_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            })
+            .map_err(|error| LauncherError::storage(error.to_string()))?
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>();
+        drop(statement);
+        for (kind, file_name, hash, metadata_json, enabled) in rows {
+            connection
+                .execute(
+                    "INSERT OR IGNORE INTO content_items(instance_id,kind,file_name,hash,metadata_json,enabled,source,installed_at)
+                     VALUES(?1,?2,?3,?4,?5,?6,'clone',?7)",
+                    rusqlite::params![
+                        cloned.id,
+                        kind,
+                        file_name,
+                        hash,
+                        metadata_json,
+                        enabled,
+                        chrono_like_timestamp()
+                    ],
+                )
+                .map_err(|error| LauncherError::storage(error.to_string()))?;
+        }
+    }
+    connection
+        .execute(
+            "INSERT INTO managed_content(id, instance_id, kind, provider, project_id, version_id, file_sha1, file_sha256, installed_path, installed_by_launcher, created_at)
+             SELECT 'clone-' || ?1 || '-' || id, ?1, kind, provider, project_id, version_id, file_sha1, file_sha256, installed_path, 0, ?2
+             FROM managed_content WHERE instance_id=?3",
+            params![cloned.id, chrono_like_timestamp(), instance_id],
         )
         .map_err(|error| LauncherError::storage(error.to_string()))?;
     cloned.memory_mb = memory_mb;

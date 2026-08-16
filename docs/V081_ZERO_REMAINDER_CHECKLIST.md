@@ -1,36 +1,128 @@
-# v0.8.1 零遗留核对表
+# v0.8.1 零遗留核对表（细粒度）
 
-## 本轮已实现（源码 + 测试 + 构建证据）
+每项格式：`- [ ] 子项 — Implementation: …；Tests: …；Verification: …`
 
-- [x] 下载：持久 HTTP client（既有 OnceLock 复用，保留）
-- [x] 下载：任务级 3 秒滑动窗口测速（`download_perf::SpeedMeter` + 测试）
-- [x] 下载：SHA-1 对象缓存命中零联网（`object_cache_path` / `reuse_object_cache`）
-- [x] 下载：404 不重试、429 Retry-After、指数退避 + 抖动（`retry_delay` + 测试）
-- [x] 下载：来源健康统计与 `download_diagnostics`
-- [x] 启动：独立 Splash 窗口 + 主窗口隐藏/就绪衔接（tauri.conf + App.tsx）
-- [x] 启动：移除 1700ms 强制等待、假进度与步骤列表；品牌居中、一次性 Logo 动画、reduced-motion
-- [x] 启动：更新检查与完整 Mod 健康扫描移出关键路径（`runBackgroundHealth`）
-- [x] 对账：`reconcile_scan` / `reconcile_apply`，SHA-256 重复 JAR 清理到备份 + fingerprint 防 TOCTOU
-- [x] 安全解压：`fs_safe::extract_zip_securely` + 测试，Java 安装已接入
-- [x] 旧版启动参数分词器：引号/转义/空格路径 + 测试
-- [x] Supervisor（方案 B）：关闭后隐藏窗口，游戏退出后进程才退出；运行中关闭按钮自动隐藏
-- [x] i18n：隐藏未完成的 English 入口
-- [x] 移除 lottie 主视觉与依赖，前端包约减半
-- [x] Resolver 身份链：可信别名 → SHA-1 hash 反查（Modrinth version_file）→ 精确搜索；同名多候选返回 AMBIGUOUS，未知 modId 不静默安装（“第 11 个未知 Mod”测试）
-- [x] FsTransaction（move + LIFO 回滚）用于删除实例，DB 失败时回滚文件移动
-- [x] staging 残留扫描/清理命令（list_staging_operations / cleanup_staging_operation）
-- [x] mock HTTP 回归：404 不重试、下载回退/退避测试
-- [x] 下载基准工具 `scripts/benchmark-download.mjs`（可本机执行并记录 PCL 对照）
-- [x] 前端 Vitest 扩展到 6 项（版本范围/分词需求/highlights/loader）
-- [x] 实例克隆：补齐 libraries/assets、内存、分辨率，复制后置为待校验状态（不继承 READY），运行中禁止复制
+## Resolver（优先链：provider metadata → dependency metadata → hash → trusted mapping → 限定精确搜索 → Ambiguous/Unknown）
 
-## 仍未完成（如实列出，不宣告零遗留）
+- [x] provider 原始 metadata（CurseForge 索引 modId→project/file，`resolve_curseforge_dependency` 第一层）— Tests: `curseforge_dependency_resolution_prefers_mod_id`；Verification: cargo test
+- [ ] provider 原始 metadata（Modrinth 整合包文件 → project/version 映射记录）
+- [ ] provider dependency metadata（已安装项目 version 依赖的 project_id 反查）
+- [x] exact hash reverse lookup（`modrinth_project_by_hash`，SHA-1 → version_file）— Tests: 待补 URL/解析单测
+- [x] trusted mapping（已核对别名 + `content_identity_cache` 表；别名只作为一层）— Tests: `missing_dependencies_reports_kotlinforforge_when_absent`
+- [x] 限定精确搜索（project_type=mod + 精确 slug/title 匹配）— Tests: `resolver_unknown_mod_without_exact_match_returns_no_candidates`
+- [x] AMBIGUOUS 安全（同名多候选返回错误，不自动装第一条）— Tests: `resolver_rejects_ambiguous_same_slug_projects`
+- [x] UNKNOWN 安全（无精确匹配返回错误）— Tests: 同上
+- [x] “第 11 个未知 Mod”测试 — Tests: `resolver_unknown_mod_without_exact_match_returns_no_candidates`
+- [x] 同名多候选测试 — Tests: `resolver_rejects_ambiguous_same_slug_projects`
+- [x] Forge/NeoForge 多 `[[mods]]` metadata 全读（其余 modId 归入 provides，依赖汇总全部条目）— Verification: cargo test
+- [x] Fabric/Quilt provides — Tests: `inspects_fabric_mod_descriptor` 等（provides 解析已加入 installed_mod_ids）
 
-- [ ] 整合包导入 staging/事务化与崩溃恢复未完成
-- [ ] Content/Modpack UpdatePlan 未完成（Mod 更新仍是备份后替换）
-- [ ] 全部解压路径未统一到 SecureArchiveExtractor（仅 Java 已接入，其余保留既有等价防护）
-- [ ] Instance-centric UI（实例详情钻取式 IA）未完成
-- [ ] 故障注入（DB commit 失败、导入 N/100 失败、clone DB 失败、migration 中断）
-- [ ] 真实 70MB A/B benchmark 与 PCL 同机对照（需在真实机器执行；工具已就绪）
-- [ ] 多显示器/100/125/150% DPI 实测（需真实 Windows 环境）
-- [ ] 外部：无 Cloudflare R2 凭据，自有 CDN 未实际上传；真机多显示器/DPI 实测未执行
+## Reconciliation / Duplicate
+
+- [x] Reconciler scan（db_missing_on_disk / disk_missing_in_db / duplicate_groups / fingerprint）— Tests: `canonical_name_strips_timestamp_prefix`
+- [x] Reconciler apply（重扫指纹、运行中禁止、重复项移备份、DB 增删）— Verification: cargo test
+- [ ] Reconciler 完整集成测试（临时实例目录往返 + apply 后 rescan 一致）
+
+## Modpack / Update
+
+- [ ] 整合包事务：staging 下载 → hash → overrides → loader/dependency/disk 验证 → atomic commit → DB commit
+- [ ] 崩溃恢复：读取 `.staging/<operation-id>` operation metadata，支持继续/回滚/清理（当前只有扫描+删除）
+- [ ] Content UpdatePlan 接入业务（当前 `update_modrinth_mod` 为内联备份+回滚，无 plan struct）
+- [ ] Modpack UpdatePlan（pack-owned / user-added / user-modified / saves / config 区分，snapshot + rollback）
+- [ ] 用户 saves / 自加 Mod / 修改 config 保护测试
+
+## Clone
+
+- [x] libraries/assets 复制
+- [x] memory / resolution 复制
+- [x] 复制后置待校验状态（不继承 READY），运行中禁止
+- [x] Java selection / JVM args / game args / account（instance_launch_settings 整表复制）
+- [x] loader 信息（loader_version + java_profile 复制）
+- [x] pack provenance 复制（instance_pack_source）
+- [x] content 记录复制（content_items 重建为 source='clone'）
+- [x] managed content 复制（managed_content 标记 installed_by_launcher=0）
+- [x] instance icon 复制（instances.icon）
+- [ ] resourcepacks/shaderpacks/config/saves policy（saves 可选开关）
+- [ ] assets/libraries 共享/复用架构（避免 Clone 复制数 GB 公共运行时）
+- [ ] Clone 完成后 reconcile/validate + 回归测试（Vanilla/Forge/Fabric/NeoForge/Quilt/大包/自定义 Java/JVM/saves/provenance/managed e4mc）
+
+## FsTransaction / Fault Injection
+
+- [x] FsTransaction move + LIFO rollback（`fs_safe::FsTransaction` + 测试）
+- [x] 接入删除实例（DB 失败回滚文件移动）
+- [x] 接入 Mod update（备份/替换/DB 失败均回滚）
+- [ ] 接入 Modpack import/update
+- [ ] 接入 Content delete / World import/restore
+- [ ] 接入 Java runtime swap
+- [ ] 接入 Reconcile destructive apply
+- [ ] 接入 Clone commit
+- [x] file move / rollback 顺序测试（fs_transaction_rolls_back_moves_in_reverse_order）
+- [ ] DB commit failure 端到端故障注入（需 Tauri app context fixture，待补）
+
+## Archive / Path
+
+- [x] SecureArchiveExtractor 统一核心（`fs_safe::extract_zip_securely` + traversal/absolute/zip-slip/safe 测试）
+- [x] Java 安装接入统一解压
+- [ ] Native JAR 接入
+- [ ] Modpack ZIP 接入
+- [ ] World ZIP 接入
+- [ ] Resource Pack 接入
+- [ ] Shader Pack 接入
+- [x] Windows 保留名 / 结尾点空格 / 禁用字符（`validate_windows_filename` 接入 instance 字段）
+- [ ] symlink/reparse 全路径实测
+
+## Supervisor / 生命周期
+
+- [x] 方案 B：关闭 UI 后进程驻留监督 Java；游戏退出后才退出
+- [x] game PID / started / ended / exit_code / crash / play_history / game-exited 更新（既有 watcher + 退出判定）
+- [ ] e4mc cleanup on game exit 验证
+- [ ] post-game task 验证
+- [ ] unfinished session 恢复（PID 不存在标记 abnormal end）
+
+## Startup / 性能
+
+- [x] 独立 Splash Window + 主窗口初始隐藏
+- [x] Splash 居中配置（center:true）+ 内容中心轴
+- [x] 无强制 >1s 等待（350ms 最小品牌曝光）
+- [x] 更新检查后台化
+- [x] Java 检测不重复（启动仅一次，全量探测保留）
+- [x] Mod full scan 移出关键路径（runBackgroundHealth）
+- [x] Storage scan lazy（打开页面才扫描）
+- [ ] Instance Health Cache（mods 指纹增量，未实现）
+- [ ] Java runtime cache（path 失效才局部验证，未实现）
+- [ ] Startup Metrics 输出
+- [ ] 启动 benchmark（5 次 min/median/P95）
+- [ ] 100/125/150% DPI 与多显示器实测（需真实 Windows 观察）
+
+## 下载性能
+
+- [x] 持久 HTTP client / 连接池
+- [ ] 分级并发 semaphore（metadata/small/library/large，未实现）
+- [x] 任务级滑动窗口测速（SpeedMeter + 测试）
+- [x] SHA-1 对象缓存命中零联网
+- [x] 404 不重试 / 429 Retry-After / 指数退避 + 抖动
+- [x] 来源健康统计 + download_diagnostics
+- [ ] Slow-source fallback（Host Health 已有，自动切换未接）
+- [x] SQLite 移出 hot path（内存 + 250ms 节流 + 低频 checkpoint）
+- [x] 真实下载基准（Modrinth 0.28–0.42MB/s、BMCLAPI 2.5–3.2MB/s、JDK 14.7–20.4MB/s；见 BENCHMARK_DOWNLOAD.md）
+- [ ] 冷/热缓存 GUI 场景真实验收
+- [ ] PCL 同机同网对照（需用户协助运行 PCL GUI）
+
+## UI
+
+- [x] 存储页（真实数据）
+- [x] 联机页（创建房间/邀请地址/结束）
+- [ ] Instance-centric IA（实例详情钻取式：概览/模组/资源包/光影/存档/日志/设置）
+- [ ] Mod UX 升级（图标 + 简洁名称，技术文件名进详情）
+- [ ] 下载诊断 UI（后端命令已有，页面未接）
+- [x] 无假按钮 / 隐藏未完成 English
+- [ ] 前端行为测试扩展（Instance Detail / Reconcile / Ambiguous / UpdatePlan / Cleanup / Restore / Fallback / Startup handoff / Multiplayer lifecycle / Error recovery / Settings）
+
+## 测试与发布
+
+- [x] cargo fmt / clippy -D warnings / 54 Rust tests / 8 联网忽略
+- [x] pnpm lint / Vitest 6 / build
+- [x] release-gate.mjs 已接 release.yml（核对表/版本/notes/benchmark 校验，失败 exit 1）
+- [ ] migration fixture（真实 v0.8.0 DB 原地升级）
+- [ ] updater upgrade 从 v0.8.0 实测
+- [ ] 外部：Cloudflare R2 凭据（未上传自有 CDN）

@@ -46,6 +46,9 @@ jobs:
           cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
           cargo test --manifest-path src-tauri/Cargo.toml --all-targets
 
+      - name: Release Gate（零遗留 + 版本 + 基准 + 文档）
+        run: node scripts/release-gate.mjs
+
       - name: 写入当前 GitHub 仓库的免费更新地址
         run: node scripts/configure-updater.mjs
 
