@@ -1,0 +1,9 @@
+{
+  "rust": [],
+  "frontend": [
+    "D:/minecraft-java-launcher/src/pages/InstanceDetailPage.test.tsx",
+    "D:/minecraft-java-launcher/src/pages/ServersPage.test.tsx",
+    "D:/minecraft-java-launcher/src/pages/SettingsPage.test.tsx",
+    "D:/minecraft-java-launcher/src/pages/StoragePage.test.tsx"
+  ]
+}

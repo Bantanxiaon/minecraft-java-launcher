@@ -360,12 +360,15 @@ mod acceptance;
 pub mod auth;
 mod content_reconcile;
 mod content_update;
+mod crash_diagnosis;
 mod diagnostics;
 mod download_perf;
 mod exports;
 mod fs_safe;
 mod modpack_ops;
 mod multiplayer;
+mod server_diag;
+mod startup_windows;
 mod storage;
 mod system;
 mod update_fast;
@@ -13641,9 +13644,8 @@ pub fn run() {
             if std::env::var("SH_STARTUP_BENCH_EXIT").is_ok_and(|value| value == "1") {
                 _app.handle().exit(0);
             }
-            // 启动窗口兜底：前端交接若失败（例如主窗口 show 在个别环境下未生效），
-            // 1.5 秒后由 Rust 强制显示主窗口；只有确认主窗口可见才关闭启动小窗，
-            // 绝不允许出现“小窗已关、主窗口还隐藏”的无窗口状态。
+            // 启动窗口状态机（唯一 owner）：真实可见性确认后才关闭小窗，
+            // 并带 grace 监控；不允许出现“无可见窗口”状态。
             let e2e_mode = [
                 "LAUNCHER_E2E_WINDOW",
                 "LAUNCHER_E2E_VERSION",
@@ -13657,33 +13659,7 @@ pub fn run() {
             .iter()
             .any(|name| std::env::var_os(name).is_some());
             if !e2e_mode {
-                if let (Some(main_window), Some(splash_window)) = (
-                    _app.get_webview_window("main"),
-                    _app.get_webview_window("splash"),
-                ) {
-                    tauri::async_runtime::spawn(async move {
-                        tokio::time::sleep(Duration::from_millis(1500)).await;
-                        let mut shown = false;
-                        for _ in 0..20 {
-                            if main_window.is_visible().unwrap_or(false) {
-                                shown = true;
-                                break;
-                            }
-                            if main_window.show().is_ok() {
-                                shown = true;
-                                break;
-                            }
-                            tokio::time::sleep(Duration::from_millis(300)).await;
-                        }
-                        if shown {
-                            let _ = splash_window.close();
-                        } else {
-                            log::warn!(
-                                "startup watchdog: main window failed to show; keeping splash open"
-                            );
-                        }
-                    });
-                }
+                startup_windows::init(_app.handle().clone());
             }
             #[cfg(debug_assertions)]
             {
@@ -13928,6 +13904,9 @@ pub fn run() {
             cancel_download_job,
             download_perf::download_diagnostics,
             update_fast::install_update_fast,
+            startup_windows::startup_ready,
+            crash_diagnosis::analyze_crash_texts,
+            server_diag::diagnose_server,
             launch_instance,
             multiplayer::multiplayer_prepare,
             multiplayer::multiplayer_start,

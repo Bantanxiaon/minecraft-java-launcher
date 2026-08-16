@@ -1,10 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import {
-  getCurrentWebviewWindow,
-  WebviewWindow,
-} from "@tauri-apps/api/webviewWindow";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
@@ -410,19 +407,10 @@ export default function App() {
           // 存储不可用时本次启动直接弹出
           setShowHighlights(true);
         }
-        // 只有主窗口负责“显示自己 + 关闭启动小窗”的交接。
-        // 若小窗口里的前端先执行到这里就关闭自身，主窗口还没显示，
-        // 应用会因“无可见窗口”而干净退出（0.9.0 的启动闪退竞态）。
-        if (isTauri() && getCurrentWindow().label === "main") {
-          const mainWindow = getCurrentWindow();
-          try {
-            await mainWindow.show();
-            const splash = await WebviewWindow.getByLabel("splash");
-            await splash?.close();
-          } catch {
-            // 主窗口显示失败时绝不能关闭小窗（否则会变成“无可见窗口”）；
-            // 交给 Rust 侧看门狗兜底重试显示。
-          }
+        // 窗口交接完全由 Rust 侧 StartupWindowCoordinator 负责：
+        // 前端只在这里通知“bootstrap 就绪”，不直接操作窗口。
+        if (isTauri()) {
+          await invoke("startup_ready").catch(() => {});
         }
       }
     })();

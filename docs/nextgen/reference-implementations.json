@@ -1,0 +1,55 @@
+{
+  "generatedAt": "2026-08-17",
+  "note": "参考白名单：只做行为/UX/架构参考，不复制品牌资产；GPL/BSL 代码严禁直接复制。",
+  "references": [
+    {
+      "name": "XMCL (x-minecraft-launcher)",
+      "repository": "https://github.com/Voxelum/x-minecraft-launcher",
+      "license": "MIT",
+      "usage": "第一主视觉参考；核心模块行为规范（installer/user/mod-parser/file-transfer/资源去重）；MIT 代码复用需保留许可并登记",
+      "allowReuse": "code-with-attribution"
+    },
+    {
+      "name": "Fluent Launcher",
+      "repository": "https://github.com/Xcube-Studio/Natsurainko.FluentLauncher",
+      "license": "MIT",
+      "usage": "Windows 桌面交互、中国用户习惯、BMCLAPI、中文 Mod 信息参考",
+      "allowReuse": "code-with-attribution"
+    },
+    {
+      "name": "Prism Launcher",
+      "repository": "https://github.com/PrismLauncher/PrismLauncher",
+      "license": "GPL-3.0-only",
+      "usage": "仅行为/黑盒对照/实例模型研究，禁止复制源码",
+      "allowReuse": "behavior-only"
+    },
+    {
+      "name": "GDLauncher Carbon",
+      "repository": "https://github.com/gorilla-devs/GDLauncher-Carbon",
+      "license": "Business Source License 1.1",
+      "usage": "仅 UI/UX/信息架构参考，禁止复制源码",
+      "allowReuse": "behavior-only"
+    },
+    {
+      "name": "Modrinth code",
+      "repository": "https://github.com/modrinth/code",
+      "license": "mixed (per-package)",
+      "usage": "仅行为/UI/API 使用参考；直接复用需逐 package 审许可证",
+      "allowReuse": "behavior-only"
+    },
+    {
+      "name": "PCL Community Edition",
+      "repository": "https://github.com/PCL-Community/PCL-CE",
+      "license": "complex",
+      "usage": "仅国内用户使用逻辑/错误提示/功能组织参考，不搬代码",
+      "allowReuse": "behavior-only"
+    },
+    {
+      "name": "shadcn/ui / Radix / Fluent UI",
+      "repository": "https://ui.shadcn.com/",
+      "license": "MIT (components)",
+      "usage": "组件系统参考；实际引入前逐个确认许可证/版本/维护状态",
+      "allowReuse": "code-with-attribution"
+    }
+  ]
+}

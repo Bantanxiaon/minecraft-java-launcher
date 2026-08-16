@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.9.2"
+version = "0.9.3"
 description = "SH启动器 - Windows Minecraft Java Edition instance and content launcher"
 authors = ["SH启动器 contributors"]
 license = "MIT"
@@ -33,6 +33,7 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "blocking"] }
 base64 = "0.22"
 minisign-verify = "0.2"
+raw-window-handle = "0.6"
 rand = "0.8"
 url = "2"
 keyring = "3"
