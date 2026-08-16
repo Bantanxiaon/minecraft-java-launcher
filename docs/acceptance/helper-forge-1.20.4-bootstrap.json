@@ -1,0 +1,14 @@
+{
+  "artifactPreflight": "PASS",
+  "completedAt": "1786888671",
+  "errorScreen": false,
+  "helperConstructed": true,
+  "helperReady": true,
+  "java": "D:\\MinecraftLauncherData\\runtimes\\java-17\\jdk-17.0.20+8\\bin\\java.exe",
+  "loader": "forge",
+  "minecraft": "1.20.4",
+  "modDiscovered": true,
+  "resourcePackInfoValid": true,
+  "result": "PASS",
+  "warningScreen": false
+}

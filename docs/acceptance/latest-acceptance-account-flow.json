@@ -1,0 +1,200 @@
+{
+  "accountA": {
+    "id": 3,
+    "minecraftUuid": "1ea8596c-6aa6-3195-94a6-22de1d7a25de",
+    "username": "SHAcceptance"
+  },
+  "accountB": {
+    "id": 4,
+    "minecraftUuid": "4e05a755-72ed-3a3e-b7fe-58d2df71060b",
+    "username": "SHAcceptanceB"
+  },
+  "completedAt": "1786892534",
+  "status": "passed_with_java8_env_blocked",
+  "steps": {
+    "createAndUuid": "passed",
+    "defaultAndActivePersisted": "passed",
+    "deleteFallback": {
+      "accountAStillExists": true,
+      "fallbackToRemainingAccount": true,
+      "launchAfterDelete": {
+        "accountId": 3,
+        "clientStarted": true,
+        "completedAt": "1786892534",
+        "identitySnapshot": {
+          "authType": "OFFLINE",
+          "matchesFrozenIdentity": true,
+          "minecraftUuid": "1ea8596c-6aa6-3195-94a6-22de1d7a25de",
+          "username": "SHAcceptance"
+        },
+        "instanceId": 4,
+        "logPath": "D:\\MinecraftLauncherData-Acceptance\\instances\\4\\.minecraft\\logs\\launcher-1786892522589397100.log",
+        "processId": 141292,
+        "status": "passed",
+        "username": "SHAcceptance",
+        "usernameObserved": true
+      }
+    },
+    "finalState": {
+      "activeAccountId": 3,
+      "defaultAccountId": 3
+    },
+    "forgeLaunch": {
+      "accountId": 3,
+      "clientStarted": true,
+      "completedAt": "1786892153",
+      "identitySnapshot": {
+        "authType": "OFFLINE",
+        "matchesFrozenIdentity": true,
+        "minecraftUuid": "1ea8596c-6aa6-3195-94a6-22de1d7a25de",
+        "username": "SHAcceptance"
+      },
+      "instanceId": 4,
+      "logPath": "D:\\MinecraftLauncherData-Acceptance\\instances\\4\\.minecraft\\logs\\launcher-1786892141278909600.log",
+      "processId": 133688,
+      "status": "passed",
+      "username": "SHAcceptance",
+      "usernameObserved": true
+    },
+    "integrity": {
+      "accountCount": 3,
+      "completedAt": "1786892534",
+      "foreignKeyCheck": "clean",
+      "integrityCheck": "ok",
+      "offlineCount": 3,
+      "status": "passed",
+      "violations": []
+    },
+    "java8Verification": "environment_blocked",
+    "launchMatrix": {
+      "entries": [
+        {
+          "evidence": {
+            "accountId": 3,
+            "clientStarted": true,
+            "completedAt": "1786892170",
+            "identitySnapshot": {
+              "authType": "OFFLINE",
+              "matchesFrozenIdentity": true,
+              "minecraftUuid": "1ea8596c-6aa6-3195-94a6-22de1d7a25de",
+              "username": "SHAcceptance"
+            },
+            "instanceId": 10,
+            "logPath": "D:\\MinecraftLauncherData-Acceptance\\instances\\10\\.minecraft\\logs\\launcher-1786892162258275000.log",
+            "processId": 141980,
+            "status": "passed",
+            "username": "SHAcceptance",
+            "usernameObserved": true
+          },
+          "gameVersion": "1.20.1",
+          "loader": "vanilla"
+        },
+        {
+          "evidence": {
+            "accountId": 3,
+            "clientStarted": true,
+            "completedAt": "1786892187",
+            "identitySnapshot": {
+              "authType": "OFFLINE",
+              "matchesFrozenIdentity": true,
+              "minecraftUuid": "1ea8596c-6aa6-3195-94a6-22de1d7a25de",
+              "username": "SHAcceptance"
+            },
+            "instanceId": 7,
+            "logPath": "D:\\MinecraftLauncherData-Acceptance\\instances\\7\\.minecraft\\logs\\launcher-1786892179868557100.log",
+            "processId": 138064,
+            "status": "passed",
+            "username": "SHAcceptance",
+            "usernameObserved": true
+          },
+          "gameVersion": "1.21.11",
+          "loader": "vanilla"
+        },
+        {
+          "evidence": {
+            "accountId": 3,
+            "clientStarted": true,
+            "completedAt": "1786892197",
+            "identitySnapshot": {
+              "authType": "OFFLINE",
+              "matchesFrozenIdentity": true,
+              "minecraftUuid": "1ea8596c-6aa6-3195-94a6-22de1d7a25de",
+              "username": "SHAcceptance"
+            },
+            "instanceId": 9,
+            "logPath": "D:\\MinecraftLauncherData-Acceptance\\instances\\9\\.minecraft\\logs\\launcher-1786892187704591200.log",
+            "processId": 132480,
+            "status": "passed",
+            "username": "SHAcceptance",
+            "usernameObserved": true
+          },
+          "gameVersion": "1.21.11",
+          "loader": "neoforge"
+        },
+        {
+          "evidence": {
+            "accountId": 3,
+            "clientStarted": true,
+            "completedAt": "1786892210",
+            "identitySnapshot": {
+              "authType": "OFFLINE",
+              "matchesFrozenIdentity": true,
+              "minecraftUuid": "1ea8596c-6aa6-3195-94a6-22de1d7a25de",
+              "username": "SHAcceptance"
+            },
+            "instanceId": 11,
+            "logPath": "D:\\MinecraftLauncherData-Acceptance\\instances\\11\\.minecraft\\logs\\launcher-1786892202702450100.log",
+            "processId": 132320,
+            "status": "passed",
+            "username": "SHAcceptance",
+            "usernameObserved": true
+          },
+          "gameVersion": "1.20.4",
+          "loader": "fabric"
+        },
+        {
+          "gameVersion": "1.16.5",
+          "javaMajor": 8,
+          "loader": "vanilla",
+          "status": "java_install_timed_out"
+        }
+      ],
+      "status": "passed"
+    },
+    "restartPersistence": true,
+    "secondAccountSwitchLaunch": {
+      "accountId": 4,
+      "clientStarted": true,
+      "completedAt": "1786892522",
+      "identitySnapshot": {
+        "authType": "OFFLINE",
+        "matchesFrozenIdentity": true,
+        "minecraftUuid": "4e05a755-72ed-3a3e-b7fe-58d2df71060b",
+        "username": "SHAcceptanceB"
+      },
+      "instanceId": 4,
+      "logPath": "D:\\MinecraftLauncherData-Acceptance\\instances\\4\\.minecraft\\logs\\launcher-1786892510638332900.log",
+      "processId": 132552,
+      "status": "passed",
+      "username": "SHAcceptanceB",
+      "usernameObserved": true
+    },
+    "vanillaLaunch": {
+      "accountId": 3,
+      "clientStarted": true,
+      "completedAt": "1786892141",
+      "identitySnapshot": {
+        "authType": "OFFLINE",
+        "matchesFrozenIdentity": true,
+        "minecraftUuid": "1ea8596c-6aa6-3195-94a6-22de1d7a25de",
+        "username": "SHAcceptance"
+      },
+      "instanceId": 1,
+      "logPath": "D:\\MinecraftLauncherData-Acceptance\\instances\\1\\.minecraft\\logs\\launcher-1786892133286165500.log",
+      "processId": 133372,
+      "status": "passed",
+      "username": "SHAcceptance",
+      "usernameObserved": true
+    }
+  }
+}

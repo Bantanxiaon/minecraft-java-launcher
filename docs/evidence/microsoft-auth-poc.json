@@ -1,0 +1,38 @@
+{
+  "date": "2026-08-16",
+  "timezone": "Asia/Shanghai",
+  "client_id": "15d02331-9d3c-4e74-8a93-c771cf1b1c28",
+  "flow": "authorization_code + PKCE(S256) + random state + loopback listener",
+  "registered_redirect_uri": "http://localhost",
+  "stages": [
+    {
+      "stage": "MicrosoftOauth",
+      "result": "PASS"
+    },
+    {
+      "stage": "XboxUserAuth",
+      "result": "PASS"
+    },
+    {
+      "stage": "Xsts",
+      "result": "PASS"
+    },
+    {
+      "stage": "MinecraftServices",
+      "result": "FAIL_APP_REGISTRATION",
+      "http_status": 403,
+      "path": "/authentication/login_with_xbox",
+      "message": "Invalid app registration, see https://aka.ms/AppRegInfo for more information"
+    },
+    {
+      "stage": "MinecraftEntitlement",
+      "result": "NOT_REACHED"
+    },
+    {
+      "stage": "MinecraftProfile",
+      "result": "NOT_REACHED"
+    }
+  ],
+  "conclusion": "SH Launcher code chain verified through XSTS; Minecraft Services rejected the SH Launcher app registration; further official qualification/authorization is required.",
+  "notes": "No tokens, authorization codes, XBL 3.0 tickets, RpsTickets or response bodies were printed or persisted."
+}

@@ -1,79 +1,23 @@
 {
-  "bmclapi-forge": [
+  "url": "https://cdn.modrinth.com/data/qANg5Jrr/versions/CUKdAmgx/e4mc-forge-6.2.1.jar",
+  "repeat": 3,
+  "runs": [
     {
-      "bytes": 2508714,
-      "bytes_per_second": 1854119.6524648117,
-      "cache_hit": false,
-      "total_ms": 1353.0485999999999,
-      "ttfb_ms": 466.6707,
-      "url": "https://bmclapi2.bangbang93.com/maven/net/minecraftforge/forge/1.20.1-47.4.22/forge-1.20.1-47.4.22-universal.jar"
+      "bytes": 1297847,
+      "elapsedSeconds": 12.4070113,
+      "bytesPerSecond": 104605.93358208676
     },
     {
-      "bytes": 2508714,
-      "bytes_per_second": 3051390.718262983,
-      "cache_hit": false,
-      "total_ms": 822.1543,
-      "ttfb_ms": 474.0998,
-      "url": "https://bmclapi2.bangbang93.com/maven/net/minecraftforge/forge/1.20.1-47.4.22/forge-1.20.1-47.4.22-universal.jar"
+      "bytes": 1297847,
+      "elapsedSeconds": 13.4056886,
+      "bytesPerSecond": 96813.15437985036
+    },
+    {
+      "bytes": 1297847,
+      "elapsedSeconds": 12.608684399999998,
+      "bytesPerSecond": 102932.78496208535
     }
   ],
-  "modrinth-many": {
-    "concurrent-cold": {
-      "bytes": 15238867,
-      "bytes_per_second": 495381.5692366134,
-      "file_count": 16,
-      "total_ms": 30761.8772,
-      "warm_reuse": false
-    },
-    "concurrent-hot": {
-      "bytes": 0,
-      "bytes_per_second": 0.0,
-      "file_count": 16,
-      "total_ms": 1.0591000000000002,
-      "warm_reuse": true
-    },
-    "serial-cold": {
-      "bytes": 15238867,
-      "bytes_per_second": 128485.8065535247,
-      "file_count": 16,
-      "total_ms": 118603.505,
-      "warm_reuse": false
-    }
-  },
-  "modrinth-small": [
-    {
-      "bytes": 7442998,
-      "bytes_per_second": 250574.31206736554,
-      "cache_hit": false,
-      "total_ms": 29703.7551,
-      "ttfb_ms": 2076.5534,
-      "url": "https://cdn.modrinth.com/data/ordsPcFz/versions/Zsh14XeQ/kotlinforforge-4.12.0-all.jar"
-    },
-    {
-      "bytes": 7442998,
-      "bytes_per_second": 233325.16992827784,
-      "cache_hit": false,
-      "total_ms": 31899.678900000003,
-      "ttfb_ms": 2373.7306,
-      "url": "https://cdn.modrinth.com/data/ordsPcFz/versions/Zsh14XeQ/kotlinforforge-4.12.0-all.jar"
-    }
-  ],
-  "openjdk-large": [
-    {
-      "bytes": 186915220,
-      "bytes_per_second": 18967719.884060144,
-      "cache_hit": false,
-      "total_ms": 9854.3853,
-      "ttfb_ms": 1186.3491,
-      "url": "https://aka.ms/download-jdk/microsoft-jdk-17-windows-x64.zip"
-    },
-    {
-      "bytes": 186915220,
-      "bytes_per_second": 15946030.741034377,
-      "cache_hit": false,
-      "total_ms": 11721.739599999999,
-      "ttfb_ms": 1160.3829,
-      "url": "https://aka.ms/download-jdk/microsoft-jdk-17-windows-x64.zip"
-    }
-  ]
+  "medianBytesPerSecond": 102932.78496208535,
+  "note": "如需 PCL 对照，请在同一台电脑、同一网络安装同一整合包，记录总耗时并写入 pclSeconds。"
 }

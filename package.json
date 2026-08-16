@@ -1,7 +1,7 @@
 {
   "name": "minecraft-java-launcher",
   "private": true,
-  "version": "0.8.1",
+  "version": "0.9.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,6 +9,12 @@
     "lint": "oxlint",
     "test": "vitest run",
     "preview": "vite preview",
+    "acceptance:multiplayer": "node scripts/final-acceptance.mjs multiplayer-prepare && node scripts/final-acceptance.mjs multiplayer-run forge && node scripts/final-acceptance.mjs multiplayer-run neoforge",
+    "acceptance:account": "node scripts/final-acceptance.mjs account-integrity && node scripts/final-acceptance.mjs account-flow && node scripts/final-acceptance.mjs account-migrate",
+    "acceptance:download": "node scripts/final-acceptance.mjs download",
+    "acceptance:updater": "node scripts/final-acceptance.mjs updater",
+    "acceptance:window": "node scripts/final-acceptance.mjs window",
+    "acceptance:final": "node scripts/final-acceptance.mjs final",
     "tauri": "tauri"
   },
   "dependencies": {

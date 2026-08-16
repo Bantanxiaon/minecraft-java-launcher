@@ -2,6 +2,7 @@ export type Account = {
   id: number;
   accountType: "OFFLINE" | "MICROSOFT" | "EXTERNAL";
   displayName: string;
+  minecraftUuid?: string;
   createdAt: string;
   lastUsedAt?: string;
 };

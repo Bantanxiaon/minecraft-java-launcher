@@ -13,6 +13,7 @@ dist-ssr
 *.local
 release
 src-tauri/target
+.codex-tmp
 
 # Editor directories and files
 .vscode/*

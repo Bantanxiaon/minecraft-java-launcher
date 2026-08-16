@@ -1,0 +1,89 @@
+{
+  "accountsOffline": true,
+  "completedAt": "1786888699",
+  "crash": {
+    "closedOrError": true,
+    "forcedTerminated": true,
+    "sessionId": "83576553-8a95-41de-b274-c45b6a8ab5a3",
+    "uiLeftReady": true
+  },
+  "externalAccountAcceptance": "EXTERNAL_ACCOUNT_ACCEPTANCE_PENDING",
+  "loader": "forge",
+  "rounds": [
+    {
+      "evidence": {
+        "accountsOffline": true,
+        "artifactPreflight": true,
+        "closedCleanly": true,
+        "disconnects": 0,
+        "errorScreen": false,
+        "externalAccountAcceptance": "EXTERNAL_ACCOUNT_ACCEPTANCE_PENDING",
+        "gameVersion": "1.20.4",
+        "guestLogExcerpt": [
+          "\u001b[32m[21:57:30] [main/INFO] [cp.mo.mo.Launcher/MODLAUNCHER]: ModLauncher running: args [--username, AcceptGuest, --version, 1.20.4, --gameDir, D:\\MinecraftLauncherData-Acceptance\\instances\\3\\.minecraft, --assetsDir, D:\\MinecraftLauncherData-Acceptance\\instances\\3\\.minecraft\\assets, --assetIndex, 12, --uuid, 8fd9dbc5-461d-32df-81b9-d6080b4eaa46, --accessToken, **********, --clientId, , --xuid, , --userType, legacy, --versionType, release, --launchTarget, forge_client]",
+          "\u001b[m\u001b[32m[21:57:32] [main/INFO] [cp.mo.mo.LaunchServiceHandler/MODLAUNCHER]: Launching target 'forge_client' with arguments [--version, 1.20.4, --gameDir, D:\\MinecraftLauncherData-Acceptance\\instances\\3\\.minecraft, --assetsDir, D:\\MinecraftLauncherData-Acceptance\\instances\\3\\.minecraft\\assets, --uuid, 8fd9dbc5-461d-32df-81b9-d6080b4eaa46, --username, AcceptGuest, --assetIndex, 12, --accessToken, **********, --clientId, , --xuid, , --userType, legacy, --versionType, release]",
+          "\u001b[m\u001b[32m[21:57:40] [Render thread/INFO] [minecraft/Minecraft]: Setting user: AcceptGuest",
+          "SH_E2E_HELPER_JOIN:127.0.0.1:49543",
+          "\u001b[32m[21:57:45] [Render thread/INFO] [minecraft/ConnectScreen]: Connecting to 127.0.0.1, 49543",
+          "\u001b[m\u001b[33m[21:57:46] [IO-Worker-1/WARN] [minecraft/ClientHandshakePacketListenerImpl]: Failed to log in: Invalid session (Try restarting your game and the launcher)",
+          "\u001b[mSH_E2E_CLIENT_JOINED:AcceptGuest"
+        ],
+        "guestProcessId": 140168,
+        "helperReady": true,
+        "hostLogExcerpt": [
+          "\u001b[m\u001b[32m[21:57:25] [Netty Server IO #2/INFO] [e4mc/]: control channel open: [id: 0xf3da1bc8, QuicStreamAddress{streamId=0}]",
+          "\u001b[m\u001b[32m[21:57:26] [Netty Server IO #2/INFO] [e4mc/]: Domain assigned: woven-widen.jp.e4mc.link",
+          "\u001b[mSH_E2E_CLIENT_JOINED:AcceptHost",
+          "\u001b[m\u001b[33m[21:57:47] [User Authenticator #1/WARN] [minecraft/ServerLoginPacketListenerImpl]: Failed to verify username but will let them in anyway!",
+          "\u001b[m\u001b[32m[21:57:48] [Server thread/INFO] [minecraft/PlayerList]: AcceptGuest[QuicStreamAddress{streamId=1}] logged in with entity id 203 at (13.5, 122.0, -46.5)",
+          "\u001b[m\u001b[32m[21:57:48] [Server thread/INFO] [minecraft/MinecraftServer]: AcceptGuest joined the game",
+          "\u001b[m\u001b[32m[21:57:48] [Render thread/INFO] [minecraft/ChatComponent]: [System] [CHAT] AcceptGuest joined the game"
+        ],
+        "joinShimTarget": "woven-widen.jp.e4mc.link",
+        "joinShimUsed": true,
+        "lanPort": null,
+        "layers": {
+          "guestWorldJoin": {
+            "invalidSessionObserved": true,
+            "sessionVerified": false,
+            "status": "BLOCKED_BY_TEST_ACCOUNT_SESSION",
+            "vanillaSingleplayerOfflineFallback": true,
+            "worldConnectionEstablished": true
+          },
+          "minecraftHandshake": {
+            "guestConnectAttempted": true,
+            "status": "PASS"
+          },
+          "relayForwarding": {
+            "hostObservedRelayQuicStream": true,
+            "status": "PASS"
+          },
+          "rsaLoginTransport": {
+            "guestReachedLoginBoundary": true,
+            "status": "PASS"
+          },
+          "tunnel": {
+            "publicEndpoint": "woven-widen.jp.e4mc.link",
+            "status": "PASS",
+            "timeToReadySeconds": 12
+          }
+        },
+        "loader": "forge",
+        "localhostUsed": false,
+        "providerErrors": 0,
+        "publicAddressValid": true,
+        "publicEndpoint": "woven-widen.jp.e4mc.link",
+        "reconnects": 0,
+        "resourcePackInfoValid": true,
+        "sessionId": "19a4e910-633a-4023-93e5-3ac5d8921bbf",
+        "stabilitySeconds": 0,
+        "status": "passed_with_external_account_pending",
+        "timeToReadySeconds": 12,
+        "warningScreen": false
+      },
+      "round": 1
+    }
+  ],
+  "stability": null,
+  "status": "passed_with_external_account_pending"
+}

@@ -33,12 +33,22 @@ async function downloadOnce(target) {
   const reader = response.body.getReader();
   const hasher = createHash("sha1");
   let bytes = 0;
+  let lastProgressAt = performance.now();
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
     bytes += value.byteLength;
     hasher.update(value);
     file.write(Buffer.from(value));
+    lastProgressAt = performance.now();
+    // 与启动器一致的极慢源判定：12 秒内不足 48KB 即断开重试。
+    if (performance.now() - started >= 12_000 && bytes < 48 * 1024) {
+      file.destroy();
+      await reader.cancel().catch(() => undefined);
+      const error = new Error("EXTREME_SLOW_SOURCE");
+      error.code = "EXTREME_SLOW_SOURCE";
+      throw error;
+    }
   }
   await new Promise((resolve, reject) => file.end(resolve).on("error", reject));
   const elapsed = (performance.now() - started) / 1000;
@@ -54,7 +64,18 @@ const target = path.join(temp, "bench.bin");
 const runs = [];
 for (let index = 0; index < repeat; index += 1) {
   await fs.rm(target, { force: true });
-  runs.push(await downloadOnce(target));
+  let lastError;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      runs.push(await downloadOnce(target));
+      lastError = undefined;
+      break;
+    } catch (error) {
+      lastError = error;
+      await fs.rm(target, { force: true });
+    }
+  }
+  if (lastError) throw lastError;
   console.log(`run ${index + 1}: ${runs[index].bytesPerSecond / 1024 / 1024} MB/s`);
 }
 const median = runs.map((run) => run.bytesPerSecond).sort((a, b) => a - b)[Math.floor(runs.length / 2)];

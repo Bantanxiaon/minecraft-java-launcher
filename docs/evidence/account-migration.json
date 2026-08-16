@@ -1,0 +1,58 @@
+{
+  "accountsPreserved": true,
+  "after": {
+    "accountCount": 2,
+    "accounts": [
+      {
+        "accountType": "OFFLINE",
+        "displayName": "Player",
+        "id": 1,
+        "legacyOfflineUuid": "30988032012af3c90437d957d3c940c3",
+        "minecraftUuid": "a01e3843-e521-3998-958a-f459800e4d11"
+      },
+      {
+        "accountType": "OFFLINE",
+        "displayName": "123",
+        "id": 2,
+        "legacyOfflineUuid": "520b56218bee493c597de10ae0c4d26d",
+        "minecraftUuid": "75f41576-c9ae-3be1-9e5a-f6091a7fa867"
+      }
+    ],
+    "bindings": []
+  },
+  "before": {
+    "accountCount": 2,
+    "accounts": [
+      {
+        "accountType": "OFFLINE",
+        "displayName": "Player",
+        "id": 1,
+        "legacyOfflineUuid": "30988032012af3c90437d957d3c940c3",
+        "minecraftUuid": "a01e3843-e521-3998-958a-f459800e4d11"
+      },
+      {
+        "accountType": "OFFLINE",
+        "displayName": "123",
+        "id": 2,
+        "legacyOfflineUuid": "520b56218bee493c597de10ae0c4d26d",
+        "minecraftUuid": "75f41576-c9ae-3be1-9e5a-f6091a7fa867"
+      }
+    ],
+    "bindings": []
+  },
+  "bindingsPreserved": true,
+  "completedAt": "1786892687",
+  "integrity": {
+    "accountCount": 2,
+    "completedAt": "1786892687",
+    "foreignKeyCheck": "clean",
+    "integrityCheck": "ok",
+    "offlineCount": 2,
+    "status": "passed",
+    "violations": []
+  },
+  "migratedToVersion": 12,
+  "source": "D:\\MinecraftLauncherData\\launcher.sqlite3",
+  "stagingCopy": "D:\\MinecraftLauncherData-Acceptance\\launcher.sqlite3",
+  "status": "passed"
+}

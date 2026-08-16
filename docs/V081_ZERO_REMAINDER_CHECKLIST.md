@@ -92,7 +92,12 @@
 - [x] Java runtime cache（path 失效才局部验证）— Implementation: `detect_java_runtimes_cached` 候选 java.exe 全部存在时复用 settings 缓存，任何路径失效才重新探测；diagnostics/boot health 共用缓存
 - [x] Startup Metrics 输出 — Implementation: setup 阶段记录 total/db/recovered 指标，写 `startup-metrics.json` 并 emit `startup-metrics`
 - [x] 启动 benchmark（5 次 min/median/P95）— Implementation: `scripts/startup-benchmark.mjs`；Verification: 真机 release 构建 5 次实测 min 394ms / median 404ms / P95 480ms（真实 DB 首次含迁移 480ms），产出 `docs/benchmark-startup.json` 与 `docs/BENCHMARK_STARTUP.md`
-- [ ] 100/125/150% DPI 与多显示器实测（需真实 Windows 观察）
+- [x] 单显示器 100% DPI 窗口行为自动化验收（RELEASE_BLOCKING_AUTOMATABLE）
+  - Implementation: `acceptance::run_window_acceptance`（显示/设尺寸/最小化/最大化/标题/scaleFactor），入口 `pnpm acceptance:window`。
+  - Verification: 2026-08-17 真机复跑通过，scaleFactor=1.0、sizeOk/maximizedObserved/minimizedObserved/resizable/title 全部 true；evidence `docs/acceptance/acceptance-window.json` 与 `docs/acceptance/latest-acceptance-window.json`。
+- [~] 125/150% DPI 与多显示器实测
+  - Status: EXTERNAL_ACCEPTANCE_PENDING
+  - Reason: 系统 DPI 变更需要注销/重登，多显示器需要当前机器不存在的物理副屏。
 
 ## 下载性能
 
@@ -107,7 +112,9 @@
 - [x] SQLite 移出 hot path（内存 + 250ms 节流 + 低频 checkpoint）
 - [x] 真实下载基准（Modrinth 0.28–0.42MB/s、BMCLAPI 2.5–3.2MB/s、JDK 14.7–20.4MB/s；见 BENCHMARK_DOWNLOAD.md）
 - [x] 冷/热缓存 GUI 场景真实验收 — Verification: 真实 debug GUI 全量安装验收冷启动通过（23MB client + 88 libraries）；热缓存复测 44.0s → 修复分段下载路径未接对象缓存后 29.5s（client.jar 由 cache/sha1 命中，Windows 相关库 63/63 全部命中，剩余 25 项为 Linux/macOS natives 被规则跳过）；CLI A/B：serial-cold 118.6s vs concurrent-cold 30.8s vs concurrent-hot 1.1ms 零联网；跨实例 libraries/assets 复用改为 CoW reflink
-- [ ] PCL 同机同网对照（需用户协助运行 PCL GUI）
+- [~] PCL 同机同网对照
+  - Status: EXTERNAL_ACCEPTANCE_PENDING
+  - Reason: 无法自动控制的第三方 PCL GUI 参考 Benchmark。
 
 ## UI
 
@@ -126,5 +133,12 @@
 - [x] pnpm lint / Vitest 6 / build
 - [x] release-gate.mjs 已接 release.yml（核对表/版本/notes/benchmark 校验，失败 exit 1）
 - [x] migration fixture（真实 v0.8.0 DB 原地升级）— Verification: 本机真实 `D:\MinecraftLauncherData\launcher.sqlite3`（migration v5、1 实例、276 内容）由候选版本原地升级到 v9，数据无损、升级前备份已生成；Tests: `migration_fixture_v080_upgrades_in_place_without_data_loss`、`migration_v10_repairs_broken_launch_settings_foreign_key`、`instance_deletion_cascades_without_broken_foreign_key`
-- [ ] updater upgrade 从 v0.8.0 实测
-- [ ] 外部：Cloudflare R2 凭据（未上传自有 CDN）
+- [x] Updater staging（RELEASE_BLOCKING_AUTOMATABLE）
+  - Implementation: `pnpm acceptance:updater`（版本一致 + NSIS 构建 + latest.json schema 校验），evidence `docs/acceptance/acceptance-updater.json`。
+  - Verification: 2026-08-17 真机构建 `SH启动器_0.9.0_x64-setup.exe` 成功、版本三处一致、latest.json schema 校验通过；签名由 CI 仓库 Secret 完成（本机无私钥，未伪造签名，见下方 `[~] updater upgrade` 项）。
+- [~] updater upgrade 从 v0.8.0 真实升级
+  - Status: EXTERNAL_ACCEPTANCE_PENDING
+  - Reason: 签名私钥为 CI Secret，本地无法生成与内置公钥匹配的 updater 签名；live channel 只能在发布时切换。
+- [~] 外部：Cloudflare R2 凭据（未上传自有 CDN）
+  - Status: EXTERNAL_ACCEPTANCE_PENDING
+  - Reason: 缺少外部凭据。

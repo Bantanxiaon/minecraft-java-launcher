@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.8.1"
+version = "0.9.0"
 description = "SH启动器 - Windows Minecraft Java Edition instance and content launcher"
 authors = ["SH启动器 contributors"]
 license = "MIT"
@@ -37,9 +37,10 @@ url = "2"
 keyring = "3"
 sha1 = "0.10"
 futures-util = "0.3"
-tokio = { version = "1", features = ["fs", "io-util", "time", "net", "sync"] }
+tokio = { version = "1", features = ["fs", "io-util", "time", "net", "sync", "rt-multi-thread", "macros"] }
 sha2 = "0.10"
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 toml = "0.8"
 uuid = { version = "1", features = ["serde", "v4"] }
 md-5 = "0.10"

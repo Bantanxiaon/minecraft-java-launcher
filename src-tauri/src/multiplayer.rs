@@ -16,6 +16,11 @@ use regex::Regex;
 use rusqlite::OptionalExtension;
 use serde::Serialize;
 use std::future::Future;
+use std::io::{self, Read, Write};
+use std::net::{
+    IpAddr, Shutdown, SocketAddr, TcpListener as StdTcpListener, TcpStream as StdTcpStream,
+    ToSocketAddrs,
+};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
@@ -62,6 +67,12 @@ fn session_cancels_map() -> &'static DashMap<String, CancellationToken> {
 
 fn instance_sessions_map() -> &'static DashMap<i64, String> {
     INSTANCE_SESSIONS.get_or_init(DashMap::new)
+}
+
+static JOIN_SHIMS: OnceLock<DashMap<i64, JoinRelayShim>> = OnceLock::new();
+
+fn join_shims_map() -> &'static DashMap<i64, JoinRelayShim> {
+    JOIN_SHIMS.get_or_init(DashMap::new)
 }
 
 pub fn provider() -> &'static E4mcProvider {
@@ -609,6 +620,13 @@ impl LogTailer {
                 }
             }
         }
+        // 先消费缓冲区内已经完整的行：即使文件不再增长，也必须把已读内容全部交付，
+        // 否则游戏停止写日志后，缓冲的最后几行（含 e4mc 域名）会被永远卡住。
+        if let Some(position) = self.buffer.iter().position(|byte| *byte == b'\n') {
+            let line: Vec<u8> = self.buffer.drain(..=position).collect();
+            let text = String::from_utf8_lossy(&line);
+            return Some(text.trim_end_matches(['\r', '\n']).to_string());
+        }
         match std::fs::metadata(&self.path) {
             Ok(meta) => {
                 let len = meta.len();
@@ -650,11 +668,6 @@ impl LogTailer {
             Ok(read) => {
                 self.offset += read as u64;
                 self.buffer.extend_from_slice(&chunk[..read]);
-                if let Some(position) = self.buffer.iter().position(|byte| *byte == b'\n') {
-                    let line: Vec<u8> = self.buffer.drain(..=position).collect();
-                    let text = String::from_utf8_lossy(&line);
-                    return Some(text.trim_end_matches(['\r', '\n']).to_string());
-                }
                 if self.buffer.len() > 4 * 1024 * 1024 {
                     self.buffer.clear();
                 }
@@ -681,6 +694,7 @@ fn spawn_log_watcher(
     std::thread::Builder::new()
         .name(format!("sh-multiplayer-watch-{session_id}"))
         .spawn(move || {
+            eprintln!("[e2e-watch] watcher started session={session_id} log={log_path}");
             let mut tail = LogTailer::new(PathBuf::from(log_path));
             let mut last_notice_check = Instant::now();
             loop {
@@ -689,8 +703,17 @@ fn spawn_log_watcher(
                 }
                 if let Some(line) = tail.next_line() {
                     if let Some(event) = provider().parse_log_line(&line) {
+                        eprintln!(
+                            "[e2e-watch] session={} event={event:?} line={}",
+                            session_id,
+                            line.chars().take(160).collect::<String>()
+                        );
                         let update = transition(&sessions, &session_id, &event);
                         if let Some(info) = update {
+                            eprintln!(
+                                "[e2e-watch] session={} state={:?} address={:?}",
+                                session_id, info.state, info.public_address
+                            );
                             on_update(info);
                         }
                     }
@@ -1782,6 +1805,244 @@ pub fn multiplayer_cancel(app: AppHandle, session_id: String) -> Result<RoomInfo
     )
 }
 
+/// 加入侧握手兼容 shim。
+///
+/// Forge/NeoForge 客户端会在 Minecraft 握手的 serverAddress 尾部追加 `\0FORGE` / `\0FML3`
+/// 等品牌后缀（原版服务器会按第一个 NUL 截断），但 e4mc relay 只做整串域名精确匹配，
+/// 导致模组客户端连不上“对原版可用”的 e4mc 域名。
+///
+/// 该 shim 只做两件事：在本机 loopback 上承接游戏连接，把握手中的 serverAddress 规范化为
+/// 纯 e4mc 域名，再原样转发到 relay 边缘。它不实现任何隧道、不缓存凭据、不转发到
+/// 任意地址（目标仅限经严格校验的 `*.e4mc.link` 解析出的 relay IP），游戏退出即取消。
+pub struct JoinRelayShim {
+    port: u16,
+    cancel: CancellationToken,
+}
+
+impl JoinRelayShim {
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+}
+
+/// 单个 Minecraft 握手帧的最大字节数（防御异常输入，正常远小于此值）。
+const MAX_HANDSHAKE_FRAME_BYTES: usize = 256 * 1024;
+
+fn resolve_relay_address(domain: &str) -> Result<SocketAddr, LauncherError> {
+    let mut addrs: Vec<SocketAddr> = (domain, 25565)
+        .to_socket_addrs()
+        .map_err(|error| {
+            LauncherError::classified(
+                ERR_TUNNEL_CONNECT_FAILED,
+                format!("无法解析 e4mc 域名 {domain}：{error}"),
+                false,
+            )
+        })?
+        .collect();
+    addrs.sort_by_key(|addr| match addr.ip() {
+        IpAddr::V4(_) => 0,
+        IpAddr::V6(_) => 1,
+    });
+    addrs.into_iter().next().ok_or_else(|| {
+        LauncherError::classified(
+            ERR_TUNNEL_CONNECT_FAILED,
+            format!("e4mc 域名 {domain} 没有可连接的解析地址。"),
+            false,
+        )
+    })
+}
+
+fn read_var_int(bytes: &[u8], offset: usize) -> io::Result<(u64, usize)> {
+    let mut value: u64 = 0;
+    let mut shift = 0u32;
+    let mut index = offset;
+    loop {
+        let byte = *bytes
+            .get(index)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "VarInt 数据不完整"))?;
+        value |= u64::from(byte & 0x7f) << shift;
+        index += 1;
+        if byte & 0x80 == 0 {
+            return Ok((value, index));
+        }
+        shift += 7;
+        if shift >= 63 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "VarInt 过长"));
+        }
+    }
+}
+
+fn write_var_int(mut value: u64, out: &mut Vec<u8>) {
+    loop {
+        let mut byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        out.push(byte);
+        if value == 0 {
+            break;
+        }
+    }
+}
+
+/// 把握手中的 serverAddress 规范化为纯 e4mc 域名（等价于原版服务器对 `\0` 后缀的截断）。
+/// 无法解析的帧原样返回，交给 relay/服务器按正常协议处理。
+fn rewrite_handshake_hostname(frame: &[u8], domain: &str) -> Vec<u8> {
+    let Ok((packet_id, cursor)) = read_var_int(frame, 0) else {
+        return frame.to_vec();
+    };
+    if packet_id != 0 {
+        return frame.to_vec();
+    }
+    let Ok((protocol, cursor)) = read_var_int(frame, cursor) else {
+        return frame.to_vec();
+    };
+    let Ok((host_len, cursor)) = read_var_int(frame, cursor) else {
+        return frame.to_vec();
+    };
+    let host_len = usize::try_from(host_len).unwrap_or(usize::MAX);
+    let Some(host_end) = cursor.checked_add(host_len) else {
+        return frame.to_vec();
+    };
+    if host_end > frame.len() {
+        return frame.to_vec();
+    }
+    let mut payload = Vec::with_capacity(frame.len() + domain.len() + 8);
+    write_var_int(packet_id, &mut payload);
+    write_var_int(protocol, &mut payload);
+    write_var_int(domain.len() as u64, &mut payload);
+    payload.extend_from_slice(domain.as_bytes());
+    payload.extend_from_slice(&frame[host_end..]);
+    let mut rewritten = Vec::with_capacity(payload.len() + 5);
+    write_var_int(payload.len() as u64, &mut rewritten);
+    rewritten.extend_from_slice(&payload);
+    rewritten
+}
+
+fn read_one_handshake_frame(stream: &mut StdTcpStream) -> io::Result<Vec<u8>> {
+    let mut frame_len: u64 = 0;
+    let mut shift = 0u32;
+    for _ in 0..5 {
+        let mut byte = [0u8; 1];
+        stream.read_exact(&mut byte)?;
+        let byte = byte[0];
+        frame_len |= u64::from(byte & 0x7f) << shift;
+        if byte & 0x80 == 0 {
+            let length = usize::try_from(frame_len)
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "握手帧长度溢出"))?;
+            if length > MAX_HANDSHAKE_FRAME_BYTES {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "握手帧过大"));
+            }
+            let mut frame = vec![0u8; length];
+            stream.read_exact(&mut frame)?;
+            return Ok(frame);
+        }
+        shift += 7;
+        if shift >= 63 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "握手帧 VarInt 过长",
+            ));
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        "握手帧 VarInt 超过 5 字节",
+    ))
+}
+
+fn serve_join_shim_connection(
+    mut client: StdTcpStream,
+    domain: &str,
+    relay: SocketAddr,
+) -> io::Result<()> {
+    // 监听器是非阻塞的，Windows 上 accept 出的流会继承该模式；游戏协议按阻塞读写。
+    client.set_nonblocking(false)?;
+    client.set_read_timeout(Some(Duration::from_secs(300)))?;
+    let frame = read_one_handshake_frame(&mut client)?;
+    let rewritten = rewrite_handshake_hostname(&frame, domain);
+    // 诊断记录（stderr）：握手帧长度、改写结果与真实目标域名，供 E2E 取证。
+    eprintln!(
+        "[e4mc-shim] handshake in={} out={} target={}",
+        frame.len(),
+        rewritten.len(),
+        domain
+    );
+    let mut upstream = StdTcpStream::connect_timeout(&relay, Duration::from_secs(15))?;
+    upstream.set_nodelay(true)?;
+    upstream.set_read_timeout(Some(Duration::from_secs(300)))?;
+    upstream.write_all(&rewritten)?;
+    // 双向泵：game→relay 与 relay→game 各走一个线程，任一侧 EOF/超时即整体结束。
+    let mut client_to_upstream = client.try_clone()?;
+    let mut upstream_to_client = upstream.try_clone()?;
+    let forward = std::thread::spawn(move || {
+        let copied = io::copy(&mut client_to_upstream, &mut upstream);
+        eprintln!("[e4mc-shim] game->relay copied={:?}", copied);
+        let _ = upstream.shutdown(Shutdown::Write);
+    });
+    let copied = io::copy(&mut upstream_to_client, &mut client);
+    eprintln!("[e4mc-shim] relay->game copied={:?}", copied);
+    let _ = client.shutdown(Shutdown::Write);
+    let _ = forward.join();
+    Ok(())
+}
+
+pub fn start_join_relay_shim(domain: String) -> Result<JoinRelayShim, LauncherError> {
+    let relay = resolve_relay_address(&domain)?;
+    let listener = StdTcpListener::bind(("127.0.0.1", 0))
+        .map_err(|error| LauncherError::storage(format!("无法启动联机加入通道：{error}")))?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| LauncherError::storage(format!("无法配置联机加入通道：{error}")))?;
+    let port = listener
+        .local_addr()
+        .map(|addr| addr.port())
+        .map_err(|error| LauncherError::storage(format!("无法读取加入通道端口：{error}")))?;
+    let cancel = CancellationToken::new();
+    let task_cancel = cancel.clone();
+    let task_domain = domain.clone();
+    std::thread::Builder::new()
+        .name(format!("sh-e4mc-join-shim-{port}"))
+        .spawn(move || {
+            while !task_cancel.is_cancelled() {
+                match listener.accept() {
+                    Ok((client, _)) => {
+                        let connection_domain = task_domain.clone();
+                        std::thread::Builder::new()
+                            .name("sh-e4mc-join-connection".to_string())
+                            .spawn(move || {
+                                if let Err(error) =
+                                    serve_join_shim_connection(client, &connection_domain, relay)
+                                {
+                                    eprintln!("[e4mc-shim] connection error: {error}");
+                                }
+                            })
+                            .ok();
+                    }
+                    Err(ref error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(200));
+                    }
+                    Err(_) => break,
+                }
+            }
+        })
+        .map_err(|error| LauncherError::storage(format!("无法启动联机加入通道：{error}")))?;
+    Ok(JoinRelayShim { port, cancel })
+}
+
+pub fn cancel_join_shim(instance_id: i64) {
+    if let Some((_, shim)) = join_shims_map().remove(&instance_id) {
+        shim.cancel.cancel();
+    }
+}
+
+pub fn register_join_shim(instance_id: i64, shim: JoinRelayShim) {
+    if let Some(previous) = join_shims_map().insert(instance_id, shim) {
+        previous.cancel.cancel();
+    }
+}
+
 #[tauri::command]
 pub async fn multiplayer_join(
     app: AppHandle,
@@ -1795,11 +2056,24 @@ pub async fn multiplayer_join(
             "邀请地址格式不正确，请输入形如 xxxx.e4mc.link 的地址。",
         ));
     }
-    let launched =
-        multiplayer_join_launch(app, instance_id, account_id, java_path, address).await?;
+    // 模组客户端会追加 `\0FORGE` 等品牌后缀，e4mc relay 只认纯域名；通过本机 shim 在
+    // 进入公网前规范化握手，保证 Forge/NeoForge 加入路径与原版一样可用。
+    let shim = start_join_relay_shim(address)?;
+    let join_port = shim.port();
+    register_join_shim(instance_id, shim);
+    let launched = multiplayer_join_launch(
+        app,
+        instance_id,
+        account_id,
+        java_path,
+        "127.0.0.1".to_string(),
+        join_port,
+    )
+    .await?;
     Ok(serde_json::json!({
         "processId": launched.process_id,
-        "logPath": launched.log_path
+        "logPath": launched.log_path,
+        "joinPort": join_port
     }))
 }
 
@@ -1931,6 +2205,7 @@ pub fn multiplayer_history(
 
 /// 游戏退出后闭环：只关闭当前实例对应的 session，清理 token、地址、历史与实例映射。
 pub fn on_game_exit(app: &AppHandle, instance_id: i64) {
+    cancel_join_shim(instance_id);
     let session_id = instance_sessions_map()
         .get(&instance_id)
         .map(|entry| entry.value().clone());
@@ -1957,7 +2232,6 @@ pub fn has_active_session(instance_id: i64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write as _;
     use std::sync::{Arc, Mutex};
 
     fn test_session(instance_id: i64) -> MultiplayerSession {
@@ -1968,6 +2242,113 @@ mod tests {
             "forge".to_string(),
             0,
         )
+    }
+
+    fn build_handshake_frame(hostname: &str, protocol: u64, port: u16, state: u64) -> Vec<u8> {
+        let mut payload = Vec::new();
+        write_var_int(0, &mut payload);
+        write_var_int(protocol, &mut payload);
+        write_var_int(hostname.len() as u64, &mut payload);
+        payload.extend_from_slice(hostname.as_bytes());
+        payload.extend_from_slice(&port.to_be_bytes());
+        write_var_int(state, &mut payload);
+        let mut frame = Vec::new();
+        write_var_int(payload.len() as u64, &mut frame);
+        frame.extend_from_slice(&payload);
+        frame
+    }
+
+    fn parse_handshake_hostname(frame: &[u8]) -> Option<String> {
+        // 跳过长前缀（帧长 VarInt）后再解析包体。
+        let (_, cursor) = read_var_int(frame, 0).ok()?;
+        let (packet_id, cursor) = read_var_int(frame, cursor).ok()?;
+        if packet_id != 0 {
+            return None;
+        }
+        let (_, cursor) = read_var_int(frame, cursor).ok()?;
+        let (host_len, cursor) = read_var_int(frame, cursor).ok()?;
+        let host_len = usize::try_from(host_len).ok()?;
+        let end = cursor.checked_add(host_len)?;
+        if end > frame.len() {
+            return None;
+        }
+        String::from_utf8(frame[cursor..end].to_vec()).ok()
+    }
+
+    /// 去掉帧长前缀，得到与运行时 read_one_handshake_frame 一致的包体。
+    fn frame_payload(frame: &[u8]) -> &[u8] {
+        let (_, cursor) = read_var_int(frame, 0).expect("帧长前缀");
+        &frame[cursor..]
+    }
+
+    #[test]
+    fn handshake_rewrite_replaces_forge_branded_hostname() {
+        let domain = "boxer-retail.jp.e4mc.link";
+        let frame = build_handshake_frame(&format!("{domain}\0FORGE"), 765, 25565, 2);
+        let rewritten = rewrite_handshake_hostname(frame_payload(&frame), domain);
+        assert_eq!(
+            parse_handshake_hostname(&rewritten).as_deref(),
+            Some(domain),
+            "握手 serverAddress 应被规范化为纯域名（去掉 \\0FORGE 后缀）"
+        );
+        // 帧其余部分（端口 / 下一状态）必须原样保留。
+        assert_eq!(&rewritten[rewritten.len() - 3..], &frame[frame.len() - 3..]);
+    }
+
+    #[test]
+    fn handshake_rewrite_keeps_plain_domain_and_passthrough() {
+        let domain = "cod-sprinkled.jp.e4mc.link";
+        let frame = build_handshake_frame(domain, 765, 25565, 2);
+        let rewritten = rewrite_handshake_hostname(frame_payload(&frame), domain);
+        assert_eq!(
+            parse_handshake_hostname(&rewritten).as_deref(),
+            Some(domain)
+        );
+
+        // 非握手包（legacy ping）与无法解析的畸形帧：原样透传，不破坏字节。
+        let legacy = vec![0xfe, 0x01];
+        assert_eq!(rewrite_handshake_hostname(&legacy, domain), legacy);
+        let truncated = vec![0x02, 0x00, 0x05, b'a'];
+        assert_eq!(rewrite_handshake_hostname(&truncated, domain), truncated);
+    }
+
+    #[test]
+    fn join_shim_rewrites_and_forwards_forge_branded_handshake() {
+        let relay_listener = StdTcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let relay_addr = relay_listener.local_addr().unwrap();
+        let shim_listener = StdTcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let shim_addr = shim_listener.local_addr().unwrap();
+        let domain = "shim-test.jp.e4mc.link";
+
+        let relay_thread = std::thread::spawn(move || {
+            let (mut relay_side, _) = relay_listener.accept().unwrap();
+            let frame = read_one_handshake_frame(&mut relay_side).unwrap();
+            let (packet_id, cursor) = read_var_int(&frame, 0).unwrap();
+            assert_eq!(packet_id, 0);
+            let (_, cursor) = read_var_int(&frame, cursor).unwrap();
+            let (host_len, cursor) = read_var_int(&frame, cursor).unwrap();
+            let host_len = host_len as usize;
+            assert_eq!(&frame[cursor..cursor + host_len], domain.as_bytes());
+            relay_side.write_all(&[0x99]).unwrap();
+            let mut extra = [0u8; 5];
+            relay_side.read_exact(&mut extra).unwrap();
+            assert_eq!(&extra, b"hello");
+        });
+
+        let client_thread = std::thread::spawn(move || {
+            let mut client = StdTcpStream::connect(shim_addr).unwrap();
+            let handshake = build_handshake_frame(&format!("{domain}\0FORGE"), 765, 25565, 2);
+            client.write_all(&handshake).unwrap();
+            client.write_all(b"hello").unwrap();
+            let mut response = [0u8; 1];
+            client.read_exact(&mut response).unwrap();
+            assert_eq!(response, [0x99]);
+        });
+
+        let (shim_client, _) = shim_listener.accept().unwrap();
+        serve_join_shim_connection(shim_client, domain, relay_addr).unwrap();
+        relay_thread.join().unwrap();
+        client_thread.join().unwrap();
     }
 
     fn fixture_versions() -> Vec<serde_json::Value> {
@@ -2401,5 +2782,56 @@ mod tests {
         assert!(!validate_e4mc_public_address(".e4mc.link"));
         assert!(!validate_e4mc_public_address("a..e4mc.link"));
         assert!(!validate_e4mc_public_address("中文.e4mc.link"));
+    }
+
+    #[test]
+    fn parses_real_regional_e4mc_chat_line() {
+        let line = "[18:55:18] [Render thread/INFO] [minecraft/ChatComponent]: [System] [CHAT] Local game hosted on domain [cod-sprinkled.jp.e4mc.link] (Click here to stop)";
+        match parse_e4mc_log_line(line) {
+            Some(ProviderEvent::PublicAddressReady(domain)) => {
+                assert_eq!(domain, "cod-sprinkled.jp.e4mc.link");
+                assert!(validate_e4mc_public_address(&domain));
+            }
+            other => panic!("真实 e4mc 区域域名日志行未被识别：{other:?}"),
+        }
+    }
+
+    #[test]
+    fn log_tailer_delivers_backlogged_lines_after_writer_stops() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("sh-tailer-{stamp}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("game.log");
+        {
+            let mut file = std::fs::File::create(&path).unwrap();
+            file.write_all(b"line1\nline2\n").unwrap();
+        }
+        let mut tail = LogTailer::new(path.clone());
+        let mut delivered: Vec<String> = Vec::new();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while delivered.len() < 2 && std::time::Instant::now() < deadline {
+            if let Some(line) = tail.next_line() {
+                delivered.push(line);
+            }
+        }
+        assert_eq!(delivered, vec!["line1", "line2"]);
+        // 追加一行后停止写入：这行必须从缓冲区交付，而不是永远卡住。
+        {
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap();
+            file.write_all(b"line3\n").unwrap();
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut third = None;
+        while third.is_none() && std::time::Instant::now() < deadline {
+            third = tail.next_line();
+        }
+        assert_eq!(third.as_deref(), Some("line3"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

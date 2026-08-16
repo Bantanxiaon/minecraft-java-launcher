@@ -7,7 +7,7 @@
 
 use dashmap::DashMap;
 use futures_util::StreamExt;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
@@ -303,9 +303,61 @@ pub(crate) fn legacy_offline_uuid(player_name: &str) -> String {
         .to_string()
 }
 
+/// Offline 用户名规范化：仅用于 SH 内部大小写无关的重复检测。
+/// 严禁用它替换实际保存的 username 来计算 Minecraft 离线 UUID。
+fn normalized_offline_username(value: &str) -> String {
+    value.to_ascii_lowercase()
+}
+
+/// 把 SQLite 账户写入错误转换为产品化提示，禁止把 raw SQL/UNIQUE constraint 暴露给用户。
+fn map_account_db_error(error: rusqlite::Error) -> String {
+    match &error {
+        rusqlite::Error::SqliteFailure(details, _)
+            if details.code == rusqlite::ErrorCode::ConstraintViolation =>
+        {
+            "已存在同名离线账户（不区分大小写）。".to_string()
+        }
+        _ => format!("无法保存账户，请重试：{error}"),
+    }
+}
+
+/// 唯一的 Offline 用户名校验入口（UI 与后端必须使用相同规则）。
+/// 与 Minecraft Java Edition 可接受范围一致：3–16 位 ASCII 字母/数字/下划线。
+/// 额外拒绝：空、纯空白、前后空白、控制字符、NUL、路径/命令注入字符。
+pub(crate) fn validate_offline_username(value: &str) -> Result<(), LauncherError> {
+    let trimmed = value.trim();
+    if trimmed.len() != value.len() {
+        return Err(LauncherError::validation("用户名不能包含前导或尾随空格。"));
+    }
+    if value.is_empty() {
+        return Err(LauncherError::validation("用户名不能为空。"));
+    }
+    if value.chars().any(|character| {
+        character.is_control()
+            || matches!(
+                character,
+                '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'
+            )
+    }) {
+        return Err(LauncherError::validation(
+            "用户名不能包含控制字符或路径字符。",
+        ));
+    }
+    let valid = value
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || character == '_')
+        && (3..=16).contains(&value.len());
+    if !valid {
+        return Err(LauncherError::validation(
+            "用户名须为 3–16 位 ASCII 字母、数字或下划线。",
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(debug_assertions)]
 mod acceptance;
-mod auth;
+pub mod auth;
 mod content_reconcile;
 mod content_update;
 mod diagnostics;
@@ -365,6 +417,7 @@ struct Account {
     id: i64,
     account_type: String,
     display_name: String,
+    minecraft_uuid: Option<String>,
     created_at: String,
     last_used_at: Option<String>,
 }
@@ -793,6 +846,75 @@ pub(crate) fn run_migrations(connection: &mut Connection) -> rusqlite::Result<()
         )?;
         tx.commit()?;
     }
+    // v12：Offline Account 生产硬化。
+    // - accounts.username_normalized：大小写无关重复检测（仅 OFF 类型加唯一约束），
+    //   不影响 Microsoft/External 账户体系；
+    // - play_history：固化每次启动的身份快照，账户删除/改名后仍可审计。
+    let has_v12: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM migrations WHERE version=12)",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_v12 {
+        let tx = connection.transaction()?;
+        let accounts_columns = {
+            let mut statement = tx.prepare("PRAGMA table_info(accounts)")?;
+            let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+            rows.filter_map(Result::ok).collect::<Vec<_>>()
+        };
+        if !accounts_columns
+            .iter()
+            .any(|name| name == "username_normalized")
+        {
+            tx.execute_batch(
+                "ALTER TABLE accounts ADD COLUMN username_normalized TEXT;
+                 UPDATE accounts SET username_normalized = lower(display_name)
+                 WHERE account_type='OFFLINE';",
+            )?;
+        }
+        // 历史数据可能已存在仅大小写不同的 Offline 账户：存在重复时不得让迁移失败
+        // （会阻断启动），跳过唯一索引创建，由 invariant checker 标记为需用户处理；
+        // 新建账户的重复检测仍由事务内检查保证。
+        let duplicate_normalized: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM (SELECT username_normalized FROM accounts
+             WHERE account_type='OFFLINE' AND username_normalized IS NOT NULL
+             GROUP BY username_normalized HAVING COUNT(*) > 1)",
+            [],
+            |row| row.get(0),
+        )?;
+        if duplicate_normalized == 0 {
+            tx.execute_batch(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_offline_accounts_normalized
+                 ON accounts(username_normalized)
+                 WHERE account_type='OFFLINE' AND username_normalized IS NOT NULL;",
+            )?;
+        } else {
+            log::warn!(
+                "检测到 {duplicate_normalized} 组仅大小写不同的 Offline 账户，跳过唯一索引创建（不阻断启动）。"
+            );
+        }
+        let history_columns = {
+            let mut statement = tx.prepare("PRAGMA table_info(play_history)")?;
+            let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+            rows.filter_map(Result::ok).collect::<Vec<_>>()
+        };
+        if !history_columns
+            .iter()
+            .any(|name| name == "username_snapshot")
+        {
+            tx.execute_batch(
+                "ALTER TABLE play_history ADD COLUMN account_id INTEGER;
+                 ALTER TABLE play_history ADD COLUMN username_snapshot TEXT;
+                 ALTER TABLE play_history ADD COLUMN minecraft_uuid_snapshot TEXT;
+                 ALTER TABLE play_history ADD COLUMN auth_type_snapshot TEXT;",
+            )?;
+        }
+        tx.execute(
+            "INSERT INTO migrations(version, applied_at) VALUES(12, strftime('%s','now'))",
+            [],
+        )?;
+        tx.commit()?;
+    }
     // 补齐离线账户的标准 UUID 与旧 SHA-256 UUID，仅处理缺失的旧数据。
     {
         let mut statement = connection.prepare(
@@ -927,15 +1049,16 @@ fn recover_unfinished_sessions(connection: &Connection) -> rusqlite::Result<usiz
 #[tauri::command]
 fn list_accounts(app: AppHandle) -> Result<Vec<Account>, LauncherError> {
     let connection = open_database(&app)?;
-    let mut statement = connection.prepare("SELECT id, account_type, display_name, created_at, last_used_at FROM accounts ORDER BY COALESCE(last_used_at, created_at) DESC").map_err(|error| LauncherError::storage(error.to_string()))?;
+    let mut statement = connection.prepare("SELECT id, account_type, display_name, minecraft_uuid, created_at, last_used_at FROM accounts ORDER BY COALESCE(last_used_at, created_at) DESC").map_err(|error| LauncherError::storage(error.to_string()))?;
     let rows = statement
         .query_map([], |row| {
             Ok(Account {
                 id: row.get(0)?,
                 account_type: row.get(1)?,
                 display_name: row.get(2)?,
-                created_at: row.get(3)?,
-                last_used_at: row.get(4)?,
+                minecraft_uuid: row.get(3)?,
+                created_at: row.get(4)?,
+                last_used_at: row.get(5)?,
             })
         })
         .map_err(|error| LauncherError::storage(error.to_string()))?;
@@ -947,29 +1070,92 @@ fn list_accounts(app: AppHandle) -> Result<Vec<Account>, LauncherError> {
 
 #[tauri::command]
 fn create_offline_account(app: AppHandle, display_name: String) -> Result<Account, LauncherError> {
-    validate_profile_name(&display_name)?;
-    let connection = open_database(&app)?;
+    validate_offline_username(&display_name)?;
+    let mut connection = open_database(&app)?;
     let created_at = chrono_like_timestamp();
-    connection
-        .execute(
-            "INSERT INTO accounts (account_type, minecraft_uuid, display_name, legacy_offline_uuid, created_at, last_used_at)
-             VALUES ('OFFLINE', ?1, ?2, ?3, ?4, ?4)",
-            params![
-                minecraft_offline_uuid(&display_name).to_string(),
-                display_name,
-                legacy_offline_uuid(&display_name),
-                created_at
-            ],
-        )
-        .map_err(|error| LauncherError::storage(error.to_string()))?;
-    let id = connection.last_insert_rowid();
+    let uuid = minecraft_offline_uuid(&display_name);
+    let id = insert_offline_account(&mut connection, &display_name, &created_at)
+        .map_err(map_account_create_error)?;
+    let _ = app.emit(
+        "accounts-changed",
+        serde_json::json!({ "accountId": id, "action": "created" }),
+    );
     Ok(Account {
         id,
         account_type: "OFFLINE".into(),
         display_name,
+        minecraft_uuid: Some(uuid.to_string()),
         created_at: created_at.clone(),
         last_used_at: Some(created_at),
     })
+}
+
+#[derive(Debug)]
+enum AccountCreateError {
+    Conflict,
+    Storage(String),
+}
+
+fn map_account_create_error(error: AccountCreateError) -> LauncherError {
+    match error {
+        AccountCreateError::Conflict => LauncherError::classified(
+            "ACCOUNT_NAME_CONFLICT",
+            "已存在同名离线账户（不区分大小写）。",
+            true,
+        ),
+        AccountCreateError::Storage(message) => LauncherError::storage(message),
+    }
+}
+
+/// BEGIN IMMEDIATE：并发/双击创建同一用户名时，后到的事务看到前者的已提交行，
+/// 返回冲突错误，绝不允许出现第二个相同身份。
+fn insert_offline_account(
+    connection: &mut Connection,
+    display_name: &str,
+    created_at: &str,
+) -> Result<i64, AccountCreateError> {
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| AccountCreateError::Storage(error.to_string()))?;
+    let id = insert_offline_account_within(&transaction, display_name, created_at)?;
+    transaction
+        .commit()
+        .map_err(|error| AccountCreateError::Storage(error.to_string()))?;
+    Ok(id)
+}
+
+/// 在既有事务内插入离线账户；调用方决定 commit / rollback（崩溃一致性测试依赖此语义）。
+fn insert_offline_account_within(
+    transaction: &rusqlite::Transaction<'_>,
+    display_name: &str,
+    created_at: &str,
+) -> Result<i64, AccountCreateError> {
+    let normalized = normalized_offline_username(display_name);
+    let duplicate: Option<i64> = transaction
+        .query_row(
+            "SELECT id FROM accounts WHERE account_type='OFFLINE' AND username_normalized=?1",
+            [&normalized],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| AccountCreateError::Storage(error.to_string()))?;
+    if duplicate.is_some() {
+        return Err(AccountCreateError::Conflict);
+    }
+    transaction
+        .execute(
+            "INSERT INTO accounts (account_type, minecraft_uuid, display_name, username_normalized, legacy_offline_uuid, created_at, last_used_at)
+             VALUES ('OFFLINE', ?1, ?2, ?3, ?4, ?5, ?5)",
+            params![
+                minecraft_offline_uuid(display_name).to_string(),
+                display_name,
+                normalized,
+                legacy_offline_uuid(display_name),
+                created_at
+            ],
+        )
+        .map_err(|error| AccountCreateError::Storage(map_account_db_error(error)))?;
+    Ok(transaction.last_insert_rowid())
 }
 
 #[tauri::command]
@@ -1032,6 +1218,7 @@ async fn login_microsoft(app: AppHandle, client_id: String) -> Result<Account, L
         id: account_id,
         account_type: "MICROSOFT".into(),
         display_name: profile_name,
+        minecraft_uuid: Some(profile_uuid),
         created_at,
         last_used_at: Some(chrono_like_timestamp()),
     })
@@ -1331,30 +1518,229 @@ async fn login_external(
         id: account_id,
         account_type: "EXTERNAL".into(),
         display_name: profile_name,
+        minecraft_uuid: Some(profile_uuid),
         created_at: created_at.clone(),
         last_used_at: Some(created_at),
     })
 }
 
+const SETTING_ACTIVE_ACCOUNT: &str = "active_account_id";
+const SETTING_DEFAULT_ACCOUNT: &str = "default_account_id";
+
+fn account_exists(connection: &Connection, account_id: i64) -> rusqlite::Result<bool> {
+    connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM accounts WHERE id=?1)",
+        [account_id],
+        |row| row.get(0),
+    )
+}
+
+/// 最近的合法账户（按 last_used_at 降序，其次 created_at），作为 default/active 回退。
+fn most_recent_account_id(connection: &Connection) -> rusqlite::Result<Option<i64>> {
+    connection
+        .query_row(
+            "SELECT id FROM accounts
+             ORDER BY COALESCE(last_used_at, created_at) DESC, id DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+}
+
+fn read_settings_i64(app: &AppHandle, key: &str) -> Result<Option<i64>, LauncherError> {
+    let connection = open_database(app)?;
+    let value: Option<String> = connection
+        .query_row(
+            "SELECT value_json FROM settings WHERE key=?1",
+            [key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    Ok(value.and_then(|json| serde_json::from_str::<i64>(&json).ok()))
+}
+
+fn write_settings_i64(app: &AppHandle, key: &str, value: Option<i64>) -> Result<(), LauncherError> {
+    let connection = open_database(app)?;
+    match value {
+        Some(value) => connection
+            .execute(
+                "INSERT INTO settings(key,value_json) VALUES(?1,?2)
+                 ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+                params![key, value.to_string()],
+            )
+            .map(|_| ())
+            .map_err(|error| LauncherError::storage(error.to_string())),
+        None => connection
+            .execute("DELETE FROM settings WHERE key=?1", [key])
+            .map(|_| ())
+            .map_err(|error| LauncherError::storage(error.to_string())),
+    }
+}
+
+/// 当前/默认账户状态：只以 account_id 引用账户，引用失效时清理并回退到最近账户，
+/// 绝不按 username / 列表位置 / UI 顺序保存身份。
+#[tauri::command]
+fn get_account_state(app: AppHandle) -> Result<serde_json::Value, LauncherError> {
+    let connection = open_database(&app)?;
+    let mut active = read_settings_i64(&app, SETTING_ACTIVE_ACCOUNT)?;
+    let mut default = read_settings_i64(&app, SETTING_DEFAULT_ACCOUNT)?;
+    if active.is_some_and(|id| !account_exists(&connection, id).unwrap_or(false)) {
+        active = None;
+    }
+    if default.is_some_and(|id| !account_exists(&connection, id).unwrap_or(false)) {
+        default = None;
+    }
+    let fallback = most_recent_account_id(&connection)
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let resolved_active = active.or(default).or(fallback);
+    let resolved_default = default.or(fallback);
+    drop(connection);
+    // 引用已失效：持久化清理，避免每次启动重复修复。
+    if active.is_none() && resolved_active.is_some() {
+        let _ = write_settings_i64(&app, SETTING_ACTIVE_ACCOUNT, resolved_active);
+    }
+    if default.is_none() && resolved_default.is_some() {
+        let _ = write_settings_i64(&app, SETTING_DEFAULT_ACCOUNT, resolved_default);
+    }
+    Ok(serde_json::json!({
+        "activeAccountId": resolved_active,
+        "defaultAccountId": resolved_default,
+    }))
+}
+
+#[tauri::command]
+fn set_active_account(app: AppHandle, account_id: Option<i64>) -> Result<(), LauncherError> {
+    if let Some(account_id) = account_id {
+        let connection = open_database(&app)?;
+        if !account_exists(&connection, account_id)
+            .map_err(|error| LauncherError::storage(error.to_string()))?
+        {
+            return Err(LauncherError::validation("当前账户已不存在。"));
+        }
+    }
+    write_settings_i64(&app, SETTING_ACTIVE_ACCOUNT, account_id)?;
+    let _ = app.emit(
+        "account-state-changed",
+        serde_json::json!({ "activeAccountId": account_id }),
+    );
+    Ok(())
+}
+
+#[tauri::command]
+fn set_default_account(app: AppHandle, account_id: Option<i64>) -> Result<(), LauncherError> {
+    if let Some(account_id) = account_id {
+        let connection = open_database(&app)?;
+        if !account_exists(&connection, account_id)
+            .map_err(|error| LauncherError::storage(error.to_string()))?
+        {
+            return Err(LauncherError::validation("默认账户已不存在。"));
+        }
+    }
+    write_settings_i64(&app, SETTING_DEFAULT_ACCOUNT, account_id)?;
+    Ok(())
+}
+
+/// 事务化删除：accounts / default / active / instance bindings 同步变更，
+/// 中途失败整体回滚；凭据在提交成功后再尽力清理（不阻断账户数据一致性）。
 #[tauri::command]
 fn remove_account(app: AppHandle, account_id: i64) -> Result<(), LauncherError> {
-    let connection = open_database(&app)?;
-    let secret_ref: Option<String> = connection
+    let mut connection = open_database(&app)?;
+    let credential_ref = delete_account_transaction(&mut connection, account_id)?;
+    if let Some(secret_ref) = credential_ref {
+        if let Ok(entry) = keyring::Entry::new("SH启动器", &secret_ref) {
+            let _ = entry.delete_credential();
+        }
+    }
+    let _ = app.emit(
+        "accounts-changed",
+        serde_json::json!({ "accountId": account_id, "action": "removed" }),
+    );
+    Ok(())
+}
+
+/// 事务化删除账户（供 command 与测试共用）。返回被删账户的凭据引用，便于提交后清理。
+fn delete_account_transaction(
+    connection: &mut Connection,
+    account_id: i64,
+) -> Result<Option<String>, LauncherError> {
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let credential_ref = delete_account_within(&transaction, account_id)?;
+    transaction
+        .commit()
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    Ok(credential_ref)
+}
+
+/// 在既有事务内执行删除：accounts / default / active / instance bindings 同步变更。
+/// 调用方决定 commit / rollback；中途返回 Err 时调用方回滚即得到完整一致的旧状态。
+fn delete_account_within(
+    transaction: &rusqlite::Transaction<'_>,
+    account_id: i64,
+) -> Result<Option<String>, LauncherError> {
+    let exists: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM accounts WHERE id=?1)",
+            [account_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    if !exists {
+        return Err(LauncherError::validation("账户不存在。"));
+    }
+    let credential_ref: Option<String> = transaction
         .query_row(
             "SELECT credential_ref FROM accounts WHERE id=?1",
             [account_id],
             |row| row.get(0),
         )
-        .map_err(|_| LauncherError::validation("账户不存在。"))?;
-    if let Some(secret_ref) = secret_ref {
-        if let Ok(entry) = keyring::Entry::new("SH启动器", &secret_ref) {
-            let _ = entry.delete_credential();
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    // 删除当前/默认账户时：引用指向该账户则原子切换到剩余最近账户；无剩余账户则清除引用。
+    for key in [SETTING_ACTIVE_ACCOUNT, SETTING_DEFAULT_ACCOUNT] {
+        let current: Option<i64> = transaction
+            .query_row(
+                "SELECT value_json FROM settings WHERE key=?1",
+                [key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| LauncherError::storage(error.to_string()))?
+            .and_then(|json| serde_json::from_str::<i64>(&json).ok());
+        if current == Some(account_id) {
+            let replacement: Option<i64> = transaction
+                .query_row(
+                    "SELECT id FROM accounts WHERE id<>?1
+                     ORDER BY COALESCE(last_used_at, created_at) DESC, id DESC LIMIT 1",
+                    [account_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|error| LauncherError::storage(error.to_string()))?;
+            match replacement {
+                Some(replacement) => {
+                    transaction
+                        .execute(
+                            "INSERT INTO settings(key,value_json) VALUES(?1,?2)
+                             ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+                            params![key, replacement.to_string()],
+                        )
+                        .map_err(|error| LauncherError::storage(error.to_string()))?;
+                }
+                None => {
+                    transaction
+                        .execute("DELETE FROM settings WHERE key=?1", [key])
+                        .map_err(|error| LauncherError::storage(error.to_string()))?;
+                }
+            }
         }
     }
-    connection
+    // 实例绑定：FK ON DELETE SET NULL，实例自动回到“使用全局账户”，不会悬挂引用。
+    transaction
         .execute("DELETE FROM accounts WHERE id=?1", [account_id])
         .map_err(|error| LauncherError::storage(error.to_string()))?;
-    Ok(())
+    Ok(credential_ref)
 }
 
 #[derive(Serialize)]
@@ -1759,20 +2145,6 @@ fn remove_modpack_archive(app: AppHandle, archive_id: i64) -> Result<(), Launche
         .execute("DELETE FROM modpack_archives WHERE id=?1", [archive_id])
         .map_err(|error| LauncherError::storage(error.to_string()))?;
     Ok(())
-}
-
-fn validate_profile_name(value: &str) -> Result<(), LauncherError> {
-    if value
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric() || character == '_')
-        && (3..=16).contains(&value.len())
-    {
-        Ok(())
-    } else {
-        Err(LauncherError::validation(
-            "名称须为 3–16 位 ASCII 字母、数字或下划线。",
-        ))
-    }
 }
 
 fn validate_instance_field(value: &str, max: usize) -> Result<(), LauncherError> {
@@ -9671,14 +10043,58 @@ async fn fetch_loader_json(url: &str) -> Result<serde_json::Value, LauncherError
 async fn fetch_official_loader_text(url: &str) -> Result<String, LauncherError> {
     let parsed = reqwest::Url::parse(url)
         .map_err(|_| LauncherError::validation("加载器元数据 URL 无效。"))?;
-    if parsed.scheme() != "https"
-        || !matches!(
-            parsed.host_str(),
-            Some("files.minecraftforge.net") | Some("maven.neoforged.net")
-        )
-    {
+    // 官方源偶发 404/抖动会同时破坏版本选择与安装流程：
+    // 按同一 path 顺序尝试官方源与 BMCLAPI 镜像，避免一次抖动导致验收/用户安装失败。
+    let mirror = matches!(
+        parsed.host_str(),
+        Some("files.minecraftforge.net") | Some("maven.neoforged.net")
+    )
+    .then(|| format!("https://bmclapi2.bangbang93.com/maven{}", parsed.path()));
+    let mut candidates: Vec<String> = vec![url.to_string()];
+    if let Some(mirror) = mirror {
+        candidates.push(mirror);
+    }
+    #[cfg(test)]
+    if TEST_ALLOW_HTTP_MOCK.load(std::sync::atomic::Ordering::Relaxed) {
+        candidates = candidates
+            .into_iter()
+            .map(|candidate| candidate.replacen("https://", "http://", 1))
+            .collect();
+    }
+    let mut last_error = None;
+    for candidate in candidates {
+        match fetch_official_loader_text_from(&candidate).await {
+            Ok(text) => return Ok(text),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error
+        .unwrap_or_else(|| LauncherError::storage("加载器元数据获取失败，且没有可用镜像。")))
+}
+
+async fn fetch_official_loader_text_from(url: &str) -> Result<String, LauncherError> {
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|_| LauncherError::validation("加载器元数据 URL 无效。"))?;
+    let allowed_host = matches!(
+        parsed.host_str(),
+        Some("files.minecraftforge.net")
+            | Some("maven.neoforged.net")
+            | Some("bmclapi2.bangbang93.com")
+    );
+    let scheme_ok = parsed.scheme() == "https" || {
+        #[cfg(test)]
+        {
+            TEST_ALLOW_HTTP_MOCK.load(std::sync::atomic::Ordering::Relaxed)
+                && parsed.scheme() == "http"
+        }
+        #[cfg(not(test))]
+        {
+            false
+        }
+    };
+    if !allowed_host || !scheme_ok {
         return Err(LauncherError::validation(
-            "仅允许 Forge/NeoForge 官方 HTTPS 元数据来源。",
+            "仅允许 Forge/NeoForge 官方及镜像 HTTPS 元数据来源。",
         ));
     }
     let client = shared_download_client()?;
@@ -9801,7 +10217,9 @@ fn maven_artifact_path(coordinate: &str) -> Result<String, LauncherError> {
         || parts
             .iter()
             .any(|part| part.is_empty() || part.contains(['/', '\\']))
-        || !extension.chars().all(|value| value.is_ascii_alphanumeric())
+        || !extension
+            .chars()
+            .all(|value| value.is_ascii_alphanumeric() || value == '.')
     {
         return Err(LauncherError::validation("Maven 依赖坐标无效。"));
     }
@@ -10154,13 +10572,16 @@ fn installer_profile_libraries(
                 .and_then(|value| value.as_str())
                 .ok_or_else(|| LauncherError::storage("安装器依赖缺少 Maven 坐标。"))?;
             let artifact = library.pointer("/downloads/artifact");
-            let path = artifact
+            let explicit_path = artifact
                 .and_then(|value| value.get("path"))
                 .and_then(|value| value.as_str())
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .map(str::to_string)
-                .unwrap_or(maven_artifact_path(coordinate)?);
+                .map(str::to_string);
+            let path = match explicit_path {
+                Some(path) => path,
+                None => maven_artifact_path(coordinate)?,
+            };
             safe_relative_download_path(&path)?;
             if !paths.insert(path.clone()) {
                 continue;
@@ -10733,7 +11154,8 @@ async fn send_download_request(
         }
     }
     Err(LauncherError::storage(format!(
-        "下载在自动重试后仍失败：{last_error}"
+        "下载在自动重试后仍失败：{last_error}（{}）",
+        url.as_str()
     )))
 }
 
@@ -11442,15 +11864,22 @@ fn emit_install_percent(app: &AppHandle, instance_id: i64, percent: u64) {
 }
 
 #[cfg(test)]
-static TEST_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+static TEST_HTTP_CLIENT: std::sync::Mutex<Option<reqwest::Client>> = std::sync::Mutex::new(None);
+#[cfg(test)]
+static TEST_HTTP_MOCK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(test)]
 static TEST_ALLOW_HTTP_MOCK: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 fn shared_download_client() -> Result<reqwest::Client, LauncherError> {
     #[cfg(test)]
-    if let Some(client) = TEST_HTTP_CLIENT.get() {
-        return Ok(client.clone());
+    {
+        let mock = TEST_HTTP_CLIENT
+            .lock()
+            .map_err(|_| LauncherError::storage("测试 HTTP 客户端锁已损坏。"))?;
+        if let Some(client) = mock.as_ref() {
+            return Ok(client.clone());
+        }
     }
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     if let Some(client) = CLIENT.get() {
@@ -12391,11 +12820,265 @@ fn tokenize_arguments(input: &str) -> Vec<String> {
     tokens
 }
 
-fn append_server_join_arguments(arguments: &mut Vec<String>, address: &str, port: u16) {
-    arguments.push("--server".into());
-    arguments.push(address.to_string());
-    arguments.push("--port".into());
-    arguments.push(port.to_string());
+fn version_at_least(version: &str, minimum: &str) -> bool {
+    let parse = |value: &str| -> Vec<u64> {
+        value
+            .split('.')
+            .map(|part| {
+                part.chars()
+                    .take_while(|character| character.is_ascii_digit())
+                    .collect::<String>()
+            })
+            .filter(|part| !part.is_empty())
+            .map(|part| part.parse::<u64>().unwrap_or(0))
+            .collect()
+    };
+    let current = parse(version);
+    let baseline = parse(minimum);
+    for index in 0..current.len().max(baseline.len()) {
+        let current_part = current.get(index).copied().unwrap_or(0);
+        let baseline_part = baseline.get(index).copied().unwrap_or(0);
+        if current_part != baseline_part {
+            return current_part > baseline_part;
+        }
+    }
+    true
+}
+
+fn append_server_join_arguments(
+    arguments: &mut Vec<String>,
+    address: &str,
+    port: u16,
+    game_version: &str,
+) {
+    // 1.20+ 已忽略 --server/--port，自动加入必须使用 --quickPlayMultiplayer。
+    if version_at_least(game_version, "1.20") {
+        arguments.push("--quickPlayMultiplayer".into());
+        arguments.push(format!("{address}:{port}"));
+    } else {
+        arguments.push("--server".into());
+        arguments.push(address.to_string());
+        arguments.push("--port".into());
+        arguments.push(port.to_string());
+    }
+}
+
+/// 读取实例设置里的自定义游戏参数（JSON 字符串数组）。
+fn instance_game_args(
+    app: &AppHandle,
+    instance_id: i64,
+) -> Result<Option<Vec<String>>, LauncherError> {
+    let connection = open_database(app)?;
+    let value: Option<String> = connection
+        .query_row(
+            "SELECT game_args_json FROM instance_launch_settings WHERE instance_id=?1",
+            [instance_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.trim().is_empty() {
+        return Ok(None);
+    }
+    let args = serde_json::from_str::<Vec<String>>(&value)
+        .map_err(|_| LauncherError::validation("实例游戏参数格式无效。"))?;
+    Ok(Some(args))
+}
+
+/// 启动身份快照：在启动流程一开始冻结，后续整个启动过程只读；
+/// 启动期间用户切换/删除账户、修改设置都不会改变本次进程参数。
+enum LaunchIdentity {
+    Offline {
+        username: String,
+        minecraft_uuid: Uuid,
+    },
+    Microsoft {
+        username: String,
+        secret_ref: Option<String>,
+    },
+    External {
+        username: String,
+        secret_ref: Option<String>,
+    },
+}
+
+/// 读取 Offline 账户存储 UUID；缺失/非法/与官方 name-based UUID 不一致时做确定性修复
+/// （重算官方离线 UUID 并在事务内写回），保证启动使用的 UUID 永远正确。
+fn stored_or_repaired_offline_uuid(
+    connection: &Connection,
+    account_id: i64,
+    username: &str,
+) -> Result<Uuid, LauncherError> {
+    let expected = minecraft_offline_uuid(username);
+    let stored: Option<String> = connection
+        .query_row(
+            "SELECT minecraft_uuid FROM accounts WHERE id=?1",
+            [account_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let valid = stored
+        .as_deref()
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .filter(|uuid| *uuid == expected);
+    if let Some(uuid) = valid {
+        return Ok(uuid);
+    }
+    let previous = stored.unwrap_or_else(|| "<null>".to_string());
+    log::warn!(
+        "修复离线账户 UUID：account_id={account_id} previous={previous} expected={expected}"
+    );
+    connection
+        .execute(
+            "UPDATE accounts SET minecraft_uuid=?1, legacy_offline_uuid=?2 WHERE id=?3 AND account_type='OFFLINE'",
+            params![
+                expected.to_string(),
+                legacy_offline_uuid(username),
+                account_id
+            ],
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    Ok(expected)
+}
+
+/// Offline Account 全量不变量检查（§26）：返回 machine-readable 报告。
+pub(crate) fn account_integrity_report(
+    connection: &Connection,
+) -> Result<serde_json::Value, LauncherError> {
+    let mut violations: Vec<String> = Vec::new();
+
+    let account_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM accounts", [], |row| row.get(0))
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let offline_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM accounts WHERE account_type='OFFLINE'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+
+    // 1. account_id 唯一（主键保证，仍显式校验）。
+    let duplicate_ids: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM (SELECT id FROM accounts GROUP BY id HAVING COUNT(*)>1)",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    if duplicate_ids != 0 {
+        violations.push(format!("重复 account_id：{duplicate_ids} 组"));
+    }
+
+    // 2. 每个 Offline 账户：username 合法、UUID 与官方 name-based UUID 一致、无凭据/令牌。
+    let offline_rows: Vec<(i64, String, Option<String>, Option<String>, Option<String>)> = {
+        let mut statement = connection
+            .prepare(
+                "SELECT id, display_name, minecraft_uuid, legacy_offline_uuid, credential_ref
+                 FROM accounts WHERE account_type='OFFLINE'",
+            )
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            })
+            .map_err(|error| LauncherError::storage(error.to_string()))?
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>();
+        rows
+    };
+    for (account_id, username, uuid, legacy, credential_ref) in &offline_rows {
+        if validate_offline_username(username).is_err() {
+            violations.push(format!(
+                "账户 {account_id} 用户名损坏（ACCOUNT_CORRUPTED_REQUIRES_USER_ACTION）：{username:?}"
+            ));
+            continue;
+        }
+        let expected = minecraft_offline_uuid(username);
+        match uuid
+            .as_deref()
+            .and_then(|value| Uuid::parse_str(value).ok())
+        {
+            Some(actual) if actual == expected => {}
+            Some(actual) => violations.push(format!(
+                "账户 {account_id} UUID 与官方离线 UUID 不一致：{actual} != {expected}"
+            )),
+            None => violations.push(format!("账户 {account_id} 的 minecraft_uuid 非法或缺失")),
+        }
+        if legacy.is_none() {
+            violations.push(format!("账户 {account_id} 缺少 legacy_offline_uuid"));
+        }
+        if credential_ref.is_some() {
+            violations.push(format!(
+                "账户 {account_id} 携带凭据引用（Offline 禁止保存 token）"
+            ));
+        }
+    }
+
+    // 3. normalized 无重复。
+    let normalized_duplicates: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM (SELECT username_normalized FROM accounts
+             WHERE account_type='OFFLINE' AND username_normalized IS NOT NULL
+             GROUP BY username_normalized HAVING COUNT(*) > 1)",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    if normalized_duplicates != 0 {
+        violations.push(format!(
+            "仅大小写不同的重复 Offline 账户：{normalized_duplicates} 组"
+        ));
+    }
+
+    // 4. default/active/instance pinned 引用必须指向真实账户。
+    let dangling_settings: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM settings
+             WHERE key IN (?1, ?2) AND NOT EXISTS(
+                 SELECT 1 FROM accounts WHERE id = CAST(value_json AS INTEGER))",
+            params![SETTING_ACTIVE_ACCOUNT, SETTING_DEFAULT_ACCOUNT],
+            |row| row.get(0),
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    if dangling_settings != 0 {
+        violations.push(format!("default/active 引用悬空：{dangling_settings} 条"));
+    }
+
+    // 5. FK / integrity。
+    let fk_violations: i64 = connection
+        .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+            row.get(0)
+        })
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    if fk_violations != 0 {
+        violations.push(format!("foreign_key_check 违规：{fk_violations} 条"));
+    }
+    let integrity: String = connection
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    if integrity != "ok" {
+        violations.push(format!("integrity_check 失败：{integrity}"));
+    }
+
+    Ok(serde_json::json!({
+        "status": if violations.is_empty() { "passed" } else { "failed" },
+        "accountCount": account_count,
+        "offlineCount": offline_count,
+        "violations": violations,
+        "foreignKeyCheck": if fk_violations == 0 { "clean" } else { "dirty" },
+        "integrityCheck": integrity,
+        "completedAt": chrono_like_timestamp()
+    }))
 }
 
 #[tauri::command]
@@ -12447,117 +13130,170 @@ async fn launch_instance(
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .map_err(|_| LauncherError::validation("请选择有效的账户。"))?;
-    drop(connection);
-    let (player_uuid, access_token, user_type, xuid, authlib_javaagent) = if account_type
-        == "MICROSOFT"
-    {
-        let secret_ref = secret_ref
-            .ok_or_else(|| LauncherError::validation("Microsoft 凭据不存在，请重新登录。"))?;
-        let entry = keyring::Entry::new("SH启动器", &secret_ref)
-            .map_err(|error| LauncherError::storage(format!("无法读取 Windows 凭据：{error}")))?;
-        let secret = entry.get_password().map_err(|error| {
-            LauncherError::validation(format!("Microsoft 登录已失效，请重新登录：{error}"))
-        })?;
-        let value: serde_json::Value = serde_json::from_str(&secret)
-            .map_err(|_| LauncherError::validation("Microsoft 凭据格式无效，请重新登录。"))?;
-        let refresh_token = value
-            .get("refreshToken")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        let client_id = get_settings(app.clone())?
-            .microsoft_client_id
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| LauncherError::validation("Microsoft Client ID 未配置，请重新登录。"))?;
-        let refreshed = auth::refresh(&client_id, refresh_token)
-            .await
-            .map_err(LauncherError::validation)?;
-        let updated_secret = serde_json::json!({
-            "refreshToken": refreshed.refresh_token,
-            "accessToken": refreshed.access_token,
-            "uuid": refreshed.profile.uuid,
-            "xuid": refreshed.profile.xuid,
-        });
-        entry
-            .set_password(&updated_secret.to_string())
-            .map_err(|error| LauncherError::storage(format!("无法更新 Microsoft 凭据：{error}")))?;
-        (
-            updated_secret
-                .get("uuid")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            updated_secret
-                .get("accessToken")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            "msa".to_string(),
-            updated_secret
-                .get("xuid")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            None,
-        )
-    } else if account_type == "EXTERNAL" {
-        let secret_ref = secret_ref
-            .ok_or_else(|| LauncherError::validation("外置登录凭据不存在，请重新登录。"))?;
-        let entry = keyring::Entry::new("SH启动器", &secret_ref)
-            .map_err(|error| LauncherError::storage(format!("无法读取 Windows 凭据：{error}")))?;
-        let secret = entry.get_password().map_err(|error| {
-            LauncherError::validation(format!("外置登录已失效，请重新登录：{error}"))
-        })?;
-        let value: serde_json::Value = serde_json::from_str(&secret)
-            .map_err(|_| LauncherError::validation("外置登录凭据格式无效，请重新登录。"))?;
-        let access_token = value
-            .get("accessToken")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default()
-            .to_string();
-        let client_token = value
-            .get("clientToken")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default()
-            .to_string();
-        let api_root = value
-            .get("apiRoot")
-            .and_then(|value| value.as_str())
-            .ok_or_else(|| LauncherError::validation("外置登录凭据缺少服务器地址，请重新登录。"))?
-            .to_string();
-        let uuid = value
-            .get("uuid")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default()
-            .to_string();
-        let mut refreshed_token = access_token;
-        if let Ok(Some((new_token, new_client))) =
-            refresh_external_token(&api_root, &refreshed_token, &client_token).await
-        {
-            refreshed_token = new_token;
-            let updated = serde_json::json!({
-                "accessToken": refreshed_token,
-                "clientToken": new_client,
-                "uuid": uuid,
-                "apiRoot": api_root,
-            });
-            let _ = entry.set_password(&updated.to_string());
+    // 冻结身份快照：后续（可能跨 await 的）流程只使用这份 immutable 快照。
+    let identity = match account_type.as_str() {
+        "OFFLINE" => {
+            let uuid = stored_or_repaired_offline_uuid(&connection, account_id, &player_name)?;
+            LaunchIdentity::Offline {
+                username: player_name.clone(),
+                minecraft_uuid: uuid,
+            }
         }
-        let jar = ensure_authlib_injector().await?;
-        (
-            uuid,
-            refreshed_token,
-            "legacy".to_string(),
-            String::new(),
-            Some(format!("-javaagent:{}={}", jar.display(), api_root)),
-        )
-    } else {
-        (
-            minecraft_offline_uuid(&player_name).to_string(),
+        "MICROSOFT" => LaunchIdentity::Microsoft {
+            username: player_name.clone(),
+            secret_ref,
+        },
+        "EXTERNAL" => LaunchIdentity::External {
+            username: player_name.clone(),
+            secret_ref,
+        },
+        _ => return Err(LauncherError::validation("账户类型无效。")),
+    };
+    drop(connection);
+    let (
+        player_uuid,
+        access_token,
+        user_type,
+        xuid,
+        authlib_javaagent,
+        snapshot_username,
+        snapshot_auth_type,
+    ) = match identity {
+        LaunchIdentity::Offline {
+            username,
+            minecraft_uuid,
+            ..
+        } => (
+            minecraft_uuid.to_string(),
             "0".to_string(),
             "legacy".to_string(),
             String::new(),
             None,
-        )
+            username,
+            "OFFLINE".to_string(),
+        ),
+        LaunchIdentity::Microsoft {
+            username,
+            secret_ref,
+            ..
+        } => {
+            let secret_ref = secret_ref
+                .ok_or_else(|| LauncherError::validation("Microsoft 凭据不存在，请重新登录。"))?;
+            let entry = keyring::Entry::new("SH启动器", &secret_ref).map_err(|error| {
+                LauncherError::storage(format!("无法读取 Windows 凭据：{error}"))
+            })?;
+            let secret = entry.get_password().map_err(|error| {
+                LauncherError::validation(format!("Microsoft 登录已失效，请重新登录：{error}"))
+            })?;
+            let value: serde_json::Value = serde_json::from_str(&secret)
+                .map_err(|_| LauncherError::validation("Microsoft 凭据格式无效，请重新登录。"))?;
+            let refresh_token = value
+                .get("refreshToken")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let client_id = get_settings(app.clone())?
+                .microsoft_client_id
+                .filter(|value| !value.trim().is_empty())
+                .ok_or_else(|| {
+                    LauncherError::validation("Microsoft Client ID 未配置，请重新登录。")
+                })?;
+            let refreshed = auth::refresh(&client_id, refresh_token)
+                .await
+                .map_err(LauncherError::validation)?;
+            let updated_secret = serde_json::json!({
+                "refreshToken": refreshed.refresh_token,
+                "accessToken": refreshed.access_token,
+                "uuid": refreshed.profile.uuid,
+                "xuid": refreshed.profile.xuid,
+            });
+            entry
+                .set_password(&updated_secret.to_string())
+                .map_err(|error| {
+                    LauncherError::storage(format!("无法更新 Microsoft 凭据：{error}"))
+                })?;
+            (
+                updated_secret
+                    .get("uuid")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                updated_secret
+                    .get("accessToken")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                "msa".to_string(),
+                updated_secret
+                    .get("xuid")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                None,
+                username,
+                "MICROSOFT".to_string(),
+            )
+        }
+        LaunchIdentity::External {
+            username,
+            secret_ref,
+            ..
+        } => {
+            let secret_ref = secret_ref
+                .ok_or_else(|| LauncherError::validation("外置登录凭据不存在，请重新登录。"))?;
+            let entry = keyring::Entry::new("SH启动器", &secret_ref).map_err(|error| {
+                LauncherError::storage(format!("无法读取 Windows 凭据：{error}"))
+            })?;
+            let secret = entry.get_password().map_err(|error| {
+                LauncherError::validation(format!("外置登录已失效，请重新登录：{error}"))
+            })?;
+            let value: serde_json::Value = serde_json::from_str(&secret)
+                .map_err(|_| LauncherError::validation("外置登录凭据格式无效，请重新登录。"))?;
+            let access_token = value
+                .get("accessToken")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let client_token = value
+                .get("clientToken")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let api_root = value
+                .get("apiRoot")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| {
+                    LauncherError::validation("外置登录凭据缺少服务器地址，请重新登录。")
+                })?
+                .to_string();
+            let uuid = value
+                .get("uuid")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let mut refreshed_token = access_token;
+            if let Ok(Some((new_token, new_client))) =
+                refresh_external_token(&api_root, &refreshed_token, &client_token).await
+            {
+                refreshed_token = new_token;
+                let updated = serde_json::json!({
+                    "accessToken": refreshed_token,
+                    "clientToken": new_client,
+                    "uuid": uuid,
+                    "apiRoot": api_root,
+                });
+                let _ = entry.set_password(&updated.to_string());
+            }
+            let jar = ensure_authlib_injector().await?;
+            (
+                uuid,
+                refreshed_token,
+                "legacy".to_string(),
+                String::new(),
+                Some(format!("-javaagent:{}={}", jar.display(), api_root)),
+                username,
+                "EXTERNAL".to_string(),
+            )
+        }
     };
     let java = PathBuf::from(java_path);
     if !java.is_file()
@@ -12604,7 +13340,7 @@ async fn launch_instance(
         &details,
         &game,
         &version,
-        &player_name,
+        &snapshot_username,
         &player_uuid,
         &access_token,
         &user_type,
@@ -12615,7 +13351,24 @@ async fn launch_instance(
         arguments.insert(0, javaagent);
     }
     if let Some(address) = &server_address {
-        append_server_join_arguments(&mut arguments, address, server_port.unwrap_or(25565));
+        append_server_join_arguments(
+            &mut arguments,
+            address,
+            server_port.unwrap_or(25565),
+            &version,
+        );
+    }
+    // 实例级自定义游戏参数（如 --quickPlaySingleplayer），由实例设置写入。
+    // 只接受不含换行/NUL 的普通 token，防止注入；不解析转义。
+    if let Some(game_args) = instance_game_args(&app, instance_id)? {
+        for game_arg in game_args {
+            if game_arg.contains('\0') || game_arg.contains('\n') || game_arg.contains('\r') {
+                return Err(LauncherError::validation("实例游戏参数包含非法字符。"));
+            }
+            if !game_arg.is_empty() {
+                arguments.push(game_arg);
+            }
+        }
     }
     if get_settings(app.clone())?.backup_worlds_before_launch {
         let _ = backup_instance_worlds(instance_id, &game)?;
@@ -12649,8 +13402,16 @@ async fn launch_instance(
     let connection = open_database(&app)?;
     connection
         .execute(
-            "INSERT INTO play_history(instance_id,started_at) VALUES(?1,?2)",
-            params![instance_id, started_at],
+            "INSERT INTO play_history(instance_id, started_at, account_id, username_snapshot, minecraft_uuid_snapshot, auth_type_snapshot)
+             VALUES(?1,?2,?3,?4,?5,?6)",
+            params![
+                instance_id,
+                started_at,
+                account_id,
+                &snapshot_username,
+                &player_uuid,
+                &snapshot_auth_type
+            ],
         )
         .map_err(|error| LauncherError::storage(error.to_string()))?;
     let history_id = connection.last_insert_rowid();
@@ -12887,19 +13648,49 @@ pub fn run() {
                 let loader_type = std::env::var("LAUNCHER_E2E_LOADER").ok();
                 let clone_source = std::env::var("LAUNCHER_E2E_CLONE_SOURCE").ok();
                 let pack_update_instance = std::env::var("LAUNCHER_E2E_PACK_UPDATE_INSTANCE").ok();
+                let multiplayer_mode = std::env::var("LAUNCHER_E2E_MULTIPLAYER").ok();
+                let window_mode = std::env::var("LAUNCHER_E2E_WINDOW").ok();
+                let account_mode = std::env::var("LAUNCHER_E2E_ACCOUNT").ok();
                 if install_version.is_some()
                     || launch_version.is_some()
                     || loader_type.is_some()
                     || clone_source.is_some()
                     || pack_update_instance.is_some()
+                    || multiplayer_mode.is_some()
+                    || window_mode.is_some()
+                    || account_mode.is_some()
                 {
+                    if let Some(window) = app.get_webview_window("splash") {
+                        let _ = window.hide();
+                    }
                     if let Some(window) = app.get_webview_window("main") {
                         let _ = window.hide();
                     }
                     let handle = app.handle().clone();
                     tauri::async_runtime::spawn(async move {
                         let report_name;
-                        let result = if let Some(source_name) = clone_source {
+                        let result = if let Some(mode) = account_mode {
+                            report_name = format!("acceptance-account-{mode}.json");
+                            match mode.as_str() {
+                                "integrity" => match open_database(&handle) {
+                                    Ok(connection) => account_integrity_report(&connection),
+                                    Err(error) => Err(error),
+                                },
+                                "flow" => {
+                                    acceptance::run_offline_account_acceptance(handle.clone()).await
+                                }
+                                "migrate" => {
+                                    acceptance::run_account_migration_acceptance(handle.clone())
+                                        .await
+                                }
+                                other => Err(LauncherError::validation(format!(
+                                    "未知账户验收模式：{other}"
+                                ))),
+                            }
+                        } else if window_mode.is_some() {
+                            report_name = "acceptance-window.json".into();
+                            acceptance::run_window_acceptance(handle.clone())
+                        } else if let Some(source_name) = clone_source {
                             report_name = "acceptance-clone.json".into();
                             acceptance::run_clone_acceptance(
                                 handle.clone(),
@@ -12965,6 +13756,43 @@ pub fn run() {
                                     "启动验收缺少 LAUNCHER_E2E_JAVA。",
                                 )),
                             }
+                        } else if let Some(mode) = multiplayer_mode {
+                            report_name = format!("acceptance-multiplayer-{mode}.json");
+                            match mode.as_str() {
+                                "prepare" => {
+                                    acceptance::run_multiplayer_prepare_acceptance(handle.clone())
+                                        .await
+                                }
+                                "run" => match std::env::var("LAUNCHER_E2E_MP_LOADER") {
+                                    Ok(loader) => {
+                                        let minutes = std::env::var("LAUNCHER_E2E_MINUTES")
+                                            .ok()
+                                            .and_then(|value| value.parse::<u64>().ok())
+                                            .unwrap_or(0);
+                                        let rounds = std::env::var("LAUNCHER_E2E_ROUNDS")
+                                            .ok()
+                                            .and_then(|value| value.parse::<u32>().ok())
+                                            .unwrap_or(3);
+                                        let crash = std::env::var("LAUNCHER_E2E_CRASH")
+                                            .ok()
+                                            .is_some_and(|value| value == "1");
+                                        acceptance::run_multiplayer_matrix_acceptance(
+                                            handle.clone(),
+                                            loader,
+                                            minutes,
+                                            rounds,
+                                            crash,
+                                        )
+                                        .await
+                                    }
+                                    Err(_) => Err(LauncherError::validation(
+                                        "联机验收缺少 LAUNCHER_E2E_MP_LOADER。",
+                                    )),
+                                },
+                                other => Err(LauncherError::validation(format!(
+                                    "未知联机验收模式：{other}"
+                                ))),
+                            }
                         } else {
                             report_name = "acceptance-install.json".into();
                             acceptance::run_vanilla_install_acceptance(
@@ -13019,6 +13847,9 @@ pub fn run() {
             terminate_game,
             list_accounts,
             create_offline_account,
+            get_account_state,
+            set_active_account,
+            set_default_account,
             login_microsoft,
             login_external,
             microsoft_login_available,
@@ -13148,6 +13979,7 @@ pub(crate) async fn multiplayer_join_launch(
     account_id: i64,
     java_path: String,
     address: String,
+    port: u16,
 ) -> Result<LaunchResult, LauncherError> {
     launch_instance(
         app,
@@ -13156,7 +13988,7 @@ pub(crate) async fn multiplayer_join_launch(
         java_path,
         Some(false),
         Some(address),
-        None,
+        Some(port),
         None,
     )
     .await
@@ -13316,12 +14148,98 @@ mod tests {
     }
     #[test]
     fn profile_validation_accepts_expected_names() {
-        assert!(validate_profile_name("Alex_123").is_ok());
+        for value in [
+            "Alex",
+            "Steve",
+            "abc123",
+            "A_1",
+            "ABCDEFGHIJKLMNOP",
+            "Player_Name123",
+        ] {
+            assert!(validate_offline_username(value).is_ok(), "应接受：{value}");
+        }
     }
     #[test]
     fn profile_validation_rejects_unsafe_names() {
-        for value in ["ab", "name-with-dash", "名字", "this_name_is_far_too_long"] {
-            assert!(validate_profile_name(value).is_err());
+        for value in [
+            "ab",
+            "name-with-dash",
+            "名字",
+            "this_name_is_far_too_long",
+            "",
+            "   ",
+            " Alex",
+            "Alex ",
+            "Alex\n",
+            "Alex\t",
+            "Alex/..",
+            "Alex\u{0}",
+            "Alex|rm",
+        ] {
+            assert!(
+                validate_offline_username(value).is_err(),
+                "应拒绝：{value:?}"
+            );
+        }
+    }
+    #[test]
+    fn offline_uuid_matches_java_name_uuid_golden_values() {
+        // 与 Java UUID.nameUUIDFromBytes("OfflinePlayer:<name>".getBytes(UTF_8))
+        // 逐字节一致的 golden 值（本机 JDK17 交叉验证）。
+        let golden: &[(&str, &str)] = &[
+            ("Steve", "5627dd98-e6be-3c21-b8a8-e92344183641"),
+            ("Alex", "36532b5e-c442-3dbb-a24c-c7e55d0f979a"),
+            ("TestPlayer", "bb77495a-a740-3169-a238-69654c8bd2c1"),
+            ("abc123", "4062f8b7-64b0-384d-8ad1-4206c09391ad"),
+            ("steve", "53909932-f794-33c0-9329-948045a4c1ce"),
+            ("STEVE", "af74c7dc-2613-3e4e-850c-e6b1a849a686"),
+            ("A_1", "0f20fc23-0935-3c24-9603-4c4ab6a40bb0"),
+            ("ABCDEFGHIJKLMNOP", "2b74a1cc-0832-35db-8638-abf7e029466d"),
+            ("Player_Name123", "1d054b5f-5092-33d3-9db3-191970a255fd"),
+            ("Notch", "b50ad385-829d-3141-a216-7e7d7539ba7f"),
+        ];
+        for (name, expected) in golden {
+            let actual = minecraft_offline_uuid(name);
+            assert_eq!(
+                actual.to_string(),
+                *expected,
+                "离线 UUID 与 Java 不一致：{name}"
+            );
+            // version=3 + RFC4122 variant bits
+            let bytes = actual.as_bytes();
+            assert_eq!((bytes[6] >> 4), 0x3, "version 位错误：{name}");
+            assert_eq!((bytes[8] >> 6), 0x2, "variant 位错误：{name}");
+        }
+        // 大小写不同 → UUID 不同；normalized 只用于重复检测，不能改变 UUID 输入。
+        assert_ne!(
+            minecraft_offline_uuid("Steve"),
+            minecraft_offline_uuid("steve")
+        );
+        assert_eq!(normalized_offline_username("Steve"), "steve");
+        assert_eq!(normalized_offline_username("STEVE"), "steve");
+    }
+    #[test]
+    fn offline_username_validator_is_total_and_deterministic() {
+        // 简单 fuzz：任意输入不 panic、结果确定、UTF-8 安全（含恶意/截断序列）。
+        let mut seed = 0x9e37_79b9_u32;
+        let mut next = move || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            seed
+        };
+        for _ in 0..2000 {
+            let length = (next() % 32) as usize;
+            let mut candidate = String::new();
+            for _ in 0..length {
+                candidate.push(char::from_u32(next() % 0x110000).unwrap_or('?'));
+            }
+            let first = validate_offline_username(&candidate).is_ok();
+            let second = validate_offline_username(&candidate).is_ok();
+            assert_eq!(first, second, "validator 必须确定");
+            if first {
+                let uuid_a = minecraft_offline_uuid(&candidate);
+                let uuid_b = minecraft_offline_uuid(&candidate);
+                assert_eq!(uuid_a, uuid_b);
+            }
         }
     }
     #[test]
@@ -13883,7 +14801,7 @@ side="BOTH"
     #[test]
     fn server_join_arguments_are_appended_in_order() {
         let mut arguments = vec!["-Xmx4096M".to_string()];
-        append_server_join_arguments(&mut arguments, "play.example.com", 25565);
+        append_server_join_arguments(&mut arguments, "play.example.com", 25565, "1.19.4");
         assert_eq!(
             arguments,
             vec![
@@ -13894,6 +14812,19 @@ side="BOTH"
                 "25565"
             ]
         );
+    }
+
+    #[test]
+    fn server_join_uses_quick_play_for_1_20_and_later() {
+        let mut arguments = vec!["-Xmx4096M".to_string()];
+        append_server_join_arguments(&mut arguments, "127.0.0.1", 12345, "1.20.4");
+        assert_eq!(
+            arguments,
+            vec!["-Xmx4096M", "--quickPlayMultiplayer", "127.0.0.1:12345"]
+        );
+        assert!(version_at_least("1.20", "1.20"));
+        assert!(version_at_least("1.21.11", "1.20"));
+        assert!(!version_at_least("1.19.4", "1.20"));
     }
 
     #[test]
@@ -14131,7 +15062,11 @@ side="BOTH"
             .http1_only()
             .build()
             .unwrap();
-        TEST_HTTP_CLIENT.set(client.clone()).ok();
+        // 两个 mock HTTP 回归测试共享全局客户端/开关，必须串行执行并独占替换，
+        // 否则并行测试会互相覆盖（OnceLock 时代表现为第二个测试的 mock 不生效，
+        // 直接打到真实网络导致 404 假失败）。
+        let _mock_guard = TEST_HTTP_MOCK_LOCK.lock().unwrap();
+        *TEST_HTTP_CLIENT.lock().unwrap() = Some(client);
         TEST_ALLOW_HTTP_MOCK.store(true, Ordering::Relaxed);
 
         let directory =
@@ -14155,6 +15090,8 @@ side="BOTH"
             assert_eq!(size, payload.len() as u64);
         });
         TEST_ALLOW_HTTP_MOCK.store(false, Ordering::Relaxed);
+        *TEST_HTTP_CLIENT.lock().unwrap() = None;
+        drop(_mock_guard);
         let elapsed = started.elapsed();
         assert!(
             elapsed < Duration::from_secs(60),
@@ -14172,6 +15109,89 @@ side="BOTH"
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = mock_server.join();
         let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn loader_metadata_falls_back_to_mirror_when_primary_404s() {
+        use std::io::{Read as _, Write as _};
+        // 官方源一次 404 抖动不得破坏版本选择/安装：
+        // 主源 maven.neoforged.net 返回 404，镜像 bmclapi2.bangbang93.com 返回合法 XML，
+        // fetch_official_loader_text 必须自动回退并成功返回镜像内容。
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mock_addr = listener.local_addr().unwrap();
+        let accept = listener.try_clone().unwrap();
+        accept.set_nonblocking(true).unwrap();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop_flag = stop.clone();
+        let mock_server = std::thread::spawn(move || loop {
+            if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+            match accept.accept() {
+                Ok((mut stream, _)) => {
+                    std::thread::spawn(move || {
+                        let mut head = Vec::new();
+                        let mut buffer = [0u8; 4096];
+                        loop {
+                            match stream.read(&mut buffer) {
+                                Ok(0) => return,
+                                Ok(count) => {
+                                    head.extend_from_slice(&buffer[..count]);
+                                    if head.windows(4).any(|window| window == b"\r\n\r\n") {
+                                        break;
+                                    }
+                                }
+                                Err(_) => return,
+                            }
+                        }
+                        let header_text = String::from_utf8_lossy(&head);
+                        let is_mirror = header_text
+                            .lines()
+                            .any(|line| line.eq_ignore_ascii_case("host: bmclapi2.bangbang93.com"));
+                        if is_mirror {
+                            let body = b"<metadata><versioning><versions><version>21.11.45</version></versions></versioning></metadata>";
+                            let header = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                body.len()
+                            );
+                            let _ = stream.write_all(header.as_bytes());
+                            let _ = stream.write_all(body);
+                        } else {
+                            let _ = stream.write_all(
+                                b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                            );
+                        }
+                    });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(_) => break,
+            }
+        });
+        let client = reqwest::Client::builder()
+            .resolve("maven.neoforged.net", mock_addr)
+            .resolve("bmclapi2.bangbang93.com", mock_addr)
+            .http1_only()
+            .build()
+            .unwrap();
+        let _mock_guard = TEST_HTTP_MOCK_LOCK.lock().unwrap();
+        *TEST_HTTP_CLIENT.lock().unwrap() = Some(client);
+        TEST_ALLOW_HTTP_MOCK.store(true, Ordering::Relaxed);
+        let text = tauri::async_runtime::block_on(fetch_official_loader_text(
+            "http://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml",
+        ))
+        .expect("官方源 404 时应通过镜像回退成功");
+        TEST_ALLOW_HTTP_MOCK.store(false, Ordering::Relaxed);
+        *TEST_HTTP_CLIENT.lock().unwrap() = None;
+        drop(_mock_guard);
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        drop(listener);
+        let _ = mock_server.join();
+        assert!(
+            text.contains("21.11.45"),
+            "镜像返回的元数据应包含版本：{text}"
+        );
     }
 
     #[test]
@@ -14609,5 +15629,450 @@ side="BOTH"
             )
             .unwrap();
         assert_eq!(settings, 0);
+    }
+
+    fn test_account_connection() -> Connection {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;")
+            .unwrap();
+        run_migrations(&mut connection).unwrap();
+        connection
+    }
+
+    fn insert_test_offline(connection: &mut Connection, name: &str) -> i64 {
+        insert_offline_account(connection, name, "1").expect("应能创建测试账户")
+    }
+
+    #[test]
+    fn create_offline_account_stores_normalized_and_golden_uuid() {
+        let mut connection = test_account_connection();
+        let id = insert_test_offline(&mut connection, "Steve");
+        let (normalized, uuid, legacy): (String, String, Option<String>) = connection
+            .query_row(
+                "SELECT username_normalized, minecraft_uuid, legacy_offline_uuid FROM accounts WHERE id=?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(normalized, "steve");
+        assert_eq!(uuid, "5627dd98-e6be-3c21-b8a8-e92344183641");
+        assert!(legacy.is_some());
+    }
+
+    #[test]
+    fn create_offline_account_rejects_case_insensitive_duplicates() {
+        let mut connection = test_account_connection();
+        insert_test_offline(&mut connection, "Steve");
+        let conflict = insert_offline_account(&mut connection, "steve", "2");
+        assert!(
+            matches!(conflict, Err(AccountCreateError::Conflict)),
+            "仅大小写不同的同名账户必须被拒绝"
+        );
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM accounts", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1, "不得产生第二个相同身份");
+    }
+
+    #[test]
+    fn concurrent_create_same_name_only_one_succeeds() {
+        let directory =
+            std::env::temp_dir().join(format!("sh-account-race-{}", unique_timestamp()));
+        fs::create_dir_all(&directory).unwrap();
+        let db_path = directory.join("race.sqlite3");
+        let first_path = db_path.clone();
+        let second_path = db_path.clone();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let first_barrier = barrier.clone();
+        let first = std::thread::spawn(move || {
+            let mut connection = Connection::open(&first_path).unwrap();
+            connection
+                .execute_batch("PRAGMA busy_timeout = 5000;")
+                .unwrap();
+            run_migrations(&mut connection).unwrap();
+            first_barrier.wait();
+            insert_offline_account(&mut connection, "RacePlayer", "1").is_ok()
+        });
+        let second = std::thread::spawn(move || {
+            // 等第一个线程完成建表。
+            let mut connection = Connection::open(&second_path).unwrap();
+            connection
+                .execute_batch("PRAGMA busy_timeout = 5000;")
+                .unwrap();
+            run_migrations(&mut connection).unwrap();
+            barrier.wait();
+            std::thread::sleep(Duration::from_millis(20));
+            insert_offline_account(&mut connection, "RacePlayer", "2").is_ok()
+        });
+        let results = [first.join().unwrap(), second.join().unwrap()];
+        assert_eq!(
+            results.iter().filter(|ok| **ok).count(),
+            1,
+            "并发创建同名账户必须恰好成功一次"
+        );
+        let connection = Connection::open(&db_path).unwrap();
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM accounts", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+        drop(connection);
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn create_crash_rollback_leaves_no_partial_state() {
+        let mut connection = test_account_connection();
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        insert_offline_account_within(&transaction, "CrashPlayer", "1").unwrap();
+        drop(transaction); // 模拟写入后进程崩溃（未 commit）。
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM accounts", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "崩溃必须完整回滚创建");
+    }
+
+    #[test]
+    fn delete_crash_rollback_keeps_account_and_references() {
+        let mut connection = test_account_connection();
+        let id = insert_test_offline(&mut connection, "KeepMe");
+        connection
+            .execute(
+                "INSERT INTO settings(key,value_json) VALUES(?1,?2)",
+                params![SETTING_ACTIVE_ACCOUNT, id.to_string()],
+            )
+            .unwrap();
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        delete_account_within(&transaction, id).unwrap();
+        drop(transaction); // 模拟删除中途崩溃（未 commit）。
+        let exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM accounts WHERE id=?1)",
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(exists, "崩溃必须完整回滚删除");
+        let active: String = connection
+            .query_row(
+                "SELECT value_json FROM settings WHERE key=?1",
+                [SETTING_ACTIVE_ACCOUNT],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(active, id.to_string(), "引用必须保持不变");
+    }
+
+    #[test]
+    fn delete_active_and_default_account_switches_references() {
+        let mut connection = test_account_connection();
+        let first = insert_test_offline(&mut connection, "First");
+        let second = insert_test_offline(&mut connection, "Second");
+        for key in [SETTING_ACTIVE_ACCOUNT, SETTING_DEFAULT_ACCOUNT] {
+            connection
+                .execute(
+                    "INSERT INTO settings(key,value_json) VALUES(?1,?2)",
+                    params![key, first.to_string()],
+                )
+                .unwrap();
+        }
+        delete_account_transaction(&mut connection, first).unwrap();
+        for key in [SETTING_ACTIVE_ACCOUNT, SETTING_DEFAULT_ACCOUNT] {
+            let value: String = connection
+                .query_row(
+                    "SELECT value_json FROM settings WHERE key=?1",
+                    [key],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(value, second.to_string(), "{key} 应回退到剩余账户");
+        }
+    }
+
+    #[test]
+    fn delete_only_account_clears_references() {
+        let mut connection = test_account_connection();
+        let id = insert_test_offline(&mut connection, "Solo");
+        for key in [SETTING_ACTIVE_ACCOUNT, SETTING_DEFAULT_ACCOUNT] {
+            connection
+                .execute(
+                    "INSERT INTO settings(key,value_json) VALUES(?1,?2)",
+                    params![key, id.to_string()],
+                )
+                .unwrap();
+        }
+        delete_account_transaction(&mut connection, id).unwrap();
+        for key in [SETTING_ACTIVE_ACCOUNT, SETTING_DEFAULT_ACCOUNT] {
+            let remaining: Option<String> = connection
+                .query_row(
+                    "SELECT value_json FROM settings WHERE key=?1",
+                    [key],
+                    |row| row.get(0),
+                )
+                .optional()
+                .unwrap();
+            assert!(remaining.is_none(), "{key} 无合法账户时必须清除引用");
+        }
+    }
+
+    #[test]
+    fn delete_account_keeps_instances_and_nullifies_pinning() {
+        let mut connection = test_account_connection();
+        let id = insert_test_offline(&mut connection, "PinnedOwner");
+        connection
+            .execute(
+                "INSERT INTO instances(id,name,root_path,game_version,loader_type,status,source,created_at)
+                 VALUES(1,'A','D:/a','1.20.4','vanilla','ready','qa','1')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO instance_launch_settings(instance_id,memory_max_mb,account_id)
+                 VALUES(1,4096,?1)",
+                [id],
+            )
+            .unwrap();
+        delete_account_transaction(&mut connection, id).unwrap();
+        let instance_exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM instances WHERE id=1)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(instance_exists, "删除账户不得删除实例");
+        let pinned: Option<i64> = connection
+            .query_row(
+                "SELECT account_id FROM instance_launch_settings WHERE instance_id=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            pinned, None,
+            "实例绑定必须回到全局账户（NULL），不得悬挂引用"
+        );
+    }
+
+    #[test]
+    fn delete_instance_keeps_account() {
+        let mut connection = test_account_connection();
+        let id = insert_test_offline(&mut connection, "Survivor");
+        connection
+            .execute(
+                "INSERT INTO instances(id,name,root_path,game_version,loader_type,status,source,created_at)
+                 VALUES(1,'A','D:/a','1.20.4','vanilla','ready','qa','1')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute("DELETE FROM instances WHERE id=1", [])
+            .unwrap();
+        let exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM accounts WHERE id=?1)",
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(exists, "删除实例不得级联删除账户");
+    }
+
+    #[test]
+    fn migration_v12_reapply_preserves_accounts_bindings_and_uuid() {
+        let mut connection = test_account_connection();
+        let id = insert_test_offline(&mut connection, "MigrateMe");
+        connection
+            .execute(
+                "INSERT INTO instances(id,name,root_path,game_version,loader_type,status,source,created_at)
+                 VALUES(1,'A','D:/a','1.20.4','vanilla','ready','qa','1')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO instance_launch_settings(instance_id,memory_max_mb,account_id)
+                 VALUES(1,4096,?1)",
+                [id],
+            )
+            .unwrap();
+        // 模拟 v12 尚未应用的旧库：去掉 v12 新增列，再重跑迁移。
+        connection
+            .execute_batch(
+                "PRAGMA foreign_keys = OFF;
+                 DROP INDEX IF EXISTS idx_offline_accounts_normalized;
+                 ALTER TABLE accounts DROP COLUMN username_normalized;
+                 ALTER TABLE play_history DROP COLUMN account_id;
+                 ALTER TABLE play_history DROP COLUMN username_snapshot;
+                 ALTER TABLE play_history DROP COLUMN minecraft_uuid_snapshot;
+                 ALTER TABLE play_history DROP COLUMN auth_type_snapshot;
+                 DELETE FROM migrations WHERE version=12;
+                 PRAGMA foreign_keys = ON;",
+            )
+            .unwrap();
+        run_migrations(&mut connection).unwrap();
+        let (account_id, username, uuid, normalized): (i64, String, String, String) = connection
+            .query_row(
+                "SELECT id, display_name, minecraft_uuid, username_normalized FROM accounts WHERE id=?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(account_id, id, "account_id 必须不变");
+        assert_eq!(username, "MigrateMe");
+        assert_eq!(uuid, minecraft_offline_uuid("MigrateMe").to_string());
+        assert_eq!(normalized, "migrateme");
+        let pinned: i64 = connection
+            .query_row(
+                "SELECT account_id FROM instance_launch_settings WHERE instance_id=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(pinned, id, "实例绑定必须不变");
+        let fk_violations: i64 = connection
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(fk_violations, 0, "foreign_key_check 必须干净");
+        assert_eq!(
+            connection
+                .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+                .unwrap(),
+            "ok"
+        );
+    }
+
+    #[test]
+    fn stored_or_repaired_offline_uuid_repairs_missing_and_corrupt() {
+        let mut connection = test_account_connection();
+        let missing = insert_test_offline(&mut connection, "RepairA");
+        connection
+            .execute(
+                "UPDATE accounts SET minecraft_uuid=NULL, legacy_offline_uuid=NULL WHERE id=?1",
+                [missing],
+            )
+            .unwrap();
+        let repaired = stored_or_repaired_offline_uuid(&connection, missing, "RepairA").unwrap();
+        assert_eq!(repaired, minecraft_offline_uuid("RepairA"));
+        let corrupt = insert_test_offline(&mut connection, "RepairB");
+        connection
+            .execute(
+                "UPDATE accounts SET minecraft_uuid='00000000-0000-4000-8000-000000000000' WHERE id=?1",
+                [corrupt],
+            )
+            .unwrap();
+        let repaired = stored_or_repaired_offline_uuid(&connection, corrupt, "RepairB").unwrap();
+        assert_eq!(repaired, minecraft_offline_uuid("RepairB"));
+        let stored: String = connection
+            .query_row(
+                "SELECT minecraft_uuid FROM accounts WHERE id=?1",
+                [corrupt],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, repaired.to_string(), "修复必须持久化");
+    }
+
+    #[test]
+    fn account_invariants_hold_after_random_operations() {
+        let mut connection = test_account_connection();
+        let mut seed = 0x1234_5678_u32;
+        let mut next = move || {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            seed
+        };
+        let mut ids: Vec<i64> = Vec::new();
+        for step in 0..300 {
+            match next() % 4 {
+                0 => {
+                    let name = format!("User{step:03}");
+                    if let Ok(id) = insert_offline_account(&mut connection, &name, "1") {
+                        ids.push(id);
+                    }
+                }
+                1 => {
+                    if let Some(&id) = ids.get((next() as usize) % ids.len().max(1)) {
+                        let _ = delete_account_transaction(&mut connection, id);
+                        ids.retain(|&candidate| candidate != id);
+                    }
+                }
+                2 => {
+                    if let Some(&id) = ids.get((next() as usize) % ids.len().max(1)) {
+                        connection
+                            .execute(
+                                "INSERT INTO settings(key,value_json) VALUES(?1,?2)
+                                 ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+                                params![SETTING_ACTIVE_ACCOUNT, id.to_string()],
+                            )
+                            .unwrap();
+                    }
+                }
+                _ => {
+                    if let Some(&id) = ids.get((next() as usize) % ids.len().max(1)) {
+                        connection
+                            .execute(
+                                "INSERT INTO settings(key,value_json) VALUES(?1,?2)
+                                 ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+                                params![SETTING_DEFAULT_ACCOUNT, id.to_string()],
+                            )
+                            .unwrap();
+                    }
+                }
+            }
+        }
+        // Invariants
+        let duplicate_ids: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM (SELECT id FROM accounts GROUP BY id HAVING COUNT(*)>1)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(duplicate_ids, 0);
+        let bad_uuid: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM accounts WHERE account_type='OFFLINE' AND minecraft_uuid IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(bad_uuid, 0, "离线账户必须始终有 UUID");
+        let bad_normalized: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM accounts WHERE account_type='OFFLINE' AND username_normalized <> lower(display_name)",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(bad_normalized, 0);
+        let fk_violations: i64 = connection
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(fk_violations, 0);
+        assert_eq!(
+            connection
+                .query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))
+                .unwrap(),
+            "ok"
+        );
+        let dangling_settings: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM settings
+                 WHERE key IN (?1, ?2) AND NOT EXISTS(
+                     SELECT 1 FROM accounts WHERE id = CAST(value_json AS INTEGER))",
+                params![SETTING_ACTIVE_ACCOUNT, SETTING_DEFAULT_ACCOUNT],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(dangling_settings, 0, "账户引用必须始终有效");
     }
 }

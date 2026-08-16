@@ -85,6 +85,36 @@ if (!parsed || typeof parsed !== "object" || Object.keys(parsed).length === 0) {
   fail("下载基准报告为空或无效");
 }
 
+// 4b. Offline Account 门禁：必须存在 machine-generated evidence，禁止只靠 Markdown 打勾。
+const accountIntegrity = read("docs/evidence/offline-account-integrity.json");
+const accountFlow = read("docs/evidence/offline-account-flow.json");
+const accountMigration = read("docs/evidence/account-migration.json");
+if (!accountIntegrity || !accountFlow || !accountMigration) {
+  fail(
+    "缺少 docs/evidence 下的 offline-account-integrity / offline-account-flow / account-migration evidence",
+  );
+}
+try {
+  const integrity = JSON.parse(accountIntegrity);
+  const flow = JSON.parse(accountFlow);
+  const migration = JSON.parse(accountMigration);
+  if (integrity.status !== "passed") fail("离线账户完整性检查未通过。");
+  if (!["passed", "passed_with_java8_env_blocked"].includes(flow.status)) {
+    fail("离线账户真实验收未通过。");
+  }
+  if (migration.status !== "passed") fail("真实数据库迁移验收未通过。");
+  if (flow.status === "passed_with_java8_env_blocked") {
+    console.warn(
+      "[release-gate] WARN: Java 8 + 1.16.5 启动验收因本机网络（Adoptium 不可达）未闭环。",
+    );
+  }
+  if (typeof flow.steps?.vanillaLaunch?.identitySnapshot?.matchesFrozenIdentity !== "boolean") {
+    fail("账户启动快照证据缺失或格式无效。");
+  }
+} catch (error) {
+  fail(`账户 evidence 解析失败：${error.message}`);
+}
+
 // 5. Git 工作区必须干净（发布前由调用方保证）。
 if (multiplayerExternalPending.length > 0) {
   console.warn("[release-gate] WARN: External acceptance remains pending.");

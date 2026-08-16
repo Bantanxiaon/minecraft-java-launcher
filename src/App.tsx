@@ -437,6 +437,7 @@ export default function App() {
   async function runBootChecks() {
     const [
       accountsResult,
+      accountStateResult,
       instancesResult,
       javaResult,
       settingsResult,
@@ -445,6 +446,9 @@ export default function App() {
       archivesResult,
     ] = await Promise.allSettled([
       invoke<Account[]>("list_accounts"),
+      invoke<{ activeAccountId?: number; defaultAccountId?: number }>(
+        "get_account_state",
+      ),
       invoke<Instance[]>("list_instances"),
       invoke<JavaRuntime[]>("detect_java_runtimes"),
       invoke<LauncherSettings>("get_settings"),
@@ -456,7 +460,15 @@ export default function App() {
     if (accountsResult.status === "fulfilled") {
       const savedAccounts = accountsResult.value;
       setAccounts(savedAccounts);
-      setSelectedAccountId(savedAccounts[0]?.id);
+      const persisted =
+        accountStateResult.status === "fulfilled"
+          ? accountStateResult.value.activeAccountId ??
+            accountStateResult.value.defaultAccountId
+          : undefined;
+      const restored = persisted && savedAccounts.some((account) => account.id === persisted)
+        ? persisted
+        : savedAccounts[0]?.id;
+      setSelectedAccountId(restored);
     } else {
       setMessage(errorText(accountsResult.reason, "无法读取账户。"));
     }
@@ -859,6 +871,13 @@ export default function App() {
     };
   }, [activeNav, modInstanceId]);
 
+  function selectAccount(accountId: number) {
+    setSelectedAccountId(accountId);
+    if (isTauri()) {
+      void invoke("set_active_account", { accountId }).catch(() => {});
+    }
+  }
+
   async function createProfile() {
     const displayName = draft.trim();
     if (!/^[A-Za-z0-9_]{3,16}$/.test(displayName)) {
@@ -876,7 +895,7 @@ export default function App() {
         displayName,
       });
       setAccounts((existing) => [account, ...existing]);
-      setSelectedAccountId(account.id);
+      selectAccount(account.id);
       setDraft("");
     } catch (error) {
       setMessage(errorText(error, "创建档案失败。"));
@@ -900,7 +919,7 @@ export default function App() {
         account,
         ...existing.filter((candidate) => candidate.id !== account.id),
       ]);
-      setSelectedAccountId(account.id);
+      selectAccount(account.id);
       setMessage("Microsoft 账户已安全保存到 Windows 凭据存储。 ");
     } catch (error) {
       setMessage(errorText(error, "Microsoft 登录失败。"));
@@ -915,8 +934,15 @@ export default function App() {
     setMessage("正在安全移除账户…");
     try {
       await invoke("remove_account", { accountId: account.id });
-      setAccounts((existing) => existing.filter((candidate) => candidate.id !== account.id));
-      setSelectedAccountId((selected) => selected === account.id ? undefined : selected);
+      const remaining = accounts.filter((candidate) => candidate.id !== account.id);
+      setAccounts(remaining);
+      const nextId = remaining[0]?.id;
+      setSelectedAccountId(nextId);
+      if (isTauri()) {
+        await invoke("set_active_account", {
+          accountId: nextId ?? null,
+        }).catch(() => {});
+      }
       setMessage("账户已移除；Microsoft 凭据也已从 Windows 凭据管理器清理。 ");
     } catch (error) {
       setMessage(errorText(error, "移除账户失败。"));
@@ -946,7 +972,7 @@ export default function App() {
         account,
         ...existing.filter((candidate) => candidate.id !== account.id),
       ]);
-      setSelectedAccountId(account.id);
+      selectAccount(account.id);
       setMessage(`外置登录成功：${account.displayName}，凭据已安全保存。`);
     } catch (error) {
       setMessage(errorText(error, "外置登录失败。"));
@@ -2662,7 +2688,7 @@ export default function App() {
             </small>
           </div>
           {accounts.length > 1 ? (
-            <select className="account-switcher" aria-label="切换账户" value={current?.id ?? ""} onChange={(event) => setSelectedAccountId(Number(event.target.value))}>
+            <select className="account-switcher" aria-label="切换账户" value={current?.id ?? ""} onChange={(event) => selectAccount(Number(event.target.value))}>
               {accounts.map((account) => <option key={account.id} value={account.id}>{account.displayName} · {account.accountType === "MICROSOFT" ? "正版" : account.accountType === "EXTERNAL" ? "外置" : "离线"}</option>)}
             </select>
           ) : null}
@@ -3019,7 +3045,7 @@ export default function App() {
                 return;
               }
               setSelectedInstanceId(instanceId);
-              setSelectedAccountId(accountId);
+              selectAccount(accountId);
               void launchSelectedInstance(instance, false, server, accountId);
             }}
             onQuickJoin={(address, instanceId, accountId) => {
@@ -3031,7 +3057,7 @@ export default function App() {
                 return;
               }
               setSelectedInstanceId(instanceId);
-              setSelectedAccountId(accountId);
+              selectAccount(accountId);
               void launchSelectedInstance(
                 instance,
                 false,
@@ -3171,7 +3197,7 @@ export default function App() {
             microsoftLoginAvailable={microsoftLoginAvailable}
             accounts={accounts}
             selectedAccountId={current?.id}
-            onSelectAccount={setSelectedAccountId}
+            onSelectAccount={selectAccount}
             onRemoveAccount={(account) => void removeAccount(account)}
             onCleanCache={() => void cleanLauncherCache()}
           />
