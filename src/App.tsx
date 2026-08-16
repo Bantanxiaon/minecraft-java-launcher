@@ -410,7 +410,10 @@ export default function App() {
           // 存储不可用时本次启动直接弹出
           setShowHighlights(true);
         }
-        if (isTauri()) {
+        // 只有主窗口负责“显示自己 + 关闭启动小窗”的交接。
+        // 若小窗口里的前端先执行到这里就关闭自身，主窗口还没显示，
+        // 应用会因“无可见窗口”而干净退出（0.9.0 的启动闪退竞态）。
+        if (isTauri() && getCurrentWindow().label === "main") {
           const mainWindow = getCurrentWindow();
           try {
             await mainWindow.show();

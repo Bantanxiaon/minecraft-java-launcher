@@ -368,6 +368,7 @@ mod modpack_ops;
 mod multiplayer;
 mod storage;
 mod system;
+mod update_fast;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -13882,6 +13883,7 @@ pub fn run() {
             cancel_active_downloads,
             cancel_download_job,
             download_perf::download_diagnostics,
+            update_fast::install_update_fast,
             launch_instance,
             multiplayer::multiplayer_prepare,
             multiplayer::multiplayer_start,

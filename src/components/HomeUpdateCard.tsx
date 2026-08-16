@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { relaunch } from "@tauri-apps/plugin-process";
 import type { Update } from "@tauri-apps/plugin-updater";
 import { Download, Sparkles, X } from "lucide-react";
@@ -8,6 +10,13 @@ type LastUpdate = {
   version: string;
   notes?: string;
   at: string;
+};
+
+type UpdateProgress = {
+  downloaded: number;
+  total: number;
+  speed: number;
+  url: string;
 };
 
 type HomeUpdateCardProps = {
@@ -62,22 +71,14 @@ export function HomeUpdateCard({
     let downloaded = 0;
     let total: number | undefined;
     let lastError: unknown;
+    const unlisten = await listen<UpdateProgress>("update-progress", (event) => {
+      downloaded = event.payload.downloaded;
+      if (event.payload.total) total = event.payload.total;
+      if (total)
+        setProgress(Math.min(100, Math.round((downloaded * 100) / total)));
+    }).catch(() => () => {});
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
-        await target.downloadAndInstall((event) => {
-          if (event.event === "Started") {
-            total = event.data.contentLength;
-            setProgress(total ? 0 : undefined);
-          } else if (event.event === "Progress") {
-            downloaded += event.data.chunkLength;
-            if (total)
-              setProgress(
-                Math.min(100, Math.round((downloaded * 100) / total)),
-              );
-          } else {
-            setProgress(100);
-          }
-        }, { timeout: 300_000 });
         localStorage.setItem(
           LAST_UPDATE_KEY,
           JSON.stringify({
@@ -86,10 +87,12 @@ export function HomeUpdateCard({
             at: new Date().toISOString(),
           } satisfies LastUpdate),
         );
+        await invoke("install_update_fast");
         await relaunch();
         return;
       } catch (error) {
         lastError = error;
+        localStorage.removeItem(LAST_UPDATE_KEY);
         if (attempt < 3) {
           downloaded = 0;
           total = undefined;
@@ -104,6 +107,7 @@ export function HomeUpdateCard({
         String(lastError),
       );
     }
+    unlisten();
     setInstalling(false);
   }
 

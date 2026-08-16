@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 
@@ -52,18 +53,17 @@ export function UpdaterCard() {
     setStatus("正在下载并验证更新…");
     let downloaded = 0;
     let total: number | undefined;
+    const unlisten = await listen<{
+      downloaded: number;
+      total: number;
+      speed: number;
+      url: string;
+    }>("update-progress", (event) => {
+      downloaded = event.payload.downloaded;
+      if (event.payload.total) total = event.payload.total;
+      if (total) setProgress(Math.min(100, Math.round((downloaded * 100) / total)));
+    }).catch(() => () => {});
     try {
-      await update.downloadAndInstall((event) => {
-        if (event.event === "Started") {
-          total = event.data.contentLength;
-          setProgress(total ? 0 : undefined);
-        } else if (event.event === "Progress") {
-          downloaded += event.data.chunkLength;
-          if (total) setProgress(Math.min(100, Math.round(downloaded * 100 / total)));
-        } else {
-          setProgress(100);
-        }
-      }, { timeout: 120_000 });
       localStorage.setItem(
         LAST_UPDATE_KEY,
         JSON.stringify({
@@ -72,11 +72,15 @@ export function UpdaterCard() {
           at: new Date().toISOString(),
         }),
       );
+      await invoke("install_update_fast");
       setStatus("更新已安装，正在重新打开启动器…");
       await relaunch();
     } catch {
+      localStorage.removeItem(LAST_UPDATE_KEY);
       setStatus("更新没有安装成功，旧版本仍可正常使用。请稍后重试。");
       setInstalling(false);
+    } finally {
+      unlisten();
     }
   }
 
