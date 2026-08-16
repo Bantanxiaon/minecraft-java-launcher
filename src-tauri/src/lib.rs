@@ -4383,6 +4383,135 @@ async fn modrinth_project_by_hash(sha1: &str) -> Option<String> {
         .filter(|id| id.chars().all(|value| value.is_ascii_alphanumeric()))
 }
 
+fn normalize_modrinth_identity(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| {
+            character.is_ascii_alphanumeric() || *character == '-' || *character == '_'
+        })
+        .map(|character| {
+            if character == '_' {
+                '-'
+            } else {
+                character.to_ascii_lowercase()
+            }
+        })
+        .collect()
+}
+
+/// Provider metadata → dependency metadata：从整合包/已安装项目的版本依赖反查 dep 的 project_id。
+async fn resolve_modrinth_dependency_metadata(
+    app: &AppHandle,
+    instance_id: i64,
+    dep: &str,
+    game_version: &str,
+    loader: &str,
+) -> Result<Option<String>, LauncherError> {
+    let connection = open_database(app)?;
+    let mut project_ids: Vec<String> = Vec::new();
+    if let Ok(Some(pack_project)) = connection.query_row(
+        "SELECT project_id FROM instance_pack_source WHERE instance_id=?1 AND provider='modrinth'",
+        [instance_id],
+        |row| row.get::<_, Option<String>>(0),
+    ) {
+        project_ids.push(pack_project);
+    }
+    {
+        let mut statement = connection
+            .prepare(
+                "SELECT DISTINCT metadata_json FROM content_items
+                 WHERE instance_id=?1 AND kind='mod' AND source='modrinth' LIMIT 16",
+            )
+            .map_err(|error| LauncherError::storage(error.to_string()))?;
+        let rows = statement
+            .query_map([instance_id], |row| row.get::<_, Option<String>>(0))
+            .map_err(|error| LauncherError::storage(error.to_string()))?
+            .filter_map(Result::ok)
+            .flatten()
+            .collect::<Vec<_>>();
+        for metadata in rows {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&metadata) {
+                if let Some(project_id) = value
+                    .get("modrinthProjectId")
+                    .and_then(|value| value.as_str())
+                {
+                    if !project_ids.contains(&project_id.to_string()) {
+                        project_ids.push(project_id.to_string());
+                    }
+                }
+            }
+        }
+    }
+    drop(connection);
+    let target = normalize_modrinth_identity(dep);
+    for project_id in project_ids.into_iter().take(12) {
+        let Ok(versions) =
+            fetch_project_versions(&project_id, Some(game_version), Some(loader)).await
+        else {
+            continue;
+        };
+        for version in versions {
+            let Some(dependencies) = version
+                .get("dependencies")
+                .and_then(|value| value.as_array())
+            else {
+                continue;
+            };
+            for dependency in dependencies {
+                let Some(candidate_project) = dependency
+                    .get("project_id")
+                    .and_then(|value| value.as_str())
+                else {
+                    continue;
+                };
+                if candidate_project == project_id.as_str() {
+                    continue;
+                }
+                let Ok(project_value) = fetch_modrinth_json(
+                    reqwest::Url::parse(&format!(
+                        "https://api.modrinth.com/v2/project/{candidate_project}"
+                    ))
+                    .map_err(|error| LauncherError::storage(error.to_string()))?,
+                )
+                .await
+                else {
+                    continue;
+                };
+                let title = normalize_modrinth_identity(
+                    project_value
+                        .get("title")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default(),
+                );
+                let slug = normalize_modrinth_identity(
+                    project_value
+                        .get("slug")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default(),
+                );
+                if title == target || slug == target {
+                    let connection = open_database(app)?;
+                    let _ = connection.execute(
+                        "INSERT INTO content_identity_cache(local_mod_id, game_version, loader, provider, project_id, confidence, source, updated_at)
+                         VALUES(?1, ?2, ?3, 'modrinth', ?4, 'TRUSTED_MAPPING', 'provider_dependency_metadata', ?5)
+                         ON CONFLICT(local_mod_id, game_version, loader, provider) DO UPDATE SET
+                           project_id=excluded.project_id, confidence=excluded.confidence, source=excluded.source, updated_at=excluded.updated_at",
+                        rusqlite::params![
+                            dep.to_ascii_lowercase(),
+                            game_version,
+                            loader,
+                            candidate_project,
+                            chrono_like_timestamp()
+                        ],
+                    );
+                    return Ok(Some(candidate_project.to_string()));
+                }
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// 统一解析并安装缺失前置：优先 CurseForge 索引的 Mod ID 精确匹配，其次 Modrinth。
 async fn resolve_missing_mod_dependency(
     app: &AppHandle,
@@ -4391,6 +4520,23 @@ async fn resolve_missing_mod_dependency(
 ) -> Result<ContentItem, LauncherError> {
     if let Ok(item) = resolve_curseforge_dependency(app, instance_id, dep).await {
         return Ok(item);
+    }
+    let connection = open_database(app)?;
+    let (game_version, loader): (String, String) = connection
+        .query_row(
+            "SELECT game_version, loader_type FROM instances WHERE id=?1",
+            [instance_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|_| LauncherError::validation("目标实例不存在。"))?;
+    drop(connection);
+    // Provider metadata（整合包版本依赖）→ 已安装项目版本依赖。
+    if let Some(project_id) =
+        resolve_modrinth_dependency_metadata(app, instance_id, dep, &game_version, &loader).await?
+    {
+        if let Ok(item) = install_modrinth_mod(app.clone(), instance_id, project_id).await {
+            return Ok(item);
+        }
     }
     // kotlinforforge 是语言加载器：Modrinth 项目名是 “kotlin-for-forge”，
     // 直接按官方项目 ID 安装，避免搜索不到。
@@ -12055,6 +12201,22 @@ side="BOTH"
         ];
         let matches = exact_candidate_matches("totally_unknown_mod_xyz", &hits);
         assert!(matches.is_empty(), "未知 modId 不得被静默解析");
+    }
+
+    #[test]
+    fn modrinth_identity_normalization_is_stable() {
+        assert_eq!(
+            normalize_modrinth_identity("Iron's Spells 'n Spellbooks"),
+            "ironsspellsnspellbooks"
+        );
+        assert_eq!(
+            normalize_modrinth_identity("Timeless and Classics Zero"),
+            "timelessandclassicszero"
+        );
+        assert_eq!(
+            normalize_modrinth_identity("irons_spellbooks"),
+            "irons-spellbooks"
+        );
     }
 
     #[test]

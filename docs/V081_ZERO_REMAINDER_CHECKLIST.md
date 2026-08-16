@@ -5,8 +5,8 @@
 ## Resolver（优先链：provider metadata → dependency metadata → hash → trusted mapping → 限定精确搜索 → Ambiguous/Unknown）
 
 - [x] provider 原始 metadata（CurseForge 索引 modId→project/file，`resolve_curseforge_dependency` 第一层）— Tests: `curseforge_dependency_resolution_prefers_mod_id`；Verification: cargo test
-- [ ] provider 原始 metadata（Modrinth 整合包文件 → project/version 映射记录）
-- [ ] provider dependency metadata（已安装项目 version 依赖的 project_id 反查）
+- [x] provider 原始 metadata（instance_pack_source → 整合包版本依赖反查 project_id，第一优先层）
+- [x] provider dependency metadata（已安装 Modrinth 项目版本依赖 → 依赖项目 title/slug 归一化匹配，结果写入 content_identity_cache）
 - [x] exact hash reverse lookup（`modrinth_project_by_hash`，SHA-1 → version_file）— Tests: 待补 URL/解析单测
 - [x] trusted mapping（已核对别名 + `content_identity_cache` 表；别名只作为一层）— Tests: `missing_dependencies_reports_kotlinforforge_when_absent`
 - [x] 限定精确搜索（project_type=mod + 精确 slug/title 匹配）— Tests: `resolver_unknown_mod_without_exact_match_returns_no_candidates`
