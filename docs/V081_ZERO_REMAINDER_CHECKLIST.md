@@ -63,11 +63,10 @@
 
 - [x] SecureArchiveExtractor 统一核心（`fs_safe::extract_zip_securely` + traversal/absolute/zip-slip/safe 测试）
 - [x] Java 安装接入统一解压
-- [ ] Native JAR 接入
-- [ ] Modpack ZIP 接入
-- [ ] World ZIP 接入
-- [ ] Resource Pack 接入
-- [ ] Shader Pack 接入
+- [x] Native JAR 接入（staging 安全解压后按原结构复制，META-INF 排除）
+- [x] Modpack overrides 接入（安全解压到 staging → 校验路径 → 冲突备份后落位）
+- [x] World ZIP 接入（安全解压 staging → level.dat 定位世界根 → 原子 rename）
+- [x] Resource Pack / Shader Pack：以压缩包原样保存（Minecraft 直接读取），入口已有结构校验，无需解压
 - [x] Windows 保留名 / 结尾点空格 / 禁用字符（`validate_windows_filename` 接入 instance 字段）
 - [ ] symlink/reparse 全路径实测
 

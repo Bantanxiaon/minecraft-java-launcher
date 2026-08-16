@@ -4784,47 +4784,52 @@ fn move_pack_collision_to_backup(game: &Path, output: &Path) -> Result<(), Launc
 }
 
 fn extract_pack_overrides(source: &Path, game: &Path) -> Result<usize, LauncherError> {
-    let file = fs::File::open(source).map_err(|error| LauncherError::storage(error.to_string()))?;
-    let mut archive =
-        zip::ZipArchive::new(file).map_err(|error| LauncherError::validation(error.to_string()))?;
+    let limits = fs_safe::ArchiveLimits::default();
+    let staging = game
+        .join(".staging")
+        .join(format!("overrides-{}", unique_timestamp()));
+    let report = fs_safe::extract_zip_securely(source, &staging, &limits)?;
+    let overrides_root = ["overrides", "client-overrides"]
+        .iter()
+        .map(|name| staging.join(name))
+        .find(|path| path.is_dir())
+        .unwrap_or_else(|| staging.clone());
     let mut count = 0usize;
-    for index in 0..archive.len() {
-        let mut entry = archive
-            .by_index(index)
-            .map_err(|error| LauncherError::validation(error.to_string()))?;
-        if entry.is_dir() {
-            continue;
-        }
-        if entry
-            .unix_mode()
-            .is_some_and(|mode| mode & 0o170000 == 0o120000)
+    let mut pending = vec![overrides_root.clone()];
+    while let Some(current) = pending.pop() {
+        for entry in fs::read_dir(&current)
+            .map_err(|error| LauncherError::storage(error.to_string()))?
+            .flatten()
         {
-            return Err(LauncherError::validation("整合包包含不允许的符号链接。"));
+            let path = entry.path();
+            if entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+                pending.push(path);
+                continue;
+            }
+            let Ok(relative) = path.strip_prefix(&overrides_root) else {
+                continue;
+            };
+            if relative.as_os_str().is_empty() {
+                continue;
+            }
+            let output = pack_target_path(game, &relative.to_string_lossy())?;
+            if let Some(parent) = output.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|error| LauncherError::storage(error.to_string()))?;
+            }
+            if output.exists() {
+                move_pack_collision_to_backup(game, &output)?;
+            }
+            fs::copy(&path, &output).map_err(|error| LauncherError::storage(error.to_string()))?;
+            count += 1;
         }
-        let normalized = entry.name().replace('\\', "/");
-        let relative = normalized
-            .strip_prefix("overrides/")
-            .or_else(|| normalized.strip_prefix("client-overrides/"));
-        let Some(relative) = relative else { continue };
-        if relative.is_empty() {
-            continue;
-        }
-        let output = pack_target_path(game, relative)?;
-        if let Some(parent) = output.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| LauncherError::storage(error.to_string()))?;
-        }
-        let temporary = output.with_extension(format!("part-{}", unique_timestamp()));
-        let mut file = fs::File::create(&temporary)
-            .map_err(|error| LauncherError::storage(error.to_string()))?;
-        std::io::copy(&mut entry, &mut file)
-            .map_err(|error| LauncherError::storage(error.to_string()))?;
-        if output.exists() {
-            move_pack_collision_to_backup(game, &output)?;
-        }
-        fs::rename(temporary, output).map_err(|error| LauncherError::storage(error.to_string()))?;
-        count += 1;
     }
+    let _ = fs::remove_dir_all(&staging);
+    log::info!(
+        "整合包 overrides 解压完成：entries={} files={}",
+        report.entries,
+        count
+    );
     Ok(count)
 }
 
@@ -6655,69 +6660,57 @@ fn locate_world_directory(source: &Path) -> Result<PathBuf, LauncherError> {
 }
 
 fn extract_world_zip(source: &Path, destination: &Path) -> Result<usize, LauncherError> {
-    let file = fs::File::open(source).map_err(|error| LauncherError::storage(error.to_string()))?;
-    let mut archive = zip::ZipArchive::new(file)
-        .map_err(|error| LauncherError::validation(format!("存档 ZIP 无效：{error}")))?;
-    if archive.len() > 200_000 {
-        return Err(LauncherError::validation("存档 ZIP 条目过多。"));
-    }
-    let mut roots = Vec::new();
-    for index in 0..archive.len() {
-        let entry = archive
-            .by_index(index)
-            .map_err(|error| LauncherError::validation(error.to_string()))?;
-        safe_relative_download_path(entry.name())?;
-        let normalized = entry.name().replace('\\', "/");
-        if normalized == "level.dat" {
-            roots.push(String::new());
-        } else if let Some(root) = normalized.strip_suffix("/level.dat") {
-            roots.push(format!("{root}/"));
+    let limits = fs_safe::ArchiveLimits {
+        max_entries: 200_000,
+        max_total_uncompressed: 20 * 1024 * 1024 * 1024,
+        max_single_file: 2 * 1024 * 1024 * 1024,
+        ..fs_safe::ArchiveLimits::default()
+    };
+    let staging = destination
+        .join(".staging")
+        .join(format!("world-{}", unique_timestamp()));
+    fs_safe::extract_zip_securely(source, &staging, &limits)?;
+    let mut level_dat = None;
+    let mut file_count = 0usize;
+    for entry in walkdir::WalkDir::new(&staging)
+        .follow_links(false)
+        .into_iter()
+        .flatten()
+    {
+        if entry.file_type().is_file() {
+            file_count += 1;
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .eq_ignore_ascii_case("level.dat")
+            {
+                level_dat = Some(entry.path().to_path_buf());
+            }
         }
     }
-    roots.sort_by_key(String::len);
-    roots.dedup();
-    let root = roots
-        .first()
-        .ok_or_else(|| LauncherError::validation("ZIP 中未找到 level.dat。"))?
-        .clone();
-    let mut count = 0usize;
-    let mut total = 0u64;
-    for index in 0..archive.len() {
-        let mut entry = archive
-            .by_index(index)
-            .map_err(|error| LauncherError::validation(error.to_string()))?;
-        if entry.is_dir() {
-            continue;
-        }
-        if entry
-            .unix_mode()
-            .is_some_and(|mode| mode & 0o170000 == 0o120000)
-        {
-            return Err(LauncherError::validation("存档 ZIP 包含符号链接。"));
-        }
-        let normalized = entry.name().replace('\\', "/");
-        let Some(relative) = normalized.strip_prefix(&root) else {
-            continue;
-        };
-        if relative.is_empty() {
-            continue;
-        }
-        let output = destination.join(safe_relative_download_path(relative)?);
-        if let Some(parent) = output.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| LauncherError::storage(error.to_string()))?;
-        }
-        total = total.saturating_add(entry.size());
-        count += 1;
-        if total > 20 * 1024 * 1024 * 1024 {
-            return Err(LauncherError::validation("存档解压后超过 20 GB。"));
-        }
-        let mut file =
-            fs::File::create(output).map_err(|error| LauncherError::storage(error.to_string()))?;
-        std::io::copy(&mut entry, &mut file)
-            .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let level_dat =
+        level_dat.ok_or_else(|| LauncherError::validation("ZIP 中未找到 level.dat。"))?;
+    let world_root = level_dat
+        .parent()
+        .map(Path::to_path_buf)
+        .filter(|parent| parent != &staging)
+        .unwrap_or_else(|| staging.clone());
+    let world_name = world_root
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|name| *name != ".staging")
+        .unwrap_or("world");
+    let target = destination.join(world_name);
+    if target.exists() {
+        return Err(LauncherError::validation(format!(
+            "存档“{world_name}”已存在，请先移除或改名。"
+        )));
     }
-    Ok(count)
+    fs::rename(&world_root, &target).map_err(|error| LauncherError::storage(error.to_string()))?;
+    if world_root != staging {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    Ok(file_count)
 }
 
 #[tauri::command]
@@ -9852,31 +9845,44 @@ fn safe_relative_download_path(value: &str) -> Result<PathBuf, LauncherError> {
 
 fn extract_native_jar(archive_path: &Path, target: &Path) -> Result<(), LauncherError> {
     fs::create_dir_all(target).map_err(|error| LauncherError::storage(error.to_string()))?;
-    let file =
-        fs::File::open(archive_path).map_err(|error| LauncherError::storage(error.to_string()))?;
-    let mut archive = zip::ZipArchive::new(file)
-        .map_err(|error| LauncherError::validation(format!("Native JAR 无效：{error}")))?;
-    if archive.len() > 20_000 {
-        return Err(LauncherError::validation("Native JAR 条目过多。"));
-    }
-    for index in 0..archive.len() {
-        let mut entry = archive
-            .by_index(index)
-            .map_err(|error| LauncherError::validation(error.to_string()))?;
-        if entry.is_dir() || entry.name().to_ascii_uppercase().starts_with("META-INF/") {
+    let limits = fs_safe::ArchiveLimits {
+        max_entries: 20_000,
+        max_total_uncompressed: 2 * 1024 * 1024 * 1024,
+        max_single_file: 512 * 1024 * 1024,
+        ..fs_safe::ArchiveLimits::default()
+    };
+    let staging = target
+        .join(".staging")
+        .join(format!("native-{}", unique_timestamp()));
+    fs_safe::extract_zip_securely(archive_path, &staging, &limits)?;
+    for entry in walkdir::WalkDir::new(&staging)
+        .follow_links(false)
+        .into_iter()
+        .flatten()
+    {
+        if !entry.file_type().is_file() {
             continue;
         }
-        let relative = safe_relative_download_path(entry.name())?;
+        let Ok(relative) = entry.path().strip_prefix(&staging) else {
+            continue;
+        };
+        if relative
+            .components()
+            .next()
+            .and_then(|component| component.as_os_str().to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("META-INF"))
+        {
+            continue;
+        }
         let output = target.join(relative);
         if let Some(parent) = output.parent() {
             fs::create_dir_all(parent)
                 .map_err(|error| LauncherError::storage(error.to_string()))?;
         }
-        let mut output_file =
-            fs::File::create(output).map_err(|error| LauncherError::storage(error.to_string()))?;
-        std::io::copy(&mut entry, &mut output_file)
+        fs::copy(entry.path(), &output)
             .map_err(|error| LauncherError::storage(error.to_string()))?;
     }
+    let _ = fs::remove_dir_all(&staging);
     Ok(())
 }
 
