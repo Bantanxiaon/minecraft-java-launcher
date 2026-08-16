@@ -34,5 +34,15 @@
     }
   ],
   "conclusion": "SH Launcher code chain verified through XSTS; Minecraft Services rejected the SH Launcher app registration; further official qualification/authorization is required.",
+  "reruns": [
+    {
+      "date": "2026-08-17",
+      "result": "MINECRAFT_SERVICES=FAIL_APP_REGISTRATION",
+      "http_status": 403,
+      "path": "/authentication/login_with_xbox",
+      "message": "Invalid app registration, see https://aka.ms/AppRegInfo for more information",
+      "preceding_stages": "OAuth PASS, XboxUserAuth PASS, XSTS PASS"
+    }
+  ],
   "notes": "No tokens, authorization codes, XBL 3.0 tickets, RpsTickets or response bodies were printed or persisted."
 }
