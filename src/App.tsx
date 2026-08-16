@@ -36,6 +36,7 @@ import { ServersPage } from "./pages/ServersPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { StoragePage } from "./pages/StoragePage";
 import { InstanceLibraryPage } from "./pages/InstanceLibraryPage";
+import { InstanceDetailPage } from "./pages/InstanceDetailPage";
 import { HomeUpdateCard } from "./components/HomeUpdateCard";
 import { SplashView } from "./components/SplashScreen";
 import { VersionHighlightsModal } from "./components/VersionHighlightsModal";
@@ -238,6 +239,7 @@ export default function App() {
   const [modpackArchives, setModpackArchives] = useState<ModpackArchive[]>([]);
   const [instances, setInstances] = useState<Instance[]>([]);
   const [selectedInstanceId, setSelectedInstanceId] = useState<number>();
+  const [openInstanceId, setOpenInstanceId] = useState<number>();
   const [versions, setVersions] = useState<VersionSummary[]>([]);
   const [javaRuntimes, setJavaRuntimes] = useState<JavaRuntime[]>([]);
   const [selectedJavaPath, setSelectedJavaPath] = useState<string>();
@@ -3020,7 +3022,35 @@ export default function App() {
         ) : activeNav === "存储" ? (
           <StoragePage />
         ) : activeNav === "游戏库" || activeNav === "实例" ? (
-          <InstanceLibraryPage
+          openInstanceId ? (
+            (() => {
+              const detailInstance = instances.find(
+                (instance) => instance.id === openInstanceId,
+              );
+              if (!detailInstance) return null;
+              return (
+                <InstanceDetailPage
+                  instance={detailInstance}
+                  javaLabel={
+                    selectedJava
+                      ? `Java ${selectedJava.majorVersion ?? selectedJava.version} · 64 位`
+                      : "未检测到 64 位 Java"
+                  }
+                  onBack={() => setOpenInstanceId(undefined)}
+                  onLaunch={(instance) => {
+                    setSelectedInstanceId(instance.id);
+                    void launchSelectedInstance(instance);
+                  }}
+                  onRepair={(instance) => void repairInstance(instance)}
+                  onOpenFolder={(instance) => void openInstanceDirectory(instance.id, "game")}
+                  onMemoryChange={(instance, memoryMb) =>
+                    void updateInstanceMemory(instance, memoryMb)
+                  }
+                />
+              );
+            })()
+          ) : (
+            <InstanceLibraryPage
             instances={instances}
             onCreate={() => { setActiveNav("主页"); setShowInstanceForm(true); }}
             onPlay={(instance) => { setSelectedInstanceId(instance.id); void launchSelectedInstance(instance); }}
@@ -3032,7 +3062,9 @@ export default function App() {
             onRepair={(instance) => void repairInstance(instance)}
             onDelete={(instance) => void deleteInstance(instance)}
             onOpen={(instance) => void openInstanceDirectory(instance.id, "game")}
+            onOpenDetails={(instance) => setOpenInstanceId(instance.id)}
           />
+          )
         ) : activeNav === "模组" ? (
           <ModsPage
             instances={instances}

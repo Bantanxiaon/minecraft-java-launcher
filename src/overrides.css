@@ -2587,6 +2587,84 @@ button.global-progress-bar:hover {
   }
 }
 
+/* ============ 实例详情页 ============ */
+.instance-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.instance-tabs button {
+  border: none;
+  background: transparent;
+  color: #64748b;
+  padding: 10px 14px;
+  font-size: 13px;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+.instance-tabs button.active {
+  color: #16a34a;
+  border-bottom-color: #16a34a;
+  font-weight: 600;
+}
+
+.instance-health-list {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.instance-health-list li {
+  color: #334155;
+  font-size: 13px;
+}
+
+.instance-health-list li.danger {
+  color: #b04a42;
+}
+
+.library-card-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.library-card-title button {
+  border: 1px solid #dfe4e8;
+  border-radius: 7px;
+  background: #fff;
+  color: #44505c;
+  padding: 4px 9px;
+  font-size: 12px;
+}
+
+.library-memory {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #334155;
+}
+
+.log-preview {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+  font-size: 11.5px;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 @media (max-width: 900px) {
   .download-detail-grid {
     grid-template-columns: 1fr;

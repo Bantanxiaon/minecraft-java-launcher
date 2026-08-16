@@ -250,3 +250,16 @@ export type RoomInfo = {
   state: string;
   address?: string;
 };
+export type InstanceHealth = {
+  instanceId: number;
+  name: string;
+  gameVersion: string;
+  loaderType: string;
+  loaderVersion?: string;
+  memoryMb: number;
+  status: string;
+  gameFilesOk: boolean;
+  modCount: number;
+  missingDependencies: string[];
+  incompatibleMods: string[];
+};

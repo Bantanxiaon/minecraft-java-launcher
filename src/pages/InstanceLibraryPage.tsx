@@ -72,6 +72,7 @@ export function InstanceLibraryPage({
   onRepair,
   onDelete,
   onOpen,
+  onOpenDetails,
 }: {
   instances: Instance[];
   onPlay: (instance: Instance) => void;
@@ -82,6 +83,7 @@ export function InstanceLibraryPage({
   onRepair: (instance: Instance) => void;
   onDelete: (instance: Instance) => void;
   onOpen: (instance: Instance) => void;
+  onOpenDetails: (instance: Instance) => void;
 }) {
   const [query, setQuery] = useState("");
   const [loader, setLoader] = useState("all");
@@ -134,7 +136,10 @@ export function InstanceLibraryPage({
             <article className="library-card" key={instance.id}>
               <div className="library-art"><img src={grassBlock} alt="" /></div>
               <div className="library-card-body">
-                <div className="library-card-title"><h2>{instance.name}</h2></div>
+                <div className="library-card-title">
+                  <h2>{instance.name}</h2>
+                  <button onClick={() => onOpenDetails(instance)}>详情</button>
+                </div>
                 <p>{instance.gameVersion} · {instance.loaderType === "vanilla" ? "Vanilla" : instance.loaderType}</p>
                 <div className="library-card-meta">
                   <span><Box size={14} /> {instance.status === "ready" ? "已就绪" : "待安装"}</span>
