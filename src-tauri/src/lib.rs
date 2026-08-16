@@ -42,6 +42,22 @@ struct BuildInfo {
     build_timestamp: &'static str,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InstanceHealth {
+    instance_id: i64,
+    name: String,
+    game_version: String,
+    loader_type: String,
+    loader_version: Option<String>,
+    memory_mb: i64,
+    status: String,
+    game_files_ok: bool,
+    mod_count: usize,
+    missing_dependencies: Vec<String>,
+    incompatible_mods: Vec<String>,
+}
+
 #[tauri::command]
 fn build_info() -> BuildInfo {
     BuildInfo {
@@ -54,6 +70,118 @@ fn build_info() -> BuildInfo {
         },
         build_timestamp: env!("SH_BUILD_TIMESTAMP"),
     }
+}
+
+#[tauri::command]
+fn instance_health(app: AppHandle, instance_id: i64) -> Result<InstanceHealth, LauncherError> {
+    let connection = open_database(&app)?;
+    let (name, root_path, game_version, loader_type, loader_version, memory_mb, status): (
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        i64,
+        String,
+    ) = connection
+        .query_row(
+            "SELECT name, root_path, game_version, loader_type, loader_version, memory_mb, status FROM instances WHERE id=?1",
+            [instance_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .map_err(|_| LauncherError::validation("实例不存在。"))?;
+    drop(connection);
+    let game = PathBuf::from(&root_path).join(".minecraft");
+    let game_files_ok = game
+        .join("versions")
+        .join(&game_version)
+        .join(format!("{game_version}.jar"))
+        .is_file();
+    let mods = game.join("mods");
+    let mut mod_count = 0usize;
+    let mut missing_ids = Vec::new();
+    let mut incompatible_mods = Vec::new();
+    if loader_type != "vanilla" && mods.is_dir() {
+        for entry in fs::read_dir(&mods)
+            .map_err(|error| LauncherError::storage(error.to_string()))?
+            .flatten()
+        {
+            if entry
+                .path()
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_none_or(|value| !value.eq_ignore_ascii_case("jar"))
+            {
+                continue;
+            }
+            let Ok(info) = inspect_mod_jar_path(&entry.path()) else {
+                continue;
+            };
+            if info.loader_type == "unknown" {
+                continue;
+            }
+            mod_count += 1;
+            if !info.game_version_requirements.is_empty()
+                && !info
+                    .game_version_requirements
+                    .iter()
+                    .any(|requirement| game_version_matches(requirement, &game_version))
+            {
+                incompatible_mods.push(info.file_name.clone());
+            }
+            if !loaders_compatible(&loader_type, &info.loader_type) {
+                incompatible_mods.push(info.file_name);
+            }
+        }
+        let installed = installed_mod_ids(
+            fs::read_dir(&mods)
+                .map_err(|error| LauncherError::storage(error.to_string()))?
+                .flatten()
+                .filter_map(|entry| inspect_mod_jar_path(&entry.path()).ok())
+                .collect::<Vec<_>>()
+                .iter(),
+        );
+        let mut seen = BTreeSet::new();
+        for entry in fs::read_dir(&mods)
+            .map_err(|error| LauncherError::storage(error.to_string()))?
+            .flatten()
+        {
+            let Ok(info) = inspect_mod_jar_path(&entry.path()) else {
+                continue;
+            };
+            for dependency in missing_dependencies(
+                info.dependencies.iter().map(|id| id.as_str()),
+                &installed,
+                has_kotlinforforge_file(&mods),
+            ) {
+                seen.insert(dependency);
+            }
+        }
+        missing_ids = seen.into_iter().collect();
+    }
+    Ok(InstanceHealth {
+        instance_id,
+        name,
+        game_version,
+        loader_type,
+        loader_version,
+        memory_mb,
+        status,
+        game_files_ok,
+        mod_count,
+        missing_dependencies: missing_ids,
+        incompatible_mods,
+    })
 }
 
 /// 与 Java `UUID.nameUUIDFromBytes("OfflinePlayer:<name>")` 完全一致的离线 UUID：
@@ -11257,6 +11385,7 @@ pub fn run() {
         )
         .invoke_handler(tauri::generate_handler![
             build_info,
+            instance_health,
             exit_launcher,
             hide_launcher_window,
             terminate_game,
