@@ -10741,10 +10741,7 @@ async fn download_verified_file_with_progress(
     // 慢来源自动切换：主源近期吞吐过低或失败率过高时，优先走 BMCLAPI 镜像，
     // SHA-1 校验不变，失败再回主源，保证可用性优先且不出错。
     if let Ok(parsed) = validate_resource_url(url) {
-        if parsed
-            .host_str()
-            .is_some_and(download_perf::host_is_slow)
-        {
+        if parsed.host_str().is_some_and(download_perf::host_is_slow) {
             if let Some(mirror) = bmclapi_mirror_url(&parsed) {
                 log::info!(
                     "下载源 {} 判定为慢速，本次自动改用镜像。",
