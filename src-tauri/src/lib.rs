@@ -10743,7 +10743,7 @@ async fn download_verified_file_with_progress(
     if let Ok(parsed) = validate_resource_url(url) {
         if parsed
             .host_str()
-            .is_some_and(|host| download_perf::host_is_slow(host))
+            .is_some_and(download_perf::host_is_slow)
         {
             if let Some(mirror) = bmclapi_mirror_url(&parsed) {
                 log::info!(
