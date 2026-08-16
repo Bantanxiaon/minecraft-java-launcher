@@ -214,6 +214,7 @@ mod diagnostics;
 mod download_perf;
 mod exports;
 mod fs_safe;
+mod modpack_ops;
 mod multiplayer;
 mod storage;
 mod system;
@@ -5115,6 +5116,56 @@ fn extract_pack_overrides(source: &Path, game: &Path) -> Result<usize, LauncherE
 
 #[tauri::command]
 async fn import_modrinth_pack(
+    app: AppHandle,
+    source_path: String,
+) -> Result<ImportedModpack, LauncherError> {
+    let operation_id = format!("modrinth-{}", unique_timestamp());
+    let now = chrono_like_timestamp();
+    modpack_ops::write_operation_metadata(&modpack_ops::OperationMetadata {
+        id: operation_id.clone(),
+        kind: "modrinth".into(),
+        state: "running".into(),
+        instance_id: None,
+        file_count: 0,
+        bytes: 0,
+        error: None,
+        created_at: now.clone(),
+        updated_at: now,
+    })?;
+    match import_modrinth_pack_inner(app, source_path).await {
+        Ok(result) => {
+            modpack_ops::write_operation_metadata(&modpack_ops::OperationMetadata {
+                id: operation_id.clone(),
+                kind: "modrinth".into(),
+                state: "committed".into(),
+                instance_id: Some(result.instance.id),
+                file_count: result.downloaded_files as u64,
+                bytes: 0,
+                error: None,
+                created_at: chrono_like_timestamp(),
+                updated_at: chrono_like_timestamp(),
+            })?;
+            let _ = modpack_ops::cleanup_operation(operation_id.clone());
+            Ok(result)
+        }
+        Err(error) => {
+            modpack_ops::write_operation_metadata(&modpack_ops::OperationMetadata {
+                id: operation_id.clone(),
+                kind: "modrinth".into(),
+                state: "failed".into(),
+                instance_id: None,
+                file_count: 0,
+                bytes: 0,
+                error: Some(error.message.clone()),
+                created_at: chrono_like_timestamp(),
+                updated_at: chrono_like_timestamp(),
+            })?;
+            Err(error)
+        }
+    }
+}
+
+async fn import_modrinth_pack_inner(
     app: AppHandle,
     source_path: String,
 ) -> Result<ImportedModpack, LauncherError> {
@@ -11544,6 +11595,8 @@ pub fn run() {
             storage::cleanup_staging_operation,
             content_reconcile::reconcile_scan,
             content_reconcile::reconcile_apply,
+            modpack_ops::list_operations,
+            modpack_ops::cleanup_operation,
             list_removed_backups,
             restore_removed_backup,
             exports::export_instance_modpack,

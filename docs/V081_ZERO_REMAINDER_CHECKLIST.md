@@ -26,7 +26,8 @@
 ## Modpack / Update
 
 - [ ] 整合包事务：staging 下载 → hash → overrides → loader/dependency/disk 验证 → atomic commit → DB commit
-- [ ] 崩溃恢复：读取 `.staging/<operation-id>` operation metadata，支持继续/回滚/清理（当前只有扫描+删除）
+- [x] 崩溃恢复基础：`.staging/<operation-id>/operation.json` 元数据（running/committed/failed）+ list/cleanup 命令，Modrinth 导入已接入生命周期
+- [ ] 崩溃恢复完整：failed 操作继续/回滚（当前为清理/重试语义）
 - [ ] Content UpdatePlan 接入业务（当前 `update_modrinth_mod` 为内联备份+回滚，无 plan struct）
 - [ ] Modpack UpdatePlan（pack-owned / user-added / user-modified / saves / config 区分，snapshot + rollback）
 - [ ] 用户 saves / 自加 Mod / 修改 config 保护测试
