@@ -1,0 +1,63 @@
+{
+  "head": "4c908c80e9d3dd0b7ff6601d72d82624fa1f8cd8",
+  "workingTreeHash": "3f31e0535964a659165f76441e0461aa309901524d3f259c4eb3457797938b55",
+  "runtime": "tauri production",
+  "dataDirectory": "D:/MinecraftLauncherData",
+  "fixture": "D:\\minecraft-java-launcher\\docs\\evidence\\nextgen\\audit\\fixtures\\sh-audit-fixture-curseforge-forge-47.4.22.zip",
+  "generatedAt": "2026-08-17T10:36:36.229Z",
+  "tool": "D:/.codex/.tmp/run-e2e-modpack.mjs",
+  "steps": {
+    "inspect": {
+      "ok": true,
+      "value": {
+        "fileName": "sh-audit-fixture-curseforge-forge-47.4.22.zip",
+        "format": "curseforge",
+        "name": "SH Audit CF Fixture",
+        "version": "1.0.0",
+        "gameVersion": "1.20.1",
+        "loaderType": "forge",
+        "loaderVersion": "47.4.22",
+        "javaMajor": 17,
+        "confidence": 1,
+        "modCount": 1,
+        "overrideCount": 1,
+        "warnings": [
+          "CurseForge 清单中的远程项目需要可用下载源；导入前会再次检查。"
+        ]
+      }
+    },
+    "import": {
+      "ok": true,
+      "value": {
+        "instance": {
+          "id": 4,
+          "name": "SH Audit CF Fixture",
+          "rootPath": "D:/MinecraftLauncherData\\instances\\4",
+          "gameVersion": "1.20.1",
+          "loaderType": "forge",
+          "memoryMb": 4096,
+          "status": "ready",
+          "source": "curseforge"
+        },
+        "downloadedFiles": 1,
+        "overrideFiles": 1
+      }
+    },
+    "healthAfterImport": {
+      "ok": true,
+      "value": {
+        "instanceId": 4,
+        "name": "SH Audit CF Fixture",
+        "gameVersion": "1.20.1",
+        "loaderType": "forge",
+        "loaderVersion": "47.4.22",
+        "memoryMb": 4096,
+        "status": "ready",
+        "gameFilesOk": true,
+        "modCount": 1,
+        "missingDependencies": [],
+        "incompatibleMods": []
+      }
+    }
+  }
+}

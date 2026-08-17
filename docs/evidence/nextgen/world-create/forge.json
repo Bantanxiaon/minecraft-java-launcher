@@ -1,0 +1,57 @@
+{
+  "head": "4c908c80e9d3dd0b7ff6601d72d82624fa1f8cd8",
+  "workingTreeHash": "ff561b832e8b4667d0605edb8c42df253d4436d41ff7c3562c1578259f19d14e",
+  "generatedAt": "2026-08-17T09:54:58.650Z",
+  "minecraftVersion": "1.20.1",
+  "loader": "forge",
+  "loaderVersion": "47.4.10",
+  "java": "17.0.20 (Microsoft)",
+  "worldCreated": true,
+  "integratedServerStarted": true,
+  "playerJoined": true,
+  "stableSeconds": 300,
+  "exitCode": -1,
+  "crashReport": null,
+  "latestLog": "D:\\MinecraftLauncherData\\instances\\2\\.minecraft\\logs\\latest.log",
+  "result": "FAIL",
+  "failures": [
+    "Save & Quit 后服务端完成保存（Saving players/worlds，All chunks are saved），但 JVM 进程 120 秒+ 未退出，最终由验收脚本强制终止（exit -1），未达成 clean exit。",
+    "Create New World 按钮点击未被脚本机器验证：本次运行主菜单出现后，游戏以默认名“新的世界”自动创建并进入（17:42:53 生成 level.dat），随后脚本 OCR 暂停菜单成功点击“保存并退回到标题屏幕”。由于未能在主菜单 OCR 验证到“单人游戏/创建新世界”点击路径，此环节记录为 PARTIAL/UNCLEAR。"
+  ],
+  "markers": {
+    "mainMenu": [
+      "MixinTitleScreen mixed",
+      "Setting user: Player",
+      "Backend library: LWJGL"
+    ],
+    "integratedServerAndWorld": [
+      "Time from main menu to in-game was 32.149372 seconds",
+      "Total time to load game and open world was 120.84537 seconds",
+      "Stopping singleplayer server as player logged out",
+      "Saving players",
+      "Saving worlds",
+      "All chunks are saved"
+    ],
+    "playerInWorld": [
+      "Player取得了进度[破碎的耀魂]",
+      "坟堊已创建：（63，63，-85）minecraft:overworld"
+    ]
+  },
+  "worldFiles": {
+    "path": "D:\\MinecraftLauncherData\\instances\\2\\.minecraft\\saves\\新的世界",
+    "levelDat": true,
+    "regionFiles": 16,
+    "entityFiles": 4,
+    "poiFiles": 4,
+    "totalFiles": 87,
+    "levelDatLastWrite": "2026-08-17T17:48:25+08:00"
+  },
+  "screenshots": [
+    "forge-06-pause-menu-1.png",
+    "forge-06-pause-menu-2.png",
+    "forge-06-pause-menu-3.png",
+    "forge-06-pause-menu-b.png",
+    "forge-06-pause-menu.png",
+    "forge-06-pre-pause.png"
+  ]
+}

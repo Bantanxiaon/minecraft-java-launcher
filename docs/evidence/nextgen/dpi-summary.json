@@ -1,0 +1,18 @@
+{
+  "runtime": "tauri",
+  "method": "真实 Tauri 生产 EXE + WebView2 --force-device-scale-factor（每档独立启动进程）",
+  "resolutions": ["1920x1080 (100%)", "2560x1440 (125%)", "3840x2160 (200%)"],
+  "scales": [
+    { "scale": "100%", "screenshot": "docs/evidence/nextgen/ui-after/dpi-1-00-home.png" },
+    { "scale": "125%", "screenshot": "docs/evidence/nextgen/ui-after/dpi-1-25-home.png" },
+    { "scale": "150%", "screenshot": "docs/evidence/nextgen/ui-after/dpi-1-50-home.png" },
+    { "scale": "175%", "screenshot": "docs/evidence/nextgen/ui-after/dpi-1-75-home.png" },
+    { "scale": "200%", "screenshot": "docs/evidence/nextgen/ui-after/dpi-2-00-home.png" }
+  ],
+  "observations": [
+    "所有缩放档位主窗口均正常显示 UI3 首页，无横向溢出（sidebar 固定 228px、内容区自适应）。",
+    "CSS 使用 rem/px + 弹性布局；1600px 以下首页网格自动收为单列。",
+    "窗口 1296x809（物理像素），WebView 按强制 scale 重绘；无元素重叠或按钮失效。"
+  ],
+  "gate": "PASS"
+}

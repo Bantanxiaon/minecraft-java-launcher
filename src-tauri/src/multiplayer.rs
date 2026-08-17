@@ -32,6 +32,24 @@ use uuid::Uuid;
 pub const E4MC_PROVIDER_ID: &str = "e4mc";
 pub const E4MC_MODRINTH_PROJECT_ID: &str = "qANg5Jrr";
 pub const E4MC_PUBLIC_SUFFIX: &str = ".e4mc.link";
+
+/// 生产默认 MULTIPLAYER_ENABLED=false：只有显式实验开关才会启用联机命令。
+/// `SH_MULTIPLAYER_EXPERIMENTAL=1` 用于人工实验；`LAUNCHER_E2E_MULTIPLAYER`
+/// 仅用于仓库内自动化验收，普通启动路径永远不会设置这两个变量。
+pub fn multiplayer_experimental_enabled() -> bool {
+    std::env::var("SH_MULTIPLAYER_EXPERIMENTAL").as_deref() == Ok("1")
+        || std::env::var("LAUNCHER_E2E_MULTIPLAYER")
+            .map(|value| !value.is_empty())
+            .unwrap_or(false)
+}
+
+fn feature_disabled_error() -> LauncherError {
+    LauncherError::classified(
+        "feature_disabled",
+        "远程联机实验功能当前未启用（MULTIPLAYER_ENABLED=false）。",
+        false,
+    )
+}
 pub const E4MC_ADDRESS_MAX_LEN: usize = 253;
 /// LAN 开放后仍拿不到公网地址的软提示窗口（秒）。只提示，不自动失败、不自动关闭。
 pub const PUBLIC_ENDPOINT_NOTICE_SECS: u64 = 60;
@@ -1564,6 +1582,9 @@ pub async fn multiplayer_prepare(
     app: AppHandle,
     instance_id: i64,
 ) -> Result<PrepareResult, LauncherError> {
+    if !multiplayer_experimental_enabled() {
+        return Err(feature_disabled_error());
+    }
     let (game_version, loader) = instance_identity(&app, instance_id)?;
     if is_vanilla_loader(&loader) {
         return Err(vanilla_error());
@@ -1593,6 +1614,9 @@ pub async fn multiplayer_start(
     account_id: i64,
     java_path: String,
 ) -> Result<RoomInfo, LauncherError> {
+    if !multiplayer_experimental_enabled() {
+        return Err(feature_disabled_error());
+    }
     let (game_version, loader) = instance_identity(&app, instance_id)?;
     if is_vanilla_loader(&loader) {
         return Err(vanilla_error());
@@ -1731,6 +1755,9 @@ pub async fn multiplayer_start(
 
 #[tauri::command]
 pub fn multiplayer_stop(app: AppHandle, session_id: String) -> Result<RoomInfo, LauncherError> {
+    if !multiplayer_experimental_enabled() {
+        return Err(feature_disabled_error());
+    }
     let instance_id = sessions_map()
         .get(&session_id)
         .map(|guard| guard.instance_id)
@@ -1768,6 +1795,9 @@ pub fn multiplayer_stop(app: AppHandle, session_id: String) -> Result<RoomInfo, 
 
 #[tauri::command]
 pub fn multiplayer_cancel(app: AppHandle, session_id: String) -> Result<RoomInfo, LauncherError> {
+    if !multiplayer_experimental_enabled() {
+        return Err(feature_disabled_error());
+    }
     let state = sessions_map()
         .get(&session_id)
         .map(|guard| guard.state)
@@ -2051,6 +2081,9 @@ pub async fn multiplayer_join(
     account_id: i64,
     java_path: String,
 ) -> Result<serde_json::Value, LauncherError> {
+    if !multiplayer_experimental_enabled() {
+        return Err(feature_disabled_error());
+    }
     if !validate_e4mc_public_address(&address) {
         return Err(LauncherError::validation(
             "邀请地址格式不正确，请输入形如 xxxx.e4mc.link 的地址。",
@@ -2079,6 +2112,22 @@ pub async fn multiplayer_join(
 
 #[tauri::command]
 pub fn multiplayer_state(instance_id: i64) -> RoomInfo {
+    if !multiplayer_experimental_enabled() {
+        return RoomInfo {
+            session_id: None,
+            instance_id,
+            state: MultiplayerState::Closed,
+            lan_port: None,
+            public_address: None,
+            provider: None,
+            helper_version: None,
+            error_code: Some("feature_disabled".to_string()),
+            user_message: Some("远程联机实验功能当前未启用。".to_string()),
+            technical_message: None,
+            started_at: None,
+            reconnect_count: 0,
+        };
+    }
     let session_id = instance_sessions_map()
         .get(&instance_id)
         .map(|entry| entry.value().clone());
@@ -2106,6 +2155,9 @@ pub fn multiplayer_diagnostics(
     app: AppHandle,
     session_id: String,
 ) -> Result<serde_json::Value, LauncherError> {
+    if !multiplayer_experimental_enabled() {
+        return Err(feature_disabled_error());
+    }
     if let Some(guard) = sessions_map().get(&session_id) {
         let session = guard.value();
         return Ok(serde_json::json!({
@@ -2176,6 +2228,9 @@ pub fn multiplayer_history(
     app: AppHandle,
     instance_id: i64,
 ) -> Result<Vec<HistoryEntry>, LauncherError> {
+    if !multiplayer_experimental_enabled() {
+        return Err(feature_disabled_error());
+    }
     let connection = open_database(&app)?;
     let mut statement = connection
         .prepare(

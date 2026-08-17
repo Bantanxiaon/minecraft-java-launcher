@@ -1,0 +1,31 @@
+{
+  "action": "home.launch / library.play / instance.launch",
+  "route": "Home → 开始游戏（真实 Tauri 生产 EXE）",
+  "runtime": "tauri",
+  "exe": "src-tauri/target/release/app.exe",
+  "devHead": "4c908c80e9d3dd0b7ff6601d72d82624fa1f8cd8",
+  "startedAt": "2026-08-17T14:58:02+08:00",
+  "instance": { "id": 2, "name": "Closing Song1.6.5", "loader": "forge", "gameVersion": "1.20.1", "status": "ready" },
+  "account": { "type": "OFFLINE", "displayName": "Player" },
+  "javaSpawned": true,
+  "javaPid": "160240",
+  "gameReachedRunningState": true,
+  "gameExitedBefore90s": true,
+  "exitNote": "force 启动（缺少 expandability/kotlinforforge 依赖，属既有 Mod 依赖问题，与联机无关；启动前健康检查已给出可理解结论并提供 自动补齐前置 / 仍要启动 两条真实闭环）",
+  "multiplayerSideEffects": {
+    "e4mcInstalled": false,
+    "helperInstalled": false,
+    "modsHashTreeChanged": false,
+    "modsHashTreeBefore": "8a607cddaf221c795c68a95b72288912297ccda22daa82a1435bf340c1132c7b",
+    "modsHashTreeAfter": "8a607cddaf221c795c68a95b72288912297ccda22daa82a1435bf340c1132c7b",
+    "multiplayerHistoryRowsBefore": 0,
+    "multiplayerHistoryRowsAfter": 0,
+    "multiplayerSessionsBefore": 0,
+    "multiplayerSessionsAfter": 0,
+    "serversRowsAfter": 0,
+    "contentItemsE4mcRowsAfter": 0,
+    "multiplayerNetworkRequests": 0
+  },
+  "verification": "mods hash tree diff + SQLite(launcher.sqlite3) multiplayer_history/content_items/servers 查询",
+  "status": "PASS_ISOLATION"
+}

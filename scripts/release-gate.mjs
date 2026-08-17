@@ -141,4 +141,38 @@ if (ui3Gate.status !== 0) {
   fail("UI3_RUNTIME_GATE 未通过（UI 3.0 未完成运行验收）。");
 }
 
+// 8. MULTIPLAYER_ISOLATION_GATE：普通单机与联机/e4mc 零副作用是发布前置。
+const isolationGate = spawnSync(
+  process.execPath,
+  ["scripts/multiplayer-isolation-gate.mjs"],
+  { cwd: process.cwd(), stdio: "inherit" },
+);
+if (isolationGate.status !== 0) {
+  fail("MULTIPLAYER_ISOLATION_GATE 未通过（普通启动仍可能触达联机）。");
+}
+
+// 8b. NextGen 新增硬门禁（任何一项 FAIL 即 release blocked）
+const nextGenGates = [
+  "ui-layout-gate.mjs",
+  "ui-information-hierarchy-gate.mjs",
+  "ui-visual-semantic-gate.mjs",
+  "border-density-gate.mjs",
+  "typography-rhythm-gate.mjs",
+  "loader-version-discovery-gate.mjs",
+  "modpack-runtime-detection-gate.mjs",
+  "dependency-resolution-gate.mjs",
+  "world-create-runtime-gate.mjs",
+  "startup-window-gate.mjs",
+  "build-gate.mjs",
+];
+for (const gate of nextGenGates) {
+  const result = spawnSync(process.execPath, [`scripts/${gate}`], {
+    cwd: process.cwd(),
+    stdio: "inherit",
+  });
+  if (result.status !== 0) {
+    fail(`${gate.replace(".mjs", "").toUpperCase()} 未通过。`);
+  }
+}
+
 console.log("[release-gate] PASS");

@@ -1,0 +1,47 @@
+{
+  "head": "4c908c80e9d3dd0b7ff6601d72d82624fa1f8cd8",
+  "workingTreeHash": "3f31e0535964a659165f76441e0461aa309901524d3f259c4eb3457797938b55",
+  "runtime": "tauri production",
+  "instanceId": 2,
+  "generatedAt": "2026-08-17T09:28:42.210Z",
+  "tool": "D:/.codex/.tmp/run-repair.mjs",
+  "healthBefore": {
+    "ok": true,
+    "value": {
+      "instanceId": 2,
+      "name": "Closing Song1.6.5",
+      "gameVersion": "1.20.1",
+      "loaderType": "forge",
+      "loaderVersion": "47.4.10",
+      "memoryMb": 4096,
+      "status": "ready",
+      "gameFilesOk": true,
+      "modCount": 276,
+      "missingDependencies": [
+        "expandability",
+        "kotlinforforge"
+      ],
+      "incompatibleMods": []
+    }
+  },
+  "repair": {
+    "ok": true,
+    "value": "前置模组已全部补齐，可以重新开始游戏。"
+  },
+  "healthAfter": {
+    "ok": true,
+    "value": {
+      "instanceId": 2,
+      "name": "Closing Song1.6.5",
+      "gameVersion": "1.20.1",
+      "loaderType": "forge",
+      "loaderVersion": "47.4.10",
+      "memoryMb": 4096,
+      "status": "ready",
+      "gameFilesOk": true,
+      "modCount": 278,
+      "missingDependencies": [],
+      "incompatibleMods": []
+    }
+  }
+}

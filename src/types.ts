@@ -121,6 +121,9 @@ export type ModpackInspection = {
   version?: string;
   gameVersion?: string;
   loaderType?: string;
+  loaderVersion?: string | null;
+  javaMajor?: number | null;
+  confidence?: number | null;
   modCount: number;
   overrideCount: number;
   warnings: string[];

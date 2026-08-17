@@ -1,0 +1,41 @@
+{
+  "head": "4c908c80e9d3dd0b7ff6601d72d82624fa1f8cd8",
+  "workingTreeHash": "ff561b832e8b4667d0605edb8c42df253d4436d41ff7c3562c1578259f19d14e",
+  "generatedAt": "2026-08-17T09:54:58.650Z",
+  "runtime": "live trusted upstream metadata (official Maven / Fabric Meta / Quilt Meta)",
+  "command": "cargo test loader_metadata_live_fetch_all_supported_loaders -- --ignored --nocapture",
+  "cacheDirectory": "D:\\MinecraftLauncherData\\cache\\loader-meta",
+  "results": {
+    "forge-1.20.1": {
+      "builds": 131,
+      "source": "https://files.minecraftforge.net/maven + promotions_slim.json"
+    },
+    "neoforge-1.20.1": {
+      "builds": 62,
+      "source": "https://maven.neoforged.net/releases/net/neoforged/forge/maven-metadata.xml"
+    },
+    "fabric-1.20.1": {
+      "builds": 251,
+      "source": "https://meta.fabricmc.net/v2/versions/loader/1.20.1"
+    },
+    "quilt-1.20.1": {
+      "builds": 299,
+      "source": "https://meta.quiltmc.org/v3/versions/loader/1.20.1"
+    }
+  },
+  "uiSelectorEvidence": {
+    "page": "Home -> 新建实例 -> Forge + Minecraft 1.18.2",
+    "optionCount": 158,
+    "contains40221": true,
+    "searchQuery": "40.2.21",
+    "searchResultCount": 1,
+    "searchResult": [
+      "40.2.21"
+    ],
+    "recommended": "40.3.0",
+    "latest": "40.3.12",
+    "source": "docs/evidence/nextgen/audit/ui-v4/audit.json loaderStep/loaderSearchStep"
+  },
+  "offlineFallback": "list_loader_builds 在网络失败时读取最近可信缓存并标记 from_cache=true",
+  "hardcodedLoaderBuildArrays": false
+}

@@ -1,0 +1,20 @@
+{
+  "scannedFiles": 48,
+  "totalInteractiveControls": 108,
+  "implemented": 108,
+  "hiddenByFeatureFlag": 0,
+  "disabledWithRuntimeReason": 0,
+  "broken": 0,
+  "placeholder": 0,
+  "untestedPrimaryActions": 0,
+  "staticFindings": [],
+  "matrixFindings": [],
+  "untestedPrimary": [],
+  "status": "PASS",
+  "generatedAt": "2026-08-17T09:54:58.651Z",
+  "head": "4c908c80e9d3dd0b7ff6601d72d82624fa1f8cd8",
+  "workingTreeHash": "3f31e0535964a659165f76441e0461aa309901524d3f259c4eb3457797938b55",
+  "tool": "node scripts/ui-action-gate.json",
+  "result": "PASS",
+  "evidenceNote": "静态动作矩阵于修复前重跑（108 actions, 0 broken）；修复仅改动 Home 文案/时间显示与启动阻止逻辑，动作集合不变。"
+}

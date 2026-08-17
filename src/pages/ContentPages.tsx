@@ -160,7 +160,6 @@ function OnlineCatalog({
           <h2>{title}</h2>
           <p>同时搜索 Modrinth 与 CurseForge，结果自动翻译为中文；自动筛掉不适合当前游戏版本和模组环境的内容。</p>
         </div>
-        <span>联网</span>
       </div>
       <div className="catalog-search">
         <input value={query} maxLength={80} placeholder="搜索名称、作者或关键词"
@@ -205,7 +204,10 @@ function OnlineCatalog({
           const title = translations[titleKey] ?? project.titleZh ?? project.title;
           const description = translations[descKey] ?? project.descriptionZh ?? project.description;
           return (
-            <article key={`${project.source}-${project.projectId}`}>
+            <article
+              key={`${project.source}-${project.projectId}`}
+              className="catalog-card"
+            >
               <div className="catalog-mark">{project.title.slice(0, 1).toUpperCase()}</div>
               <div className="catalog-copy">
                 <strong>{title}</strong>
@@ -339,6 +341,7 @@ export function ModsPage({
   );
   const [modSearch, setModSearch] = useState("");
   const [curseforgeUrl, setCurseforgeUrl] = useState("");
+  const [curseUrlOpen, setCurseUrlOpen] = useState(false);
   const [modFilter, setModFilter] = useState<"all" | "enabled" | "disabled">(
     "all",
   );
@@ -394,16 +397,6 @@ export function ModsPage({
           <button disabled={busy} onClick={onPick}>
             {busy ? "处理中…" : "选择本地模组文件"}
           </button>
-        </div>
-        <div className="loader-list">
-          {["Fabric", "Forge", "NeoForge", "Quilt", "Vanilla"].map((loader) => (
-            <div key={loader}>
-              <strong>{loader}</strong>
-              <small>
-                {loader === "Vanilla" ? "纯原版，不装模组" : "检查模组说明文件"}
-              </small>
-            </div>
-          ))}
         </div>
         {inspection ? (
           <div className="mod-result">
@@ -466,23 +459,39 @@ export function ModsPage({
         versionValue={onlineVersion}
         onVersion={onOnlineVersion} />
       <div className="curse-url-row">
-        <input
-          value={curseforgeUrl}
-          maxLength={300}
-          placeholder="或粘贴 CurseForge 项目/文件链接（需先导入过包含该模组的整合包）"
-          onChange={(event) => setCurseforgeUrl(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && curseforgeUrl.trim() && selected && selected.loaderType !== "vanilla") {
-              onInstallCurseforgeUrl(curseforgeUrl.trim());
-            }
-          }}
-        />
-        <button
-          disabled={busy || !curseforgeUrl.trim() || !selected || selected.loaderType === "vanilla"}
-          onClick={() => onInstallCurseforgeUrl(curseforgeUrl.trim())}
-        >
-          从网址安装
-        </button>
+        {curseUrlOpen ? (
+          <>
+            <input
+              className="curse-url-inline"
+              value={curseforgeUrl}
+              maxLength={300}
+              placeholder="粘贴 CurseForge 项目/文件链接（需先导入过包含该模组的整合包）"
+              onChange={(event) => setCurseforgeUrl(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && curseforgeUrl.trim() && selected && selected.loaderType !== "vanilla") {
+                  onInstallCurseforgeUrl(curseforgeUrl.trim());
+                }
+              }}
+            />
+            <button
+              disabled={busy || !curseforgeUrl.trim() || !selected || selected.loaderType === "vanilla"}
+              onClick={() => onInstallCurseforgeUrl(curseforgeUrl.trim())}
+            >
+              安装
+            </button>
+            <button className="quiet" onClick={() => setCurseUrlOpen(false)}>
+              收起
+            </button>
+          </>
+        ) : (
+          <button
+            className="quiet"
+            disabled={!selected || selected.loaderType === "vanilla"}
+            onClick={() => setCurseUrlOpen(true)}
+          >
+            从链接安装
+          </button>
+        )}
       </div>
       <section className="installed-mods">
         <div className="section-heading">
@@ -650,6 +659,21 @@ export function ModpacksPage({
   const [includeSaves, setIncludeSaves] = useState(false);
   const [genericVersion, setGenericVersion] = useState("");
   const [genericLoader, setGenericLoader] = useState("forge");
+
+  // 通用 ZIP 自动适配：后端扫描 mods/*.jar 元数据后返回识别到的加载器，
+  // 这里自动预填，用户仍可在 5 种环境（Vanilla/Fabric/Quilt/Forge/NeoForge）中修改。
+  useEffect(() => {
+    if (
+      inspection?.format === "generic" &&
+      inspection.loaderType &&
+      ["vanilla", "fabric", "quilt", "forge", "neoforge"].includes(
+        inspection.loaderType,
+      )
+    ) {
+      setGenericLoader(inspection.loaderType);
+    }
+  }, [inspection?.format, inspection?.loaderType]);
+
   return (
     <>
       <header>
@@ -664,7 +688,8 @@ export function ModpacksPage({
         <h2>把整合包文件拖到这里</h2>
         <p>
           支持 Modrinth（.mrpack）、CurseForge 和普通压缩包（.zip）。
-          导入前会检查文件结构和大小，防止异常压缩包损坏电脑中的文件。
+          Beta：自动识别 Minecraft、加载器、Loader 版本与 Java 并创建实例；
+          部分复杂或非标准整合包可能存在兼容性问题，安装失败时不会提交不完整实例。
         </p>
         <button disabled={busy} onClick={onPick}>
           {busy ? "正在检查…" : "选择整合包文件"}
@@ -676,7 +701,7 @@ export function ModpacksPage({
       <section className="pack-export-card">
         <div>
           <h2>导出自己的整合包</h2>
-          <p>包含模组、设置、资源包、光影、游戏选项和服务器列表；不会包含账户、登录令牌或启动器数据库。</p>
+          <p>包含模组、设置、资源包、光影与游戏选项（含存档内联机数据）；不会包含账户、登录令牌或启动器数据库。</p>
         </div>
         <select value={exportInstanceId ?? ""} onChange={(event) => setExportInstanceId(Number(event.target.value))}>
           <option value="" disabled>选择要导出的游戏配置</option>
@@ -810,6 +835,21 @@ export function ModpacksPage({
           ))}
           {inspection.format === "generic" ? (
             <div className="pack-generic-form">
+              {inspection.loaderType ? (
+                <span
+                  className="ready-label"
+                  style={{ gridColumn: "1 / -1", justifySelf: "start" }}
+                >
+                  自动识别：{loaderLabel(inspection.loaderType)}
+                </span>
+              ) : (
+                <span
+                  className="badge badge-warn"
+                  style={{ gridColumn: "1 / -1", justifySelf: "start" }}
+                >
+                  未能自动识别，请手动选择
+                </span>
+              )}
               <input
                 value={genericVersion}
                 onChange={(event) => setGenericVersion(event.target.value)}

@@ -1,0 +1,294 @@
+{
+  "head": "4c908c80e9d3dd0b7ff6601d72d82624fa1f8cd8",
+  "workingTreeHash": "ff561b832e8b4667d0605edb8c42df253d4436d41ff7c3562c1578259f19d14e",
+  "generatedAt": "2026-08-17T09:56:38.964Z",
+  "tool": "evidence-freshness.mjs",
+  "freshCount": 9,
+  "staleCount": 44,
+  "pngWithoutFingerprintCount": 128,
+  "missingCount": 3,
+  "fresh": [
+    "audit/current-worktree.json",
+    "audit/production-build.json",
+    "dependency-regression.json",
+    "loader-metadata/summary.json",
+    "multiplayer-isolation-gate.json",
+    "multiplayer-isolation.json",
+    "startup-window.json",
+    "ui-runtime.json",
+    "world-create/forge.json"
+  ],
+  "stale": [
+    {
+      "file": "audit/dependency-repair-current.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/e2e-modpack.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/multiplayer-isolation-current.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-matrix/1280x800@1/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-matrix/1280x800@1.25/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-matrix/1280x800@1.5/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-matrix/1280x800@1.75/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-matrix/1280x800@2/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-matrix/1366x768@1/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-matrix/1366x768@1.25/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-matrix/1366x768@1.5/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-matrix/1366x768@1.75/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-matrix/1366x768@2/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-matrix/1600x900@1/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-matrix/1600x900@1.25/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-matrix/1600x900@1.5/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-matrix/1600x900@1.75/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-matrix/1600x900@2/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-matrix/1920x1080@1/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-matrix/1920x1080@1.25/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-matrix/1920x1080@1.5/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-matrix/1920x1080@1.75/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-matrix/1920x1080@2/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-matrix/2560x1440@1/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-matrix/2560x1440@1.25/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-matrix/2560x1440@1.5/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-matrix/2560x1440@1.75/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-matrix/2560x1440@2/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-v4/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-v4-150/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "audit/ui-v4-postfix/audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "dpi-summary.json",
+      "hasHead": false,
+      "hasTree": false,
+      "matchesCurrent": false
+    },
+    {
+      "file": "loader-metadata/fabric-1.20.1.json",
+      "hasHead": false,
+      "hasTree": false,
+      "matchesCurrent": false
+    },
+    {
+      "file": "loader-metadata/forge-1.20.1.json",
+      "hasHead": false,
+      "hasTree": false,
+      "matchesCurrent": false
+    },
+    {
+      "file": "loader-metadata/neoforge-1.20.1.json",
+      "hasHead": false,
+      "hasTree": false,
+      "matchesCurrent": false
+    },
+    {
+      "file": "loader-metadata/quilt-1.20.1.json",
+      "hasHead": false,
+      "hasTree": false,
+      "matchesCurrent": false
+    },
+    {
+      "file": "modpack-fixtures/curseforge-expected.json",
+      "hasHead": false,
+      "hasTree": false,
+      "matchesCurrent": false
+    },
+    {
+      "file": "modpack-fixtures/curseforge-manifest.json",
+      "hasHead": false,
+      "hasTree": false,
+      "matchesCurrent": false
+    },
+    {
+      "file": "modpack-fixtures/generic-notes.json",
+      "hasHead": false,
+      "hasTree": false,
+      "matchesCurrent": false
+    },
+    {
+      "file": "modpack-fixtures/mrpack-expected.json",
+      "hasHead": false,
+      "hasTree": false,
+      "matchesCurrent": false
+    },
+    {
+      "file": "modpack-fixtures/mrpack-index.json",
+      "hasHead": false,
+      "hasTree": false,
+      "matchesCurrent": false
+    },
+    {
+      "file": "normal-launch-forge.json",
+      "hasHead": false,
+      "hasTree": false,
+      "matchesCurrent": false
+    },
+    {
+      "file": "ui-action-gate.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    },
+    {
+      "file": "ui-layout-audit.json",
+      "hasHead": true,
+      "hasTree": true,
+      "matchesCurrent": false
+    }
+  ],
+  "missing": [
+    "world-create/vanilla.json",
+    "world-create/fabric.json",
+    "world-create/neoforge.json"
+  ],
+  "note": "PNG 截图无内嵌指纹，无法证明与当前工作树对应；本表将历史截图全部视为无指纹证据（不参与 PASS）。",
+  "result": "FAIL"
+}

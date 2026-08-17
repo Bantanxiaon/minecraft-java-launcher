@@ -1,0 +1,80 @@
+{
+  "head": "4c908c80e9d3dd0b7ff6601d72d82624fa1f8cd8",
+  "workingTreeHash": "ff561b832e8b4667d0605edb8c42df253d4436d41ff7c3562c1578259f19d14e",
+  "generatedAt": "2026-08-17T09:54:58.653Z",
+  "discoveryGate": "DEPENDENCY_DISCOVERY_GATE",
+  "discoveryResult": "PASS",
+  "discoveryCommand": "cargo test dependency_resolver_regression_expandability_and_kotlinforforge -- --ignored --nocapture",
+  "expandability": {
+    "modId": "expandability",
+    "status": "passed",
+    "resolvedProjectId": "X5dUUm4k",
+    "gameVersion": "26.1",
+    "loader": "fabric",
+    "selectedVersion": "14.0.1",
+    "note": "Modrinth 项目 X5dUUm4k 仅提供 26.1 snapshot + fabric/quilt/neoforge；对 Forge 1.20.1 必须走 CurseForge 465066。"
+  },
+  "kotlinforforge": {
+    "modId": "kotlinforforge",
+    "status": "passed",
+    "resolvedProjectId": "ordsPcFz",
+    "gameVersion": "1.20.1",
+    "loader": "forge",
+    "selectedVersion": "4.12.0",
+    "note": "官方 artifact 为 FMLModType:LIBRARY + JarJar 嵌套 kfflang/kffmod；修复后 inspect_mod_jar_path 可识别。"
+  },
+  "repairE2EGate": "DEPENDENCY_REPAIR_E2E_GATE",
+  "repairE2EResult": "PASS",
+  "repairInstance": {
+    "id": 2,
+    "name": "Closing Song1.6.5",
+    "gameVersion": "1.20.1",
+    "loader": "forge",
+    "loaderVersion": "47.4.10"
+  },
+  "repairBefore": {
+    "missingDependencies": [
+      "expandability",
+      "kotlinforforge"
+    ],
+    "modCount": 276
+  },
+  "repairAfter": {
+    "missingDependencies": [],
+    "modCount": 278
+  },
+  "installedArtifacts": [
+    {
+      "fileName": "962fdb760409-kotlinforforge-4.12.0-all.jar",
+      "sha1": "962fdb760409d6d71cbf079235f1ca94e3863a22",
+      "sha256": "6a66c6a68ec09f8717cdbf06883394f0ee24d7cd826b7134a0f81839e8e720ae",
+      "source": "modrinth",
+      "officialUrl": "https://cdn.modrinth.com/data/ordsPcFz/versions/Zsh14XeQ/kotlinforforge-4.12.0-all.jar",
+      "verifiedAgainstOfficial": true,
+      "containsRealForgeMetadata": "META-INF/jarjar/kfflang-4.12.0.jar -> services/net.minecraftforge.forgespi.language.IModLanguageProvider; kffmod-4.12.0.jar -> META-INF/mods.toml modId=kotlinforforge"
+    },
+    {
+      "fileName": "expandability-9.0.4.jar",
+      "sha1": "2ea3c2ec654e11a5548f33d0d733aa6ecd9a0d6d",
+      "sha256": "c1f7c3ba5873bb4797d2124c57bab3189acdb62d02f63217db1456d232dac20f",
+      "source": "curseforge",
+      "officialUrl": "https://edge.forgecdn.net/files/5301/414/expandability-9.0.4.jar",
+      "verifiedAgainstOfficial": true,
+      "project": {
+        "curseforgeProjectId": 465066,
+        "fileId": 5301414,
+        "gameVersion": "1.20.1",
+        "loader": "forge"
+      }
+    }
+  ],
+  "repairCommand": "invoke repair_missing_mod_dependencies instanceId=2 (post-fix production EXE)",
+  "preFixFailure": {
+    "kotlinforforge": "无法识别此 JAR 的加载器，不允许自动安装（官方 KFF 为 FMLModType:LIBRARY，无外层 mods.toml）",
+    "expandability": "加载器不兼容：此模组需要 fabric，目标实例使用 forge（Modrinth X5dUUm4k 无 Forge 1.20.1；CurseForge 465066 被跳过因为没有 CF 索引）"
+  },
+  "launchBlockBehavior": {
+    "implemented": true,
+    "description": "launch_instance 现在先本地校验缺失前置，失败则调用 auto_install_missing_mod_dependencies 补齐，补齐失败返回错误并阻止启动；前端已移除“仍要启动”绕过入口。"
+  }
+}

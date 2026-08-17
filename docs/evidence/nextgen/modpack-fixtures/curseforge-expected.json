@@ -1,0 +1,9 @@
+{
+  "format": "curseforge",
+  "minecraft": "1.20.1",
+  "loader": "forge",
+  "loaderVersion": "47.4.22",
+  "javaMajor": 17,
+  "confidence": 1.0,
+  "rule": "manifest.modLoaders[].id 中 'forge-' 前缀后的版本号即为 exact build，禁止替换为最新"
+}

@@ -1,0 +1,20 @@
+{
+  "reference": "XMCL (x-minecraft-launcher) visual organization",
+  "auditedAt": "2026-08-17",
+  "note": "前置分析：只学习页面组织/信息密度/深色体系/动效节奏，不复制商标与源码。",
+  "mapping": [
+    { "xmclSurface": "Sidebar nav", "shComponent": "AppShell sidebar .nav-item", "file": "src/app/AppShell.tsx" },
+    { "xmclSurface": "Top bar / titlebar", "shComponent": ".titlebar + window controls", "file": "src/app/AppShell.tsx" },
+    { "xmclSurface": "Current instance hero + play", "shComponent": ".home-hero + primary CTA", "file": "src/features/home/HomePage.tsx" },
+    { "xmclSurface": "Instance cards", "shComponent": ".library-card grid", "file": "src/pages/InstanceLibraryPage.tsx" },
+    { "xmclSurface": "Instance detail sections", "shComponent": "InstancePage tabs", "file": "src/features/instance/InstancePage.tsx" },
+    { "xmclSurface": "Mods/resource packs/shaders management", "shComponent": "ModsPage / ArchiveContentPage", "file": "src/pages/ContentPages.tsx" },
+    { "xmclSurface": "Worlds management", "shComponent": "WorldsPage", "file": "src/pages/ContentPages.tsx" },
+    { "xmclSurface": "Download center", "shComponent": "DownloadsPage + DiagnosticsPage", "file": "src/features/downloads/DownloadsPage.tsx" },
+    { "xmclSurface": "Discover / resource flows", "shComponent": "DiscoverPage tabs", "file": "src/features/discover/DiscoverPage.tsx" },
+    { "xmclSurface": "Settings groups", "shComponent": "SettingsPage tabs", "file": "src/features/settings/SettingsPage.tsx" },
+    { "xmclSurface": "Dark/light/system theme", "shComponent": "ThemeProvider + tokens.css", "file": "src/app/providers.tsx" },
+    { "xmclSurface": "Dialog/sheet/toast/empty/error states", "shComponent": "ui/components primitives", "file": "src/ui/components/index.tsx" },
+    { "xmclSurface": "Motion rhythm", "shComponent": "motion.css + reduced-motion", "file": "src/ui/motion.css" }
+  ]
+}

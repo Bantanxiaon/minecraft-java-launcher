@@ -1,0 +1,61 @@
+{
+  "head": "4c908c80e9d3dd0b7ff6601d72d82624fa1f8cd8",
+  "workingTreeHash": "3f31e0535964a659165f76441e0461aa309901524d3f259c4eb3457797938b55",
+  "runtime": "tauri production",
+  "dataDirectory": "D:/MinecraftLauncherData",
+  "fixture": "D:\\minecraft-java-launcher\\docs\\evidence\\nextgen\\audit\\fixtures\\sh-audit-fixture-forge-47.4.22.mrpack",
+  "generatedAt": "2026-08-17T10:31:47.324Z",
+  "tool": "D:/.codex/.tmp/run-e2e-modpack.mjs",
+  "steps": {
+    "inspect": {
+      "ok": true,
+      "value": {
+        "fileName": "sh-audit-fixture-forge-47.4.22.mrpack",
+        "format": "modrinth",
+        "name": "SH Audit Fixture",
+        "version": "audit-fixture-20260817",
+        "gameVersion": "1.20.1",
+        "loaderType": "forge",
+        "loaderVersion": "47.4.22",
+        "javaMajor": 17,
+        "confidence": 1,
+        "modCount": 1,
+        "overrideCount": 2,
+        "warnings": []
+      }
+    },
+    "import": {
+      "ok": true,
+      "value": {
+        "instance": {
+          "id": 3,
+          "name": "SH Audit Fixture",
+          "rootPath": "D:/MinecraftLauncherData\\instances\\3",
+          "gameVersion": "1.20.1",
+          "loaderType": "forge",
+          "memoryMb": 4096,
+          "status": "base_missing",
+          "source": "modrinth"
+        },
+        "downloadedFiles": 1,
+        "overrideFiles": 2
+      }
+    },
+    "healthAfterImport": {
+      "ok": true,
+      "value": {
+        "instanceId": 3,
+        "name": "SH Audit Fixture",
+        "gameVersion": "1.20.1",
+        "loaderType": "forge",
+        "loaderVersion": "47.4.22",
+        "memoryMb": 4096,
+        "status": "ready",
+        "gameFilesOk": true,
+        "modCount": 1,
+        "missingDependencies": [],
+        "incompatibleMods": []
+      }
+    }
+  }
+}

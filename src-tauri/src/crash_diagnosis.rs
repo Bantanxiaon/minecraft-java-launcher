@@ -27,27 +27,27 @@ pub(crate) enum CrashClassification {
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct SuspectedMod {
-    mod_id: String,
-    version: String,
-    jar: String,
-    confidence: f64,
-    evidence: Vec<String>,
+    pub(crate) mod_id: String,
+    pub(crate) version: String,
+    pub(crate) jar: String,
+    pub(crate) confidence: f64,
+    pub(crate) evidence: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct CrashAnalysis {
-    classification: CrashClassification,
-    root_exception: String,
-    wrapper_exception: String,
-    suspected_mods: Vec<SuspectedMod>,
-    mixin_config: Option<String>,
-    mixin_class: Option<String>,
-    target_class: Option<String>,
-    game_version: Option<String>,
-    loader: Option<String>,
-    loader_version: Option<String>,
-    java_version: Option<String>,
-    repair_actions: Vec<String>,
+    pub(crate) classification: CrashClassification,
+    pub(crate) root_exception: String,
+    pub(crate) wrapper_exception: String,
+    pub(crate) suspected_mods: Vec<SuspectedMod>,
+    pub(crate) mixin_config: Option<String>,
+    pub(crate) mixin_class: Option<String>,
+    pub(crate) target_class: Option<String>,
+    pub(crate) game_version: Option<String>,
+    pub(crate) loader: Option<String>,
+    pub(crate) loader_version: Option<String>,
+    pub(crate) java_version: Option<String>,
+    pub(crate) repair_actions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]

@@ -1,0 +1,18 @@
+{
+  "formatVersion": 1,
+  "game": "minecraft",
+  "versionId": "fixture-1.20.1-forge",
+  "name": "Exact Forge Fixture",
+  "dependencies": {
+    "minecraft": "1.20.1",
+    "forge": "47.4.22"
+  },
+  "files": [
+    {
+      "path": "mods/example.jar",
+      "hashes": { "sha1": "fixture-hash" },
+      "fileSize": 1,
+      "downloads": []
+    }
+  ]
+}

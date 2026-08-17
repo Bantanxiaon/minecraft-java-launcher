@@ -2855,9 +2855,43 @@ struct ModpackInspection {
     version: Option<String>,
     game_version: Option<String>,
     loader_type: Option<String>,
+    loader_version: Option<String>,
+    java_major: Option<u32>,
+    confidence: Option<f32>,
     mod_count: usize,
     override_count: usize,
     warnings: Vec<String>,
+}
+
+fn java_major_for_game_version(game_version: Option<&str>) -> Option<u32> {
+    let value = game_version?;
+    let mut parts = value.split('.');
+    let major = parts.next()?.parse::<u32>().ok()?;
+    let minor = parts.next()?.parse::<u32>().ok()?;
+    let patch = parts.next().and_then(|part| part.parse::<u32>().ok());
+    if major >= 2 {
+        return Some(21);
+    }
+    if major != 1 {
+        return None;
+    }
+    if minor <= 16 {
+        return Some(8);
+    }
+    if minor == 17 {
+        return Some(17);
+    }
+    if matches!(minor, 18 | 19) {
+        return Some(17);
+    }
+    if minor == 20 {
+        return Some(if patch.is_some_and(|value| value >= 5) {
+            21
+        } else {
+            17
+        });
+    }
+    Some(21)
 }
 
 fn validate_loader_type(loader_type: &str) -> Result<(), LauncherError> {
@@ -3147,6 +3181,162 @@ fn read_descriptor(
     Ok(Some(bytes))
 }
 
+/// 识别 Forge/NeoForge 的 FMLModType: LIBRARY 型 JAR（如 Kotlin for Forge）。
+/// 这类 JAR 外层没有 mods.toml，真实 descriptor 与 language provider 位于
+/// META-INF/jarjar/ 嵌套 JAR 中；必须读取嵌套内容后才能判定 loader/mod id。
+fn inspect_forge_library_jar(
+    archive: &mut zip::ZipArchive<std::fs::File>,
+) -> Result<
+    Option<(
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Vec<String>,
+        Vec<String>,
+    )>,
+    LauncherError,
+> {
+    use std::io::Read as _;
+    let Some(manifest_bytes) = read_descriptor(archive, "META-INF/MANIFEST.MF")? else {
+        return Ok(None);
+    };
+    let manifest = String::from_utf8_lossy(&manifest_bytes);
+    let is_library = manifest.lines().any(|line| {
+        let compact = line.replace(' ', "");
+        compact.eq_ignore_ascii_case("FMLModType:LIBRARY")
+    });
+    if !is_library {
+        return Ok(None);
+    }
+    let mut has_forge_service = false;
+    let mut has_neoforge_service = false;
+    let mut mod_id: Option<String> = None;
+    let mut version: Option<String> = None;
+    let mut display_name: Option<String> = None;
+    let mut dependencies = Vec::new();
+    let mut game_version_requirements = Vec::new();
+    for index in 0..archive.len() {
+        let entry = archive
+            .by_index(index)
+            .map_err(|error| LauncherError::validation(format!("JAR 嵌套读取失败：{error}")))?;
+        let name = entry.name().to_string();
+        if !name.starts_with("META-INF/jarjar/") || !name.ends_with(".jar") {
+            continue;
+        }
+        let mut bytes = Vec::new();
+        let mut reader = entry;
+        reader
+            .read_to_end(&mut bytes)
+            .map_err(|error| LauncherError::validation(format!("JAR 嵌套读取失败：{error}")))?;
+        let cursor = std::io::Cursor::new(bytes);
+        let Ok(mut nested) = zip::ZipArchive::new(cursor) else {
+            continue;
+        };
+        for nested_index in 0..nested.len() {
+            let Ok(nested_entry) = nested.by_index(nested_index) else {
+                continue;
+            };
+            let nested_name = nested_entry.name();
+            if nested_name
+                == "META-INF/services/net.minecraftforge.forgespi.language.IModLanguageProvider"
+            {
+                has_forge_service = true;
+            }
+            if nested_name
+                == "META-INF/services/net.neoforged.neoforgespi.language.IModLanguageProvider"
+            {
+                has_neoforge_service = true;
+            }
+            if !matches!(
+                nested_name,
+                "META-INF/mods.toml" | "META-INF/neoforge.mods.toml"
+            ) {
+                continue;
+            }
+            let mut toml_bytes = Vec::new();
+            let mut toml_reader = nested_entry;
+            toml_reader
+                .read_to_end(&mut toml_bytes)
+                .map_err(|error| LauncherError::validation(format!("JAR 嵌套读取失败：{error}")))?;
+            let text = std::str::from_utf8(&toml_bytes)
+                .map_err(|_| LauncherError::validation("嵌套 Mod descriptor 不是有效 UTF-8。"))?;
+            let value: toml::Value = toml::from_str(text).map_err(|error| {
+                LauncherError::validation(format!("嵌套 Mod descriptor 无效：{error}"))
+            })?;
+            let mod_entries = value
+                .get("mods")
+                .and_then(|value| value.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let first = mod_entries.first();
+            if mod_id.is_none() {
+                mod_id = first
+                    .and_then(|value| value.get("modId"))
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string);
+                display_name = first
+                    .and_then(|value| value.get("displayName"))
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string);
+                version = first
+                    .and_then(|value| value.get("version"))
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string);
+            }
+            if let Some(id) = first
+                .and_then(|value| value.get("modId"))
+                .and_then(|value| value.as_str())
+            {
+                if let Some(items) = value
+                    .get("dependencies")
+                    .and_then(|deps| deps.get(id))
+                    .and_then(|entry| entry.as_array())
+                {
+                    for dependency in items {
+                        let Some(dependency_id) =
+                            dependency.get("modId").and_then(|entry| entry.as_str())
+                        else {
+                            continue;
+                        };
+                        if dependency
+                            .get("mandatory")
+                            .and_then(|entry| entry.as_bool())
+                            .unwrap_or(true)
+                        {
+                            dependencies.push(dependency_id.to_string());
+                            if dependency_id == "minecraft" {
+                                if let Some(requirement) = dependency
+                                    .get("versionRange")
+                                    .and_then(|entry| entry.as_str())
+                                {
+                                    game_version_requirements.push(requirement.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if !has_forge_service && !has_neoforge_service {
+        return Ok(None);
+    }
+    let loader = if has_forge_service {
+        "forge"
+    } else {
+        "neoforge"
+    };
+    Ok(Some((
+        loader.to_string(),
+        mod_id,
+        version,
+        display_name,
+        dependencies,
+        game_version_requirements,
+    )))
+}
+
 pub(crate) fn inspect_mod_jar_path(path: &Path) -> Result<ModInspection, LauncherError> {
     if path
         .extension()
@@ -3364,6 +3554,24 @@ pub(crate) fn inspect_mod_jar_path(path: &Path) -> Result<ModInspection, Launche
                 }
                 break;
             }
+        }
+    }
+    if loader_type == "unknown" {
+        if let Some((
+            library_loader,
+            library_id,
+            library_version,
+            library_name,
+            library_deps,
+            library_game_requirements,
+        )) = inspect_forge_library_jar(&mut archive)?
+        {
+            loader_type = library_loader;
+            mod_id = library_id;
+            version = library_version;
+            display_name = library_name;
+            dependencies = library_deps;
+            game_version_requirements = library_game_requirements;
         }
     }
     let warnings = if loader_type == "unknown" {
@@ -3597,10 +3805,14 @@ fn inspect_modpack_path(path: &Path) -> Result<ModpackInspection, LauncherError>
             .get("dependencies")
             .and_then(|entry| entry.as_object())
             .ok_or_else(|| LauncherError::validation("Modrinth index 缺少 dependencies。"))?;
-        let loader_type = ["fabric-loader", "quilt-loader", "neoforge", "forge"]
+        let loader_key = ["fabric-loader", "quilt-loader", "neoforge", "forge"]
             .into_iter()
-            .find(|key| dependencies.contains_key(*key))
-            .map(|key| key.trim_end_matches("-loader").to_string());
+            .find(|key| dependencies.contains_key(*key));
+        let loader_type = loader_key.map(|key| key.trim_end_matches("-loader").to_string());
+        let loader_version = loader_key
+            .and_then(|key| dependencies.get(key))
+            .and_then(|entry| entry.as_str())
+            .map(str::to_string);
         let files = value
             .get("files")
             .and_then(|entry| entry.as_array())
@@ -3628,6 +3840,13 @@ fn inspect_modpack_path(path: &Path) -> Result<ModpackInspection, LauncherError>
                 .and_then(|entry| entry.as_str())
                 .map(str::to_string),
             loader_type,
+            loader_version,
+            java_major: java_major_for_game_version(
+                dependencies
+                    .get("minecraft")
+                    .and_then(|entry| entry.as_str()),
+            ),
+            confidence: Some(1.0),
             mod_count: files.len(),
             override_count,
             warnings: Vec::new(),
@@ -3644,6 +3863,7 @@ fn inspect_modpack_path(path: &Path) -> Result<ModpackInspection, LauncherError>
             .unwrap_or_default();
         let mut game_version = None;
         let mut loader_type = None;
+        let mut loader_version = None;
         for component in &components {
             let uid = component
                 .get("uid")
@@ -3655,10 +3875,22 @@ fn inspect_modpack_path(path: &Path) -> Result<ModpackInspection, LauncherError>
                 .map(str::to_string);
             match uid {
                 "net.minecraft" => game_version = version,
-                "net.minecraftforge" => loader_type = Some("forge".to_string()),
-                "net.neoforged" => loader_type = Some("neoforge".to_string()),
-                "net.fabricmc.fabric-loader" => loader_type = Some("fabric".to_string()),
-                "org.quiltmc.quilt-loader" => loader_type = Some("quilt".to_string()),
+                "net.minecraftforge" => {
+                    loader_type = Some("forge".to_string());
+                    loader_version = version;
+                }
+                "net.neoforged" => {
+                    loader_type = Some("neoforge".to_string());
+                    loader_version = version;
+                }
+                "net.fabricmc.fabric-loader" => {
+                    loader_type = Some("fabric".to_string());
+                    loader_version = version;
+                }
+                "org.quiltmc.quilt-loader" => {
+                    loader_type = Some("quilt".to_string());
+                    loader_version = version;
+                }
                 _ => {}
             }
         }
@@ -3687,8 +3919,11 @@ fn inspect_modpack_path(path: &Path) -> Result<ModpackInspection, LauncherError>
                 .and_then(|entry| entry.as_str())
                 .map(str::to_string),
             version: None,
-            game_version,
+            game_version: game_version.clone(),
             loader_type,
+            loader_version,
+            java_major: java_major_for_game_version(game_version.as_deref()),
+            confidence: Some(1.0),
             mod_count: mmc_mods,
             override_count: mmc_files,
             warnings: vec![
@@ -3700,7 +3935,7 @@ fn inspect_modpack_path(path: &Path) -> Result<ModpackInspection, LauncherError>
         let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|error| {
             LauncherError::validation(format!("HMCL modpack.json 无效：{error}"))
         })?;
-        let loader_type = value
+        let loader_addon = value
             .get("addons")
             .and_then(|entry| entry.as_array())
             .and_then(|addons| {
@@ -3711,14 +3946,40 @@ fn inspect_modpack_path(path: &Path) -> Result<ModpackInspection, LauncherError>
                         .unwrap_or_default()
                         .to_ascii_lowercase();
                     match id.as_str() {
-                        "forge" | "minecraftforge" => Some("forge".to_string()),
-                        "neoforge" | "net.neoforge" => Some("neoforge".to_string()),
-                        "fabric" | "fabric-loader" => Some("fabric".to_string()),
-                        "quilt" | "quilt-loader" => Some("quilt".to_string()),
+                        "forge" | "minecraftforge" => Some((
+                            "forge".to_string(),
+                            addon
+                                .get("version")
+                                .and_then(|entry| entry.as_str())
+                                .map(str::to_string),
+                        )),
+                        "neoforge" | "net.neoforge" => Some((
+                            "neoforge".to_string(),
+                            addon
+                                .get("version")
+                                .and_then(|entry| entry.as_str())
+                                .map(str::to_string),
+                        )),
+                        "fabric" | "fabric-loader" => Some((
+                            "fabric".to_string(),
+                            addon
+                                .get("version")
+                                .and_then(|entry| entry.as_str())
+                                .map(str::to_string),
+                        )),
+                        "quilt" | "quilt-loader" => Some((
+                            "quilt".to_string(),
+                            addon
+                                .get("version")
+                                .and_then(|entry| entry.as_str())
+                                .map(str::to_string),
+                        )),
                         _ => None,
                     }
                 })
             });
+        let loader_type = loader_addon.as_ref().map(|(kind, _)| kind.clone());
+        let loader_version = loader_addon.and_then(|(_, version)| version);
         let mut hmcl_mods = 0usize;
         let mut hmcl_files = 0usize;
         for index in 0..archive.len() {
@@ -3752,6 +4013,11 @@ fn inspect_modpack_path(path: &Path) -> Result<ModpackInspection, LauncherError>
                 .and_then(|entry| entry.as_str())
                 .map(str::to_string),
             loader_type,
+            loader_version,
+            java_major: java_major_for_game_version(
+                value.get("gameVersion").and_then(|entry| entry.as_str()),
+            ),
+            confidence: Some(1.0),
             mod_count: hmcl_mods,
             override_count: hmcl_files,
             warnings: vec!["HMCL 整合包：导入后会创建对应实例并自动安装游戏与加载器。".into()],
@@ -3788,9 +4054,14 @@ fn inspect_modpack_path(path: &Path) -> Result<ModpackInspection, LauncherError>
             .and_then(|entry| entry.as_str())
             .unwrap_or_default()
             .to_ascii_lowercase();
-        let loader_type = ["neoforge", "fabric", "quilt", "forge"]
+        let loader_key = ["neoforge", "fabric", "quilt", "forge"]
             .into_iter()
-            .find(|loader| loader_id.starts_with(loader))
+            .find(|loader| loader_id.starts_with(loader));
+        let loader_type = loader_key.map(str::to_string);
+        let loader_version = loader_key
+            .and_then(|loader| loader_id.strip_prefix(loader))
+            .and_then(|rest| rest.strip_prefix('-'))
+            .filter(|rest| !rest.is_empty())
             .map(str::to_string);
         let mut mcbbs_mods = 0usize;
         let mut mcbbs_files = 0usize;
@@ -3817,8 +4088,11 @@ fn inspect_modpack_path(path: &Path) -> Result<ModpackInspection, LauncherError>
                 .and_then(|entry| entry.as_str())
                 .map(str::to_string),
             version: None,
-            game_version,
+            game_version: game_version.clone(),
             loader_type,
+            loader_version,
+            java_major: java_major_for_game_version(game_version.as_deref()),
+            confidence: Some(1.0),
             mod_count: mcbbs_mods,
             override_count: mcbbs_files,
             warnings: vec!["MCBBS 整合包：导入后会创建对应实例并自动安装游戏与加载器。".into()],
@@ -3833,9 +4107,14 @@ fn inspect_modpack_path(path: &Path) -> Result<ModpackInspection, LauncherError>
             .and_then(|entry| entry.as_str())
             .unwrap_or_default()
             .to_ascii_lowercase();
-        let loader_type = ["neoforge", "fabric", "quilt", "forge"]
+        let loader_key = ["neoforge", "fabric", "quilt", "forge"]
             .into_iter()
-            .find(|loader| loader_id.starts_with(loader))
+            .find(|loader| loader_id.starts_with(loader));
+        let loader_type = loader_key.map(str::to_string);
+        let loader_version = loader_key
+            .and_then(|loader| loader_id.strip_prefix(loader))
+            .and_then(|rest| rest.strip_prefix('-'))
+            .filter(|rest| !rest.is_empty())
             .map(str::to_string);
         let count = value
             .get("files")
@@ -3857,11 +4136,26 @@ fn inspect_modpack_path(path: &Path) -> Result<ModpackInspection, LauncherError>
                 .and_then(|entry| entry.as_str())
                 .map(str::to_string),
             loader_type,
+            loader_version,
+            java_major: java_major_for_game_version(
+                value
+                    .pointer("/minecraft/version")
+                    .and_then(|entry| entry.as_str()),
+            ),
+            confidence: Some(1.0),
             mod_count: count + bundled_mods,
             override_count,
             warnings: vec!["CurseForge 清单中的远程项目需要可用下载源；导入前会再次检查。".into()],
         });
     }
+    // 通用 ZIP：没有标准清单时，扫描 mods/ 内 JAR 的加载器元数据自动适配，
+    // 而不是让用户面对“只有两种环境”的盲猜。
+    let (detected_loader, confidence, loader_evidence) = detect_generic_pack_loader(&mut archive);
+    let mut warnings = vec![
+        "通用 ZIP 缺少标准整合包清单，按受控目录导入；已自动识别加载器，导入前仍可修改。"
+            .to_string(),
+    ];
+    warnings.extend(loader_evidence);
     Ok(ModpackInspection {
         file_name,
         format: "generic".into(),
@@ -3871,11 +4165,96 @@ fn inspect_modpack_path(path: &Path) -> Result<ModpackInspection, LauncherError>
             .map(str::to_string),
         version: None,
         game_version: None,
-        loader_type: None,
+        loader_type: detected_loader,
+        loader_version: None,
+        java_major: None,
+        confidence: Some(confidence),
         mod_count: bundled_mods,
         override_count,
-        warnings: vec!["通用 ZIP 缺少标准整合包清单，只能按受控目录导入。".into()],
+        warnings,
     })
+}
+
+/// 通用 ZIP 自动适配：扫描 `mods/*.jar` 内嵌的加载器元数据并统计票数。
+/// Quilt JAR 同时含 quilt.mod.json 与 fabric.mod.json → quilt 优先；
+/// NeoForge JAR 同时含 neoforge.mods.toml 与 mods.toml → neoforge 优先。
+fn detect_generic_pack_loader<R>(
+    archive: &mut zip::ZipArchive<R>,
+) -> (Option<String>, f32, Vec<String>)
+where
+    R: std::io::Read + std::io::Seek,
+{
+    use std::io::Read;
+
+    let mut votes: [(&str, u32); 4] = [("fabric", 0), ("forge", 0), ("neoforge", 0), ("quilt", 0)];
+    let mut scanned = 0usize;
+    let mut recognized = 0usize;
+    let mut evidence = Vec::new();
+    for index in 0..archive.len() {
+        if scanned >= 80 {
+            break;
+        }
+        let mut entry = match archive.by_index(index) {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
+        let normalized = entry.name().replace('\\', "/").to_ascii_lowercase();
+        if !(normalized.starts_with("mods/") && normalized.ends_with(".jar")) {
+            continue;
+        }
+        if entry.size() == 0 || entry.size() > 4 * 1024 * 1024 {
+            continue;
+        }
+        let mut bytes = Vec::with_capacity(entry.size() as usize);
+        if entry.read_to_end(&mut bytes).is_err() {
+            continue;
+        }
+        scanned += 1;
+        let Ok(inner) = zip::ZipArchive::new(std::io::Cursor::new(&bytes)) else {
+            continue;
+        };
+        let has = |name: &str| {
+            inner
+                .file_names()
+                .any(|candidate| candidate.eq_ignore_ascii_case(name))
+        };
+        let mut detected = false;
+        if has("quilt.mod.json") {
+            votes[3].1 += 1;
+            detected = true;
+        } else if has("fabric.mod.json") {
+            votes[0].1 += 1;
+            detected = true;
+        }
+        if has("META-INF/neoforge.mods.toml") {
+            votes[2].1 += 1;
+            detected = true;
+        } else if has("META-INF/mods.toml") {
+            votes[1].1 += 1;
+            detected = true;
+        }
+        if detected {
+            recognized += 1;
+        }
+    }
+    if recognized == 0 {
+        return (None, 0.0, evidence);
+    }
+    let details = votes
+        .iter()
+        .filter(|(_, count)| *count > 0)
+        .map(|(name, count)| format!("{name}×{count}"))
+        .collect::<Vec<_>>()
+        .join("、");
+    evidence.push(format!(
+        "已扫描 mods/ 内 {scanned} 个 JAR，其中 {recognized} 个携带加载器元数据：{details}。"
+    ));
+    votes.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+    (
+        Some(votes[0].0.to_string()),
+        (recognized as f32 / scanned.max(1) as f32).clamp(0.0, 1.0),
+        evidence,
+    )
 }
 
 #[tauri::command]
@@ -5381,6 +5760,15 @@ async fn resolve_missing_mod_dependency(
         )
         .map_err(|_| LauncherError::validation("目标实例不存在。"))?;
     drop(connection);
+    // 无 CurseForge 索引时使用在线搜索回退（加载器精确过滤）。
+    if loader != "vanilla" {
+        if let Ok(item) =
+            resolve_curseforge_dependency_search(app, instance_id, dep, &game_version, &loader)
+                .await
+        {
+            return Ok(item);
+        }
+    }
     // Provider metadata（整合包版本依赖）→ 已安装项目版本依赖。
     if let Some(project_id) =
         resolve_modrinth_dependency_metadata(app, instance_id, dep, &game_version, &loader).await?
@@ -6505,6 +6893,146 @@ fn sync_mod_content_row(
     }
 }
 
+/// 为整合包实例安装 Runtime：Minecraft Base → exact Loader → Java。
+/// 返回 Forge/NeoForge 使用的 Java 可执行路径（vanilla 返回 None）。
+async fn ensure_pack_runtime(
+    app: &AppHandle,
+    instance: &Instance,
+    exact_loader_version: Option<&str>,
+    java_major: Option<u32>,
+) -> Result<Option<String>, LauncherError> {
+    let manifest = fetch_version_manifest(false).await?;
+    let summary = manifest
+        .versions
+        .into_iter()
+        .find(|candidate| candidate.id == instance.game_version)
+        .ok_or_else(|| {
+            LauncherError::validation(format!(
+                "官方版本清单中不存在 Minecraft {}。",
+                instance.game_version
+            ))
+        })?;
+    install_vanilla_client(app.clone(), instance.id, summary.url, summary.sha1).await?;
+    if instance.loader_type == "vanilla" {
+        return Ok(None);
+    }
+    let exact = exact_loader_version.ok_or_else(|| {
+        LauncherError::validation("整合包未声明精确加载器版本，无法保证 exact runtime。")
+    })?;
+    let java = if matches!(instance.loader_type.as_str(), "forge" | "neoforge") {
+        let major = java_major.unwrap_or(17);
+        Some(install_managed_java(major).await?)
+    } else {
+        None
+    };
+    let java_path = java.as_ref().map(|runtime| runtime.path.clone());
+    let updated = if matches!(instance.loader_type.as_str(), "forge" | "neoforge") {
+        install_java_loader(
+            app.clone(),
+            instance.id,
+            exact.to_string(),
+            java_path
+                .clone()
+                .ok_or_else(|| LauncherError::validation("缺少 Java 可执行文件。"))?,
+        )
+        .await?
+    } else {
+        install_profile_loader(app.clone(), instance.id, exact.to_string()).await?
+    };
+    if updated.status != "ready" {
+        return Err(LauncherError::validation(
+            "加载器安装后实例未进入 ready 状态。",
+        ));
+    }
+    let connection = open_database(app)?;
+    let (db_loader, status): (Option<String>, String) = connection
+        .query_row(
+            "SELECT loader_version,status FROM instances WHERE id=?1",
+            [instance.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|_| LauncherError::validation("实例不存在。"))?;
+    drop(connection);
+    if status != "ready" || db_loader.as_deref() != Some(exact) {
+        return Err(LauncherError::validation(format!(
+            "加载器安装结果与整合包声明不一致：期望 {exact}，实际 {db_loader:?}（status={status}）。"
+        )));
+    }
+    Ok(java_path)
+}
+
+/// MODPACK_COMMIT_INVARIANT：只有 runtime/content/overrides/dependency 全部就绪才允许提交。
+async fn validate_pack_commit_invariant(
+    app: &AppHandle,
+    instance: &Instance,
+    exact_loader_version: Option<&str>,
+    owned_rows: &[(String, Option<String>, String)],
+    game: &Path,
+) -> Result<(), LauncherError> {
+    let connection = open_database(app)?;
+    let (status, db_loader): (String, Option<String>) = connection
+        .query_row(
+            "SELECT status,loader_version FROM instances WHERE id=?1",
+            [instance.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|_| LauncherError::validation("实例不存在。"))?;
+    drop(connection);
+    if status != "ready" {
+        return Err(LauncherError::validation(format!(
+            "实例状态不是 ready（当前 {status}），不允许提交。"
+        )));
+    }
+    if instance.loader_type != "vanilla" {
+        if db_loader.as_deref() != exact_loader_version {
+            return Err(LauncherError::validation(format!(
+                "exact Loader 不匹配：期望 {exact_loader_version:?}，实际 {db_loader:?}。"
+            )));
+        }
+        let effective = game
+            .join("versions")
+            .join(&instance.game_version)
+            .join("launcher-effective.json");
+        if !effective.is_file() {
+            return Err(LauncherError::validation(
+                "launcher-effective.json 缺失，启动规格不可构建。",
+            ));
+        }
+    } else {
+        let vanilla_json = game
+            .join("versions")
+            .join(&instance.game_version)
+            .join(format!("{}.json", instance.game_version));
+        if !vanilla_json.is_file() {
+            return Err(LauncherError::validation(
+                "vanilla 版本元数据缺失，启动规格不可构建。",
+            ));
+        }
+    }
+    for (relative, sha1, _) in owned_rows {
+        if let Some(expected) = sha1 {
+            let target = pack_target_path(game, relative)?;
+            if !target.is_file() {
+                return Err(LauncherError::validation(format!(
+                    "整合包文件缺失：{relative}"
+                )));
+            }
+            let actual = sha1_file(&target).await.map_err(|error| {
+                LauncherError::validation(format!(
+                    "校验整合包文件失败 {relative}：{}",
+                    error.message
+                ))
+            })?;
+            if !actual.eq_ignore_ascii_case(expected) {
+                return Err(LauncherError::validation(format!(
+                    "整合包文件 SHA-1 不匹配：{relative}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn import_modrinth_pack_inner(
     app: AppHandle,
     source: PathBuf,
@@ -6534,6 +7062,39 @@ async fn import_modrinth_pack_inner(
         .get("files")
         .and_then(|value| value.as_array())
         .ok_or_else(|| LauncherError::validation("Modrinth index 缺少 files。"))?;
+
+    // 阶段零：先创建实例并安装 Runtime（Minecraft Base + exact Loader + Java）。
+    // Runtime 未就绪前不进入内容提交，杜绝 base_missing / loader_version=NULL 的半成品实例。
+    let instance = create_instance_profile(
+        app.clone(),
+        inspection
+            .name
+            .clone()
+            .unwrap_or_else(|| "Imported Modpack".into()),
+        game_version.clone(),
+        loader_type.clone(),
+    )?;
+    if let Err(error) =
+        modpack_ops::mark_operation_state(&operation_id, "committing", Some(instance.id), None)
+    {
+        discard_instance_immediately(&app, instance.id, &instance.root_path);
+        return Err(error);
+    }
+    if let Err(error) = ensure_pack_runtime(
+        &app,
+        &instance,
+        inspection.loader_version.as_deref(),
+        inspection.java_major,
+    )
+    .await
+    {
+        let _ = modpack_ops::cleanup_operation(operation_id);
+        discard_instance_immediately(&app, instance.id, &instance.root_path);
+        return Err(LauncherError::validation(format!(
+            "整合包运行环境安装未完成：{}",
+            error.message
+        )));
+    }
 
     // 阶段一：全部文件下载到 staging，已校验完成的文件复用（崩溃恢复的“继续”语义）。
     let files_root = modpack_ops::operation_files_directory(&operation_id)?;
@@ -6615,23 +7176,7 @@ async fn import_modrinth_pack_inner(
     let overrides_root = modpack_ops::operation_overrides_directory(&operation_id)?;
     let overrides_dir = stage_pack_overrides(&source, &overrides_root)?;
 
-    // 阶段三：原子提交。先建实例，再统一移动文件，最后 DB 双写；任何一步失败都整体回滚。
-    let instance = create_instance_profile(
-        app.clone(),
-        inspection
-            .name
-            .clone()
-            .unwrap_or_else(|| "Imported Modpack".into()),
-        game_version.clone(),
-        loader_type.clone(),
-    )?;
-    // 进入提交态：一旦此后崩溃，启动时按 instance_id 回滚这个未完成的新实例。
-    if let Err(error) =
-        modpack_ops::mark_operation_state(&operation_id, "committing", Some(instance.id), None)
-    {
-        discard_instance_immediately(&app, instance.id, &instance.root_path);
-        return Err(error);
-    }
+    // 阶段三：原子提交。实例与 Runtime 已在阶段零创建，这里只移动内容并做 DB 双写。
     let game = PathBuf::from(&instance.root_path).join(".minecraft");
     let mut transaction = fs_safe::FsTransaction::new(format!("modpack-import-{operation_id}"));
     let index_relatives: Vec<String> = owned_rows.iter().map(|(path, _, _)| path.clone()).collect();
@@ -6743,14 +7288,185 @@ async fn import_modrinth_pack_inner(
         discard_instance_immediately(&app, instance.id, &instance.root_path);
         return Err(error);
     }
+    // 阶段四：依赖补齐 + 提交不变量校验，任一失败整体回滚。
+    if let Err(error) =
+        auto_install_missing_mod_dependencies(&app, instance.id, &instance.root_path, &loader_type)
+            .await
+    {
+        let _ = transaction.rollback();
+        let _ = modpack_ops::cleanup_operation(operation_id);
+        discard_instance_immediately(&app, instance.id, &instance.root_path);
+        return Err(LauncherError::validation(format!(
+            "整合包依赖补齐未完成：{}",
+            error.message
+        )));
+    }
+    if let Err(error) = validate_pack_commit_invariant(
+        &app,
+        &instance,
+        inspection.loader_version.as_deref(),
+        &owned_rows,
+        &game,
+    )
+    .await
+    {
+        let _ = transaction.rollback();
+        let _ = modpack_ops::cleanup_operation(operation_id);
+        discard_instance_immediately(&app, instance.id, &instance.root_path);
+        return Err(LauncherError::validation(format!(
+            "整合包安装校验未通过：{}",
+            error.message
+        )));
+    }
     transaction.commit();
+    let connection = open_database(&app)?;
+    let fresh_instance = connection
+        .query_row(
+            "SELECT id,name,root_path,game_version,loader_type,memory_mb,status,source FROM instances WHERE id=?1",
+            [instance.id],
+            |row| {
+                Ok(Instance {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    root_path: row.get(2)?,
+                    game_version: row.get(3)?,
+                    loader_type: row.get(4)?,
+                    memory_mb: row.get(5)?,
+                    status: row.get(6)?,
+                    source: row.get(7)?,
+                })
+            },
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    drop(connection);
     Ok(ImportedModpack {
-        instance: Instance {
-            source: "modrinth".into(),
-            ..instance
-        },
+        instance: fresh_instance,
         downloaded_files: downloaded_files as usize,
         override_files,
+    })
+}
+
+#[tauri::command]
+async fn import_curseforge_pack(
+    app: AppHandle,
+    source_path: String,
+) -> Result<ImportedModpack, LauncherError> {
+    let source = PathBuf::from(&source_path);
+    let inspection = inspect_modpack_path(&source)?;
+    if inspection.format != "curseforge" {
+        return Err(LauncherError::validation(
+            "自动导入当前仅支持标准 CurseForge ZIP。",
+        ));
+    }
+    let game_version = inspection
+        .game_version
+        .clone()
+        .ok_or_else(|| LauncherError::validation("整合包未声明 Minecraft 版本。"))?;
+    let loader_type = inspection
+        .loader_type
+        .clone()
+        .ok_or_else(|| LauncherError::validation("整合包未声明加载器。"))?;
+    validate_loader_type(&loader_type)?;
+    let exact_loader_version = inspection.loader_version.clone();
+    let name = inspection.name.clone().unwrap_or_else(|| {
+        source
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("Imported CurseForge Pack")
+            .replace(".zip", "")
+            .replace(".mrpack", "")
+    });
+    let instance =
+        create_instance_profile(app.clone(), name, game_version.clone(), loader_type.clone())?;
+    if let Err(error) = ensure_pack_runtime(
+        &app,
+        &instance,
+        exact_loader_version.as_deref(),
+        inspection.java_major,
+    )
+    .await
+    {
+        discard_instance_immediately(&app, instance.id, &instance.root_path);
+        return Err(LauncherError::validation(format!(
+            "CurseForge 整合包运行环境安装未完成：{}",
+            error.message
+        )));
+    }
+    let imported = match import_local_pack(app.clone(), instance.id, source_path).await {
+        Ok(imported) => imported,
+        Err(error) => {
+            discard_instance_immediately(&app, instance.id, &instance.root_path);
+            return Err(LauncherError::validation(format!(
+                "CurseForge 整合包内容导入未完成：{}",
+                error.message
+            )));
+        }
+    };
+    if imported.unresolved_remote_files > 0 {
+        discard_instance_immediately(&app, instance.id, &instance.root_path);
+        return Err(LauncherError::validation(format!(
+            "{} 个 CurseForge 远程模组下载失败（网络或已下架），已撤销本次导入，未提交不完整实例。",
+            imported.unresolved_remote_files
+        )));
+    }
+    if let Err(error) =
+        auto_install_missing_mod_dependencies(&app, instance.id, &instance.root_path, &loader_type)
+            .await
+    {
+        discard_instance_immediately(&app, instance.id, &instance.root_path);
+        return Err(LauncherError::validation(format!(
+            "CurseForge 整合包依赖补齐未完成：{}",
+            error.message
+        )));
+    }
+    let game = PathBuf::from(&instance.root_path).join(".minecraft");
+    validate_pack_commit_invariant(&app, &instance, exact_loader_version.as_deref(), &[], &game)
+        .await?;
+    let connection = open_database(&app)?;
+    connection
+        .execute(
+            "UPDATE instances SET source='curseforge' WHERE id=?1",
+            [instance.id],
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    connection
+        .execute(
+            "INSERT OR IGNORE INTO instance_pack_source(instance_id,provider,pack_version,installed_at)
+             VALUES(?1,'curseforge',?2,?3)",
+            params![
+                instance.id,
+                inspection.version.unwrap_or_default(),
+                chrono_like_timestamp()
+            ],
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    drop(connection);
+    let connection = open_database(&app)?;
+    let fresh_instance = connection
+        .query_row(
+            "SELECT id,name,root_path,game_version,loader_type,memory_mb,status,source FROM instances WHERE id=?1",
+            [instance.id],
+            |row| {
+                Ok(Instance {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    root_path: row.get(2)?,
+                    game_version: row.get(3)?,
+                    loader_type: row.get(4)?,
+                    memory_mb: row.get(5)?,
+                    status: row.get(6)?,
+                    source: row.get(7)?,
+                })
+            },
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    drop(connection);
+    Ok(ImportedModpack {
+        instance: fresh_instance,
+        downloaded_files: imported.downloaded_remote_files,
+        override_files: imported
+            .imported_files
+            .saturating_sub(imported.imported_mods),
     })
 }
 
@@ -7265,6 +7981,48 @@ async fn resolve_curseforge_dependency(
         Err(_) => indexed_file_id,
     };
     install_curseforge_ids(app, instance_id, project_id, file_id).await
+}
+
+/// CurseForge 在线搜索回退：实例没有 CurseForge 整合包索引时，
+/// 按“dep 名称 + 目标游戏版本 + 加载器”直接搜索官方 API，
+/// 避免把同名但加载器不兼容的项目（如 Modrinth 的 Fabric Expandability）装进 Forge 实例。
+async fn resolve_curseforge_dependency_search(
+    app: &AppHandle,
+    instance_id: i64,
+    dep: &str,
+    game_version: &str,
+    loader: &str,
+) -> Result<ContentItem, LauncherError> {
+    if loader == "vanilla" {
+        return Err(LauncherError::validation(
+            "Vanilla 实例没有 CurseForge 前置。",
+        ));
+    }
+    let projects = search_curseforge_projects(
+        dep.to_string(),
+        "mod".into(),
+        Some(game_version.to_string()),
+        Some(loader.to_string()),
+    )
+    .await?;
+    let target = normalize_curseforge_key(dep);
+    let hit = projects.into_iter().find(|project| {
+        normalize_curseforge_key(project.slug.as_deref().unwrap_or_default()) == target
+            || normalize_curseforge_key(&project.title) == target
+    });
+    let Some(project) = hit else {
+        return Err(LauncherError::validation(format!(
+            "CurseForge 未找到与 {game_version} + {loader} 匹配的“{dep}”。"
+        )));
+    };
+    install_curseforge_project(
+        app.clone(),
+        instance_id,
+        project.project_id,
+        game_version.to_string(),
+        loader.to_string(),
+    )
+    .await
 }
 
 fn extract_curseforge_slug(url: &str) -> Option<String> {
@@ -9114,6 +9872,51 @@ fn list_instances(app: AppHandle) -> Result<Vec<Instance>, LauncherError> {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct PlayHistoryRow {
+    id: i64,
+    instance_id: i64,
+    instance_name: String,
+    started_at: String,
+    ended_at: Option<String>,
+    exit_code: Option<i64>,
+    username_snapshot: Option<String>,
+}
+
+/// 最近游戏记录：首页“最近游戏”真实数据源。
+#[tauri::command]
+fn list_play_history(app: AppHandle) -> Result<Vec<PlayHistoryRow>, LauncherError> {
+    let connection = open_database(&app)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT p.id, p.instance_id,
+                    COALESCE(i.name, '实例 ' || p.instance_id),
+                    p.started_at, p.ended_at, p.exit_code, p.username_snapshot
+             FROM play_history p
+             LEFT JOIN instances i ON i.id = p.instance_id
+             ORDER BY p.id DESC LIMIT 50",
+        )
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(PlayHistoryRow {
+                id: row.get(0)?,
+                instance_id: row.get(1)?,
+                instance_name: row.get(2)?,
+                started_at: row.get(3)?,
+                ended_at: row.get(4)?,
+                exit_code: row.get(5)?,
+                username_snapshot: row.get(6)?,
+            })
+        })
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    let history = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| LauncherError::storage(error.to_string()))?;
+    Ok(history)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct BootJavaCheck {
     detected_count: usize,
     has_64_bit: bool,
@@ -10147,69 +10950,313 @@ async fn list_loader_versions(
 ) -> Result<Vec<String>, LauncherError> {
     let loader = loader_type.trim().to_ascii_lowercase();
     validate_loader_token(&game_version)?;
-    let mut versions = Vec::new();
-    match loader.as_str() {
+    let result = list_loader_builds_inner(&loader, &game_version).await?;
+    let mut ordered = Vec::new();
+    for build in result.versions.iter() {
+        if build.recommended || build.latest {
+            ordered.push(build.version.clone());
+        }
+    }
+    for build in result.versions.iter() {
+        if !ordered.iter().any(|value| value == &build.version) {
+            ordered.push(build.version.clone());
+        }
+    }
+    if ordered.is_empty() {
+        return Err(LauncherError::validation(
+            "该 Minecraft 版本没有可用的加载器版本。",
+        ));
+    }
+    Ok(ordered)
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct LoaderVersionRecord {
+    loader_kind: String,
+    minecraft_version: String,
+    version: String,
+    stable: bool,
+    recommended: bool,
+    latest: bool,
+    published_at: Option<String>,
+    source: String,
+    from_cache: bool,
+    fetched_at: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LoaderBuildsCache {
+    versions: Vec<serde_json::Value>,
+    fetched_at: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LoaderBuildsResult {
+    versions: Vec<LoaderVersionRecord>,
+    from_cache: bool,
+    fetched_at: String,
+}
+
+fn loader_cache_path(loader: &str, game_version: &str) -> Result<PathBuf, LauncherError> {
+    let root = launcher_data_directory()?.join("cache").join("loader-meta");
+    Ok(root.join(format!("{loader}-{game_version}.json")))
+}
+
+fn write_loader_cache(
+    loader: &str,
+    game_version: &str,
+    records: &[LoaderVersionRecord],
+    fetched_at: &str,
+) {
+    let Ok(path) = loader_cache_path(loader, game_version) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let value = LoaderBuildsCache {
+        versions: records
+            .iter()
+            .map(|record| serde_json::to_value(record).unwrap_or_default())
+            .collect(),
+        fetched_at: fetched_at.to_string(),
+    };
+    let _ = fs::write(&path, serde_json::to_vec(&value).unwrap_or_default());
+}
+
+fn read_loader_cache(loader: &str, game_version: &str) -> Option<LoaderBuildsResult> {
+    let path = loader_cache_path(loader, game_version).ok()?;
+    let bytes = fs::read(path).ok()?;
+    let cache: LoaderBuildsCache = serde_json::from_slice(&bytes).ok()?;
+    let versions = cache
+        .versions
+        .into_iter()
+        .filter_map(|value| serde_json::from_value::<LoaderVersionRecord>(value).ok())
+        .map(|mut record| {
+            record.from_cache = true;
+            record
+        })
+        .collect();
+    Some(LoaderBuildsResult {
+        versions,
+        from_cache: true,
+        fetched_at: cache.fetched_at,
+    })
+}
+
+fn make_record(
+    loader: &str,
+    game_version: &str,
+    version: String,
+    stable: bool,
+    recommended: bool,
+    latest: bool,
+    source: &str,
+    fetched_at: &str,
+) -> LoaderVersionRecord {
+    LoaderVersionRecord {
+        loader_kind: loader.to_string(),
+        minecraft_version: game_version.to_string(),
+        version,
+        stable,
+        recommended,
+        latest,
+        published_at: None,
+        source: source.to_string(),
+        from_cache: false,
+        fetched_at: fetched_at.to_string(),
+    }
+}
+
+async fn list_loader_builds_inner(
+    loader: &str,
+    game_version: &str,
+) -> Result<LoaderBuildsResult, LauncherError> {
+    validate_loader_token(game_version)?;
+    let fetched_at = chrono_like_timestamp();
+    let mut records = Vec::new();
+    match loader {
         "fabric" | "quilt" => {
-            let base = loader_meta_base(&loader)?;
+            let base = loader_meta_base(loader)?;
             let value =
                 fetch_loader_json(&format!("{base}/versions/loader/{game_version}")).await?;
             let entries = value
                 .as_array()
                 .ok_or_else(|| LauncherError::storage("加载器版本列表格式无效。"))?;
-            for entry in entries {
-                if let Some(version) = entry
+            for (index, entry) in entries.iter().enumerate() {
+                let Some(version) = entry
                     .pointer("/loader/version")
                     .and_then(|value| value.as_str())
-                {
-                    validate_loader_token(version)?;
-                    versions.push(version.to_string());
-                }
+                else {
+                    continue;
+                };
+                validate_loader_token(version)?;
+                let stable = entry
+                    .pointer("/loader/stable")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(true);
+                let recommended = entry
+                    .pointer("/loader/recommended")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false);
+                records.push(make_record(
+                    loader,
+                    game_version,
+                    version.to_string(),
+                    stable,
+                    recommended,
+                    index == 0,
+                    &format!("{base}/versions/loader/{game_version}"),
+                    &fetched_at,
+                ));
             }
         }
         "forge" => {
-            let text = fetch_official_loader_text(
+            let promos = fetch_official_loader_text(
                 "https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json",
             )
             .await?;
-            let value: serde_json::Value = serde_json::from_str(&text)
+            let promo_value: serde_json::Value = serde_json::from_str(&promos)
                 .map_err(|error| LauncherError::storage(format!("Forge 版本列表无效：{error}")))?;
-            for channel in ["recommended", "latest"] {
-                if let Some(version) = value
-                    .pointer(&format!("/promos/{game_version}-{channel}"))
-                    .and_then(|value| value.as_str())
-                {
-                    validate_loader_token(version)?;
-                    if !versions.iter().any(|existing| existing == version) {
-                        versions.push(version.to_string());
-                    }
+            let recommended = promo_value
+                .pointer(&format!("/promos/{game_version}-recommended"))
+                .and_then(|value| value.as_str())
+                .map(str::to_string);
+            let latest = promo_value
+                .pointer(&format!("/promos/{game_version}-latest"))
+                .and_then(|value| value.as_str())
+                .map(str::to_string);
+            let text = fetch_official_loader_text(
+                "https://files.minecraftforge.net/maven/net/minecraftforge/forge/maven-metadata.xml",
+            )
+            .await?;
+            let prefix = format!("{game_version}-");
+            let mut all = Vec::new();
+            for fragment in text.split("<version>").skip(1) {
+                let Some(full) = fragment.split("</version>").next() else {
+                    continue;
+                };
+                let Some(version) = full.strip_prefix(&prefix) else {
+                    continue;
+                };
+                if version.is_empty() || version.contains(['/', '\\']) {
+                    continue;
                 }
+                validate_loader_token(version)?;
+                all.push(version.to_string());
+            }
+            all.sort_by(|left, right| {
+                let lv = left
+                    .split('.')
+                    .map(|part| part.parse::<u64>().unwrap_or(0))
+                    .collect::<Vec<_>>();
+                let rv = right
+                    .split('.')
+                    .map(|part| part.parse::<u64>().unwrap_or(0))
+                    .collect::<Vec<_>>();
+                lv.cmp(&rv)
+            });
+            for (index, version) in all.iter().enumerate() {
+                records.push(make_record(
+                    loader,
+                    game_version,
+                    version.clone(),
+                    true,
+                    recommended.as_deref() == Some(version.as_str()),
+                    latest.as_deref() == Some(version.as_str()) || index + 1 == all.len(),
+                    "https://files.minecraftforge.net",
+                    &fetched_at,
+                ));
             }
         }
         "neoforge" => {
-            let prefix = neoforge_game_prefix(&game_version)?;
-            let text = fetch_official_loader_text(
-                "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml",
-            )
-            .await?;
+            let legacy = game_version == "1.20.1";
+            let (metadata_url, prefix) = if legacy {
+                (
+                    "https://maven.neoforged.net/releases/net/neoforged/forge/maven-metadata.xml",
+                    format!("{game_version}-"),
+                )
+            } else {
+                (
+                    "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml",
+                    neoforge_game_prefix(game_version)?,
+                )
+            };
+            let text = fetch_official_loader_text(metadata_url).await?;
+            let mut all = Vec::new();
             for fragment in text.split("<version>").skip(1) {
-                let Some(version) = fragment.split("</version>").next() else {
+                let Some(full) = fragment.split("</version>").next() else {
                     continue;
                 };
-                if version.starts_with(&prefix) {
-                    validate_loader_token(version)?;
-                    versions.push(version.to_string());
+                let version = if legacy {
+                    let Some(version) = full.strip_prefix(&prefix) else {
+                        continue;
+                    };
+                    version
+                } else {
+                    full
+                };
+                if !legacy && !version.starts_with(&prefix) {
+                    continue;
                 }
+                validate_loader_token(version)?;
+                all.push(version.to_string());
             }
-            versions.reverse();
+            all.sort_by(|left, right| {
+                let lv = left
+                    .split('.')
+                    .map(|part| part.parse::<u64>().unwrap_or(0))
+                    .collect::<Vec<_>>();
+                let rv = right
+                    .split('.')
+                    .map(|part| part.parse::<u64>().unwrap_or(0))
+                    .collect::<Vec<_>>();
+                lv.cmp(&rv)
+            });
+            for (index, version) in all.iter().enumerate() {
+                records.push(make_record(
+                    loader,
+                    game_version,
+                    version.clone(),
+                    true,
+                    false,
+                    index + 1 == all.len(),
+                    "https://maven.neoforged.net",
+                    &fetched_at,
+                ));
+            }
         }
         _ => return Err(LauncherError::validation("不支持的加载器类型。")),
     }
-    if versions.is_empty() {
+    if records.is_empty() {
         return Err(LauncherError::validation(
             "该 Minecraft 版本没有可用的加载器版本。",
         ));
     }
-    Ok(versions)
+    write_loader_cache(loader, game_version, &records, &fetched_at);
+    Ok(LoaderBuildsResult {
+        versions: records,
+        from_cache: false,
+        fetched_at,
+    })
+}
+
+#[tauri::command]
+async fn list_loader_builds(
+    loader_type: String,
+    game_version: String,
+) -> Result<LoaderBuildsResult, LauncherError> {
+    let loader = loader_type.trim().to_ascii_lowercase();
+    match list_loader_builds_inner(&loader, game_version.trim()).await {
+        Ok(result) => Ok(result),
+        Err(network_error) => match read_loader_cache(&loader, game_version.trim()) {
+            Some(cache) if !cache.versions.is_empty() => Ok(cache),
+            _ => Err(network_error),
+        },
+    }
 }
 
 fn maven_artifact_path(coordinate: &str) -> Result<String, LauncherError> {
@@ -10734,6 +11781,14 @@ async fn install_java_loader(
         (
             format!(
                 "https://maven.minecraftforge.net/net/minecraftforge/forge/{artifact_version}/forge-{artifact_version}-installer.jar"
+            ),
+            format!("forge-{artifact_version}-installer.jar"),
+        )
+    } else if game_version == "1.20.1" {
+        let artifact_version = format!("{game_version}-{loader_version}");
+        (
+            format!(
+                "https://maven.neoforged.net/releases/net/neoforged/forge/{artifact_version}/forge-{artifact_version}-installer.jar"
             ),
             format!("forge-{artifact_version}-installer.jar"),
         )
@@ -12553,47 +13608,6 @@ pub(crate) struct LaunchResult {
     log_path: String,
 }
 
-fn analyze_crash_log(path: &Path) -> (String, String, String) {
-    let text = fs::read_to_string(path).unwrap_or_default();
-    let lower = text.to_ascii_lowercase();
-    if lower.contains("outofmemoryerror") {
-        return (
-            "可能内存不足".into(),
-            "high".into(),
-            "降低高占用模组数量或在实例设置中适度增加内存。".into(),
-        );
-    }
-    if lower.contains("unsupportedclassversionerror") {
-        return (
-            "Java 主版本不兼容".into(),
-            "high".into(),
-            "为该 Minecraft 版本选择要求的 64 位 Java。".into(),
-        );
-    }
-    if lower.contains("mod resolution encountered")
-        || lower.contains("requires version")
-        || lower.contains("missing mandatory dependencies")
-    {
-        return (
-            "可能缺少模组依赖或版本不匹配".into(),
-            "medium".into(),
-            "检查模组页的依赖警告、Minecraft 版本和加载器。".into(),
-        );
-    }
-    if lower.contains("mixin") {
-        return (
-            "可能是 Mixin 或模组冲突".into(),
-            "low".into(),
-            "查看日志中最先失败的模组，并逐个停用近期加入的模组。".into(),
-        );
-    }
-    (
-        "原因未确定".into(),
-        "low".into(),
-        "导出诊断报告并查看完整游戏日志。".into(),
-    )
-}
-
 fn argument_values(value: &serde_json::Value) -> Vec<String> {
     if let Some(text) = value.as_str() {
         return vec![text.to_string()];
@@ -12949,6 +13963,7 @@ fn stored_or_repaired_offline_uuid(
 }
 
 /// Offline Account 全量不变量检查（§26）：返回 machine-readable 报告。
+#[allow(dead_code)]
 pub(crate) fn account_integrity_report(
     connection: &Connection,
 ) -> Result<serde_json::Value, LauncherError> {
@@ -13101,9 +14116,25 @@ async fn launch_instance(
         serde_json::json!({ "instanceId": instance_id }),
     );
     let connection = open_database(&app)?;
-    let (root_path, version, loader, memory_mb, status): (String, String, String, i64, String) = connection.query_row(
-        "SELECT root_path, game_version, loader_type, memory_mb, status FROM instances WHERE id=?1", [instance_id],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+    let (root_path, version, loader, loader_version, memory_mb, status): (
+        String,
+        String,
+        String,
+        Option<String>,
+        i64,
+        String,
+    ) = connection.query_row(
+        "SELECT root_path, game_version, loader_type, loader_version, memory_mb, status FROM instances WHERE id=?1", [instance_id],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        },
     ).map_err(|_| LauncherError::validation("实例不存在。"))?;
     if !matches!(
         loader.as_str(),
@@ -13114,7 +14145,7 @@ async fn launch_instance(
     if status != "ready" {
         return Err(LauncherError::validation("实例尚未完成安装或校验。"));
     }
-    let force = force.unwrap_or(false);
+    let _force = force.unwrap_or(false);
     let server_address = server_address
         .map(|value| validate_server_address(&value))
         .transpose()?;
@@ -13123,9 +14154,16 @@ async fn launch_instance(
     } else {
         None
     };
-    // 启动不再联网补齐前置：只做本地快速校验，缺前置由前端弹窗让用户选择处理，启动不被网络拖慢
-    if !force {
-        validate_instance_mods(&root_path, &version, &loader)?;
+    // Release 门禁：缺失前置必须先在本次启动中补齐；补齐失败则阻止启动，
+    // 不再允许通过“仍要启动”绕过（Forge 会在主菜单前因 missing dependency 崩溃）。
+    if loader != "vanilla" {
+        if let Err(first_error) = validate_instance_mods(&root_path, &version, &loader) {
+            if first_error.message.contains("缺少前置模组") {
+                auto_install_missing_mod_dependencies(&app, instance_id, &root_path, &loader)
+                    .await?;
+            }
+            validate_instance_mods(&root_path, &version, &loader)?;
+        }
     }
     let (player_name, account_type, secret_ref): (String, String, Option<String>) = connection
         .query_row(
@@ -13434,6 +14472,11 @@ async fn launch_instance(
     let db_path = database_path(&app)?;
     let watcher_log_path = log_path.clone();
     let watcher_app = app.clone();
+    let watcher_game = game.clone();
+    let watcher_mods_dir = game.join("mods");
+    let watcher_version = version.clone();
+    let watcher_loader = loader.clone();
+    let watcher_loader_version = loader_version.clone();
     std::thread::spawn(move || {
         let exit_code = child.wait().ok().and_then(|status| status.code());
         if let Ok(mut games) = running_games().lock() {
@@ -13445,8 +14488,49 @@ async fn launch_instance(
                 params![chrono_like_timestamp(), exit_code, history_id],
             );
             if exit_code.is_some_and(|code| code != 0) {
-                let (cause, confidence, suggestion) = analyze_crash_log(&watcher_log_path);
-                let _ = connection.execute("INSERT INTO crash_reports(instance_id,occurred_at,exit_code,log_path,suspected_cause,confidence,suggestion) VALUES(?1,?2,?3,?4,?5,?6,?7)", params![instance_id,chrono_like_timestamp(),exit_code,watcher_log_path.to_string_lossy().to_string(),cause,confidence,suggestion]);
+                let watcher_text = fs::read_to_string(&watcher_log_path).unwrap_or_default();
+                let latest_text = fs::read_to_string(watcher_game.join("logs").join("latest.log"))
+                    .unwrap_or_default();
+                let crash_text =
+                    fs::read_to_string(watcher_game.join("crash-reports").join("latest.txt"))
+                        .unwrap_or_default();
+                let analysis = crash_diagnosis::analyze_crash_texts(
+                    crash_text,
+                    latest_text,
+                    watcher_text,
+                    Some(watcher_mods_dir.to_string_lossy().to_string()),
+                    Some(watcher_version.clone()),
+                    Some(watcher_loader.clone()),
+                    watcher_loader_version.clone(),
+                    None,
+                );
+                let cause = if !analysis.root_exception.is_empty() {
+                    analysis.root_exception.clone()
+                } else {
+                    analysis.wrapper_exception.clone()
+                };
+                let confidence = analysis
+                    .suspected_mods
+                    .first()
+                    .map(|mod_info| format!("{}%", (mod_info.confidence * 100.0).round() as u32))
+                    .unwrap_or_else(|| "medium".to_string());
+                let suggestion = if analysis.repair_actions.is_empty() {
+                    "导出诊断报告并查看完整游戏日志。".to_string()
+                } else {
+                    analysis.repair_actions.join("；")
+                };
+                let _ = connection.execute(
+                    "INSERT INTO crash_reports(instance_id,occurred_at,exit_code,log_path,suspected_cause,confidence,suggestion) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+                    params![
+                        instance_id,
+                        chrono_like_timestamp(),
+                        exit_code,
+                        watcher_log_path.to_string_lossy().to_string(),
+                        cause,
+                        confidence,
+                        suggestion
+                    ],
+                );
             }
         }
         let event_name = if exit_code.is_some_and(|code| code != 0) {
@@ -13884,6 +14968,7 @@ pub fn run() {
             record_modpack_archive,
             remove_modpack_archive,
             list_instances,
+            list_play_history,
             boot_health_check,
             create_vanilla_instance,
             create_instance_profile,
@@ -13918,6 +15003,7 @@ pub fn run() {
             multiplayer::multiplayer_history,
             repair_missing_mod_dependencies,
             list_loader_versions,
+            list_loader_builds,
             install_profile_loader,
             install_java_loader,
             inspect_mod_jar,
@@ -13933,6 +15019,7 @@ pub fn run() {
             update_modrinth_mod,
             install_modrinth_modpack,
             import_modrinth_pack,
+            import_curseforge_pack,
             import_local_pack,
             import_mmc_pack,
             import_override_pack,
@@ -14750,9 +15837,75 @@ side="BOTH"
                 Some("forge"),
                 "{name} 加载器错误"
             );
+            assert_eq!(
+                inspection.loader_version.as_deref(),
+                Some("47.4.22"),
+                "{name} 必须保留精确 Loader build，禁止升级"
+            );
+            assert_eq!(
+                inspection.java_major,
+                Some(17),
+                "{name} Java 主版本推导错误"
+            );
             assert!(inspection.mod_count >= 1, "{name} 模组数量错误");
             fs::remove_file(path).unwrap();
         }
+    }
+
+    #[test]
+    fn forge_library_jar_with_nested_jarjar_is_recognized() {
+        // 真实 Kotlin for Forge 结构：外层 FMLModType LIBRARY，真实 descriptor 与
+        // IModLanguageProvider service 位于 META-INF/jarjar/ 嵌套 JAR 中。
+        let nested_toml = br#"modLoader="kotlinforforge"
+loaderVersion="[4,)"
+[[mods]]
+modId="kotlinforforge"
+version="4.12.0"
+displayName="Kotlin For Forge"
+[[dependencies.kotlinforforge]]
+modId="minecraft"
+mandatory=true
+versionRange="[1.19.3,1.21)"
+"#;
+        let mut nested_buffer = std::io::Cursor::new(Vec::new());
+        {
+            let mut nested_writer = zip::ZipWriter::new(&mut nested_buffer);
+            nested_writer
+                .start_file(
+                    "META-INF/mods.toml",
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .unwrap();
+            nested_writer.write_all(nested_toml).unwrap();
+            nested_writer
+                .start_file(
+                    "META-INF/services/net.minecraftforge.forgespi.language.IModLanguageProvider",
+                    zip::write::SimpleFileOptions::default(),
+                )
+                .unwrap();
+            nested_writer
+                .write_all(b"thedarkcolour.kotlinforforge.KotlinLanguageProvider\n")
+                .unwrap();
+            nested_writer.finish().unwrap();
+        }
+        let nested_jar = nested_buffer.into_inner();
+        let manifest =
+            b"Manifest-Version: 1.0\nAutomatic-Module-Name: thedarkcolour.kotlinforforge\nFMLModType: LIBRARY\n";
+        let path = test_temp_path("kff-library").with_extension("jar");
+        write_test_zip(
+            &path,
+            &[
+                ("META-INF/MANIFEST.MF", manifest),
+                ("META-INF/jarjar/kfflang-4.12.0.jar", &nested_jar),
+            ],
+        );
+        let inspection = inspect_mod_jar_path(&path).unwrap();
+        assert_eq!(inspection.loader_type, "forge");
+        assert_eq!(inspection.mod_id.as_deref(), Some("kotlinforforge"));
+        assert_eq!(inspection.version.as_deref(), Some("4.12.0"));
+        assert!(inspection.dependencies.iter().any(|id| id == "minecraft"));
+        assert!(inspection.warnings.is_empty());
+        fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -16099,5 +17252,103 @@ side="BOTH"
             )
             .unwrap();
         assert_eq!(dangling_settings, 0, "账户引用必须始终有效");
+    }
+
+    #[test]
+    #[ignore = "live network: writes loader metadata cache evidence"]
+    fn loader_metadata_live_fetch_all_supported_loaders() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        for (loader, game_version) in [
+            ("forge", "1.20.1"),
+            ("neoforge", "1.20.1"),
+            ("fabric", "1.20.1"),
+            ("quilt", "1.20.1"),
+        ] {
+            let result = runtime
+                .block_on(list_loader_builds_inner(loader, game_version))
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "{loader} {game_version} 动态元数据获取失败：{}",
+                        error.error_message()
+                    )
+                });
+            assert!(
+                result.versions.len() >= 5,
+                "{loader} {game_version} 动态版本过少：{}",
+                result.versions.len()
+            );
+            assert!(
+                result
+                    .versions
+                    .iter()
+                    .any(|record| record.recommended || record.latest),
+                "{loader} {game_version} 缺少推荐/最新标签"
+            );
+            let cache_path = loader_cache_path(loader, game_version).unwrap();
+            assert!(
+                cache_path.is_file(),
+                "{loader} {game_version} 元数据缓存未写入：{}",
+                cache_path.display()
+            );
+            eprintln!(
+                "[loader-evidence] {loader} {game_version}: {} builds, cache={}",
+                result.versions.len(),
+                cache_path.display()
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "live network: expandability/kotlinforforge resolver regression"]
+    fn dependency_resolver_regression_expandability_and_kotlinforforge() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        for (mod_id, expected_project, game_version, loader) in [
+            ("expandability", "X5dUUm4k", "26.1", "fabric"),
+            ("kotlinforforge", "ordsPcFz", "1.20.1", "forge"),
+        ] {
+            let project_id = runtime
+                .block_on(resolve_modrinth_project_id(mod_id))
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "{mod_id} 无法解析到 Modrinth 项目：{}",
+                        error.error_message()
+                    )
+                });
+            assert_eq!(
+                project_id, expected_project,
+                "{mod_id} 必须解析到精确项目，禁止装错同名项目"
+            );
+            let versions = runtime
+                .block_on(fetch_project_versions(
+                    &project_id,
+                    Some(game_version),
+                    Some(loader),
+                ))
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "{mod_id} {game_version}+{loader} 版本获取失败：{}",
+                        error.error_message()
+                    )
+                });
+            assert!(
+                !versions.is_empty(),
+                "{mod_id} 在 {game_version}+{loader} 下没有可用版本"
+            );
+            let best = pick_best_modrinth_version(&versions)
+                .unwrap_or_else(|| panic!("{mod_id} 无法选择最佳版本"));
+            assert_eq!(
+                best.get("project_id").and_then(|value| value.as_str()),
+                Some(expected_project),
+                "{mod_id} 版本必须属于精确项目"
+            );
+            let version_number = best
+                .get("version_number")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            assert!(!version_number.is_empty(), "{mod_id} 缺少版本号");
+            eprintln!(
+                "[dependency-evidence] {mod_id} project={expected_project} game={game_version} loader={loader} version={version_number}"
+            );
+        }
     }
 }

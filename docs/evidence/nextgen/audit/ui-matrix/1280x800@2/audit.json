@@ -1,0 +1,1101 @@
+{
+  "head": "4c908c80e9d3dd0b7ff6601d72d82624fa1f8cd8",
+  "workingTreeHash": "3f31e0535964a659165f76441e0461aa309901524d3f259c4eb3457797938b55",
+  "runtime": "tauri production",
+  "executable": "D:\\minecraft-java-launcher\\src-tauri\\target\\release\\app.exe",
+  "port": 9225,
+  "deviceScaleFactor": 2,
+  "windowSize": "2560x1600",
+  "pages": [
+    {
+      "name": "home",
+      "actionOk": false,
+      "actionError": null,
+      "auditError": null,
+      "audit": {
+        "viewport": {
+          "width": 640,
+          "height": 400,
+          "dpr": 2
+        },
+        "horizontalScrolls": [],
+        "elements": [
+          {
+            "selector": "button",
+            "tag": "button",
+            "text": "",
+            "className": "window-control",
+            "rect": {
+              "x": 502,
+              "y": 0,
+              "width": 46,
+              "height": 43,
+              "right": 548,
+              "bottom": 43
+            },
+            "scrollWidth": 46,
+            "clientWidth": 46,
+            "scrollHeight": 43,
+            "clientHeight": 43,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "14px",
+            "lineHeight": "21.7px",
+            "position": "static",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": "button",
+            "tag": "button",
+            "text": "",
+            "className": "window-control",
+            "rect": {
+              "x": 548,
+              "y": 0,
+              "width": 46,
+              "height": 43,
+              "right": 594,
+              "bottom": 43
+            },
+            "scrollWidth": 46,
+            "clientWidth": 46,
+            "scrollHeight": 43,
+            "clientHeight": 43,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "14px",
+            "lineHeight": "21.7px",
+            "position": "static",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": "button",
+            "tag": "button",
+            "text": "",
+            "className": "window-control close",
+            "rect": {
+              "x": 594,
+              "y": 0,
+              "width": 46,
+              "height": 43,
+              "right": 640,
+              "bottom": 43
+            },
+            "scrollWidth": 46,
+            "clientWidth": 46,
+            "scrollHeight": 43,
+            "clientHeight": 43,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "14px",
+            "lineHeight": "21.7px",
+            "position": "static",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": "button",
+            "tag": "button",
+            "text": "首页",
+            "className": "nav-item active",
+            "rect": {
+              "x": 12,
+              "y": 132,
+              "width": 190,
+              "height": 42,
+              "right": 202,
+              "bottom": 173
+            },
+            "scrollWidth": 190,
+            "clientWidth": 190,
+            "scrollHeight": 42,
+            "clientHeight": 42,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "14px",
+            "lineHeight": "21.7px",
+            "position": "relative",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": "button",
+            "tag": "button",
+            "text": "游戏库",
+            "className": "nav-item ",
+            "rect": {
+              "x": 12,
+              "y": 175,
+              "width": 190,
+              "height": 42,
+              "right": 202,
+              "bottom": 217
+            },
+            "scrollWidth": 190,
+            "clientWidth": 190,
+            "scrollHeight": 42,
+            "clientHeight": 42,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "14px",
+            "lineHeight": "21.7px",
+            "position": "relative",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": "button",
+            "tag": "button",
+            "text": "发现",
+            "className": "nav-item ",
+            "rect": {
+              "x": 12,
+              "y": 219,
+              "width": 190,
+              "height": 42,
+              "right": 202,
+              "bottom": 261
+            },
+            "scrollWidth": 190,
+            "clientWidth": 190,
+            "scrollHeight": 42,
+            "clientHeight": 42,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "14px",
+            "lineHeight": "21.7px",
+            "position": "relative",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": "button",
+            "tag": "button",
+            "text": "下载",
+            "className": "nav-item ",
+            "rect": {
+              "x": 12,
+              "y": 263,
+              "width": 190,
+              "height": 42,
+              "right": 202,
+              "bottom": 304
+            },
+            "scrollWidth": 190,
+            "clientWidth": 190,
+            "scrollHeight": 42,
+            "clientHeight": 42,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "14px",
+            "lineHeight": "21.7px",
+            "position": "relative",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": "button",
+            "tag": "button",
+            "text": "账户",
+            "className": "nav-item ",
+            "rect": {
+              "x": 12,
+              "y": 306,
+              "width": 190,
+              "height": 42,
+              "right": 202,
+              "bottom": 348
+            },
+            "scrollWidth": 190,
+            "clientWidth": 190,
+            "scrollHeight": 42,
+            "clientHeight": 42,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "14px",
+            "lineHeight": "21.7px",
+            "position": "relative",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": "button",
+            "tag": "button",
+            "text": "设置",
+            "className": "nav-item ",
+            "rect": {
+              "x": 12,
+              "y": 350,
+              "width": 190,
+              "height": 42,
+              "right": 202,
+              "bottom": 392
+            },
+            "scrollWidth": 190,
+            "clientWidth": 190,
+            "scrollHeight": 42,
+            "clientHeight": 42,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "14px",
+            "lineHeight": "21.7px",
+            "position": "relative",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": "button",
+            "tag": "button",
+            "text": "更新日志",
+            "className": "nav-item",
+            "rect": {
+              "x": 12,
+              "y": 263,
+              "width": 200,
+              "height": 32,
+              "right": 212,
+              "bottom": 295
+            },
+            "scrollWidth": 200,
+            "clientWidth": 200,
+            "scrollHeight": 32,
+            "clientHeight": 32,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "13px",
+            "lineHeight": "20.15px",
+            "position": "relative",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": "button",
+            "tag": "button",
+            "text": "使用教程",
+            "className": "nav-item",
+            "rect": {
+              "x": 12,
+              "y": 299,
+              "width": 200,
+              "height": 32,
+              "right": 212,
+              "bottom": 331
+            },
+            "scrollWidth": 200,
+            "clientWidth": 200,
+            "scrollHeight": 32,
+            "clientHeight": 32,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "13px",
+            "lineHeight": "20.15px",
+            "position": "relative",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": "button",
+            "tag": "button",
+            "text": "开始游戏引导",
+            "className": "btn btn-quiet",
+            "rect": {
+              "x": 462,
+              "y": 108,
+              "width": 118,
+              "height": 37,
+              "right": 580,
+              "bottom": 145
+            },
+            "scrollWidth": 116,
+            "clientWidth": 116,
+            "scrollHeight": 35,
+            "clientHeight": 35,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "14px",
+            "lineHeight": "16.8px",
+            "position": "static",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": "button",
+            "tag": "button",
+            "text": "打开游戏库",
+            "className": "btn btn-quiet",
+            "rect": {
+              "x": 462,
+              "y": 157,
+              "width": 118,
+              "height": 37,
+              "right": 580,
+              "bottom": 194
+            },
+            "scrollWidth": 116,
+            "clientWidth": 116,
+            "scrollHeight": 35,
+            "clientHeight": 35,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "14px",
+            "lineHeight": "16.8px",
+            "position": "static",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": "button",
+            "tag": "button",
+            "text": "开始游戏",
+            "className": "btn btn-primary btn-lg",
+            "rect": {
+              "x": 296,
+              "y": 502,
+              "width": 262,
+              "height": 39,
+              "right": 558,
+              "bottom": 541
+            },
+            "scrollWidth": 260,
+            "clientWidth": 260,
+            "scrollHeight": 37,
+            "clientHeight": 37,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "14px",
+            "lineHeight": "16.8px",
+            "position": "static",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": "button",
+            "tag": "button",
+            "text": "管理实例",
+            "className": "btn btn-quiet",
+            "rect": {
+              "x": 296,
+              "y": 549,
+              "width": 262,
+              "height": 37,
+              "right": 558,
+              "bottom": 586
+            },
+            "scrollWidth": 260,
+            "clientWidth": 260,
+            "scrollHeight": 35,
+            "clientHeight": 35,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "14px",
+            "lineHeight": "16.8px",
+            "position": "static",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": "button",
+            "tag": "button",
+            "text": "查看游戏库",
+            "className": "btn btn-quiet btn-sm",
+            "rect": {
+              "x": 494,
+              "y": 638,
+              "width": 104,
+              "height": 37,
+              "right": 598,
+              "bottom": 675
+            },
+            "scrollWidth": 102,
+            "clientWidth": 102,
+            "scrollHeight": 35,
+            "clientHeight": 35,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "14px",
+            "lineHeight": "16.8px",
+            "position": "static",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": "button",
+            "tag": "button",
+            "text": "打开下载中心",
+            "className": "btn btn-quiet btn-sm",
+            "rect": {
+              "x": 256,
+              "y": 931,
+              "width": 139,
+              "height": 37,
+              "right": 395,
+              "bottom": 967
+            },
+            "scrollWidth": 137,
+            "clientWidth": 137,
+            "scrollHeight": 35,
+            "clientHeight": 35,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "14px",
+            "lineHeight": "16.8px",
+            "position": "static",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": "button",
+            "tag": "button",
+            "text": "新建实例 选择版本、加载器与加载器版本",
+            "className": "quick-action-tile",
+            "rect": {
+              "x": 256,
+              "y": 1033,
+              "width": 342,
+              "height": 51,
+              "right": 598,
+              "bottom": 1084
+            },
+            "scrollWidth": 340,
+            "clientWidth": 340,
+            "scrollHeight": 49,
+            "clientHeight": 49,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "14px",
+            "lineHeight": "16.8px",
+            "position": "static",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": "button",
+            "tag": "button",
+            "text": "导入整合包 自动识别 Minecraft 与精确加载器版本",
+            "className": "quick-action-tile",
+            "rect": {
+              "x": 256,
+              "y": 1096,
+              "width": 342,
+              "height": 51,
+              "right": 598,
+              "bottom": 1147
+            },
+            "scrollWidth": 340,
+            "clientWidth": 340,
+            "scrollHeight": 49,
+            "clientHeight": 49,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "14px",
+            "lineHeight": "16.8px",
+            "position": "static",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": "select",
+            "tag": "select",
+            "text": "123 Player",
+            "className": "account-switcher",
+            "rect": {
+              "x": 141,
+              "y": 348,
+              "width": 64,
+              "height": 27,
+              "right": 204,
+              "bottom": 375
+            },
+            "scrollWidth": 62,
+            "clientWidth": 62,
+            "scrollHeight": 25,
+            "clientHeight": 25,
+            "overflowX": "clip",
+            "overflowY": "clip",
+            "fontSize": "11px",
+            "lineHeight": "normal",
+            "position": "static",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": ".ui3-page-header",
+            "tag": "header",
+            "text": "你好，Player 本地数据仅保存在此设备上。 开始游戏引导 打开游戏库",
+            "className": "ui3-page-header",
+            "rect": {
+              "x": 256,
+              "y": 68,
+              "width": 342,
+              "height": 126,
+              "right": 598,
+              "bottom": 194
+            },
+            "scrollWidth": 342,
+            "clientWidth": 342,
+            "scrollHeight": 126,
+            "clientHeight": 126,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "14px",
+            "lineHeight": "21.7px",
+            "position": "static",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": ".ui3-section-head",
+            "tag": "div",
+            "text": "最近游戏 查看游戏库",
+            "className": "ui3-section-head",
+            "rect": {
+              "x": 256,
+              "y": 638,
+              "width": 342,
+              "height": 46,
+              "right": 598,
+              "bottom": 684
+            },
+            "scrollWidth": 342,
+            "clientWidth": 342,
+            "scrollHeight": 45,
+            "clientHeight": 45,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "14px",
+            "lineHeight": "21.7px",
+            "position": "static",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": ".ui3-section-head",
+            "tag": "div",
+            "text": "下载 0 下载中 · 100 其他",
+            "className": "ui3-section-head",
+            "rect": {
+              "x": 256,
+              "y": 852,
+              "width": 342,
+              "height": 34,
+              "right": 598,
+              "bottom": 886
+            },
+            "scrollWidth": 342,
+            "clientWidth": 342,
+            "scrollHeight": 33,
+            "clientHeight": 33,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "14px",
+            "lineHeight": "21.7px",
+            "position": "static",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": ".ui3-section-head",
+            "tag": "div",
+            "text": "新建游戏配置",
+            "className": "ui3-section-head",
+            "rect": {
+              "x": 256,
+              "y": 983,
+              "width": 342,
+              "height": 34,
+              "right": 598,
+              "bottom": 1017
+            },
+            "scrollWidth": 342,
+            "clientWidth": 342,
+            "scrollHeight": 33,
+            "clientHeight": 33,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "14px",
+            "lineHeight": "21.7px",
+            "position": "static",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": ".home-hero",
+            "tag": "section",
+            "text": "当前实例 Closing Song1.6.5 Forge 1.20.1 Java 25 · 64",
+            "className": "home-hero",
+            "rect": {
+              "x": 256,
+              "y": 194,
+              "width": 342,
+              "height": 425,
+              "right": 598,
+              "bottom": 618
+            },
+            "scrollWidth": 342,
+            "clientWidth": 342,
+            "scrollHeight": 425,
+            "clientHeight": 425,
+            "overflowX": "hidden",
+            "overflowY": "hidden",
+            "fontSize": "14px",
+            "lineHeight": "21.7px",
+            "position": "relative",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": ".recent-row",
+            "tag": "div",
+            "text": "Closing Song1.6.5 上次异常退出 时间未知",
+            "className": "recent-row",
+            "rect": {
+              "x": 256,
+              "y": 696,
+              "width": 342,
+              "height": 68,
+              "right": 598,
+              "bottom": 764
+            },
+            "scrollWidth": 342,
+            "clientWidth": 342,
+            "scrollHeight": 67,
+            "clientHeight": 67,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "14px",
+            "lineHeight": "21.7px",
+            "position": "static",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": ".recent-row",
+            "tag": "div",
+            "text": "Closing Song1.6.5 上次正常退出 时间未知",
+            "className": "recent-row",
+            "rect": {
+              "x": 256,
+              "y": 764,
+              "width": 342,
+              "height": 67,
+              "right": 598,
+              "bottom": 832
+            },
+            "scrollWidth": 342,
+            "clientWidth": 342,
+            "scrollHeight": 67,
+            "clientHeight": 67,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "14px",
+            "lineHeight": "21.7px",
+            "position": "static",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": ".ui3-page h1",
+            "tag": "h1",
+            "text": "你好，Player",
+            "className": "",
+            "rect": {
+              "x": 274,
+              "y": 92,
+              "width": 169,
+              "height": 30,
+              "right": 443,
+              "bottom": 122
+            },
+            "scrollWidth": 169,
+            "clientWidth": 169,
+            "scrollHeight": 31,
+            "clientHeight": 30,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "24px",
+            "lineHeight": "30px",
+            "position": "static",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": ".ui3-page h2",
+            "tag": "h2",
+            "text": "Closing Song1.6.5",
+            "className": "",
+            "rect": {
+              "x": 296,
+              "y": 368,
+              "width": 262,
+              "height": 36,
+              "right": 558,
+              "bottom": 404
+            },
+            "scrollWidth": 262,
+            "clientWidth": 262,
+            "scrollHeight": 38,
+            "clientHeight": 36,
+            "overflowX": "hidden",
+            "overflowY": "hidden",
+            "fontSize": "30px",
+            "lineHeight": "36px",
+            "position": "static",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": ".ui3-page h2",
+            "tag": "h2",
+            "text": "最近游戏",
+            "className": "",
+            "rect": {
+              "x": 256,
+              "y": 643,
+              "width": 63,
+              "height": 25,
+              "right": 319,
+              "bottom": 668
+            },
+            "scrollWidth": 63,
+            "clientWidth": 63,
+            "scrollHeight": 25,
+            "clientHeight": 25,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "16px",
+            "lineHeight": "24.8px",
+            "position": "static",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": ".ui3-page h2",
+            "tag": "h2",
+            "text": "下载",
+            "className": "",
+            "rect": {
+              "x": 256,
+              "y": 852,
+              "width": 32,
+              "height": 25,
+              "right": 288,
+              "bottom": 877
+            },
+            "scrollWidth": 32,
+            "clientWidth": 32,
+            "scrollHeight": 25,
+            "clientHeight": 25,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "16px",
+            "lineHeight": "24.8px",
+            "position": "static",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": ".ui3-page h2",
+            "tag": "h2",
+            "text": "新建游戏配置",
+            "className": "",
+            "rect": {
+              "x": 256,
+              "y": 983,
+              "width": 95,
+              "height": 25,
+              "right": 351,
+              "bottom": 1008
+            },
+            "scrollWidth": 95,
+            "clientWidth": 95,
+            "scrollHeight": 25,
+            "clientHeight": 25,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "16px",
+            "lineHeight": "24.8px",
+            "position": "static",
+            "overlay": false,
+            "compressed": false
+          },
+          {
+            "selector": ".sidebar",
+            "tag": "aside",
+            "text": "SH启动器 v0.9.5 首页 游戏库 发现 下载 账户 设置 帮助 更新日志 使用教程 P P",
+            "className": "sidebar",
+            "rect": {
+              "x": 0,
+              "y": 44,
+              "width": 224,
+              "height": 356,
+              "right": 224,
+              "bottom": 400
+            },
+            "scrollWidth": 224,
+            "clientWidth": 224,
+            "scrollHeight": 356,
+            "clientHeight": 356,
+            "overflowX": "visible",
+            "overflowY": "visible",
+            "fontSize": "14px",
+            "lineHeight": "21.7px",
+            "position": "static",
+            "overlay": false,
+            "compressed": false
+          }
+        ],
+        "overlaps": [
+          {
+            "a": {
+              "text": "下载",
+              "cls": "nav-item "
+            },
+            "b": {
+              "text": "更新日志",
+              "cls": "nav-item"
+            },
+            "overlapRatio": 0.95
+          },
+          {
+            "a": {
+              "text": "下载",
+              "cls": "nav-item "
+            },
+            "b": {
+              "text": "使用教程",
+              "cls": "nav-item"
+            },
+            "overlapRatio": 0.15
+          },
+          {
+            "a": {
+              "text": "账户",
+              "cls": "nav-item "
+            },
+            "b": {
+              "text": "使用教程",
+              "cls": "nav-item"
+            },
+            "overlapRatio": 0.74
+          },
+          {
+            "a": {
+              "text": "设置",
+              "cls": "nav-item "
+            },
+            "b": {
+              "text": "123 Player",
+              "cls": "account-switcher"
+            },
+            "overlapRatio": 0.88
+          }
+        ],
+        "overflows": [],
+        "offscreen": [
+          {
+            "text": "开始游戏",
+            "cls": "btn btn-primary btn-lg",
+            "rect": {
+              "x": 296,
+              "y": 502,
+              "width": 262,
+              "height": 39,
+              "right": 558,
+              "bottom": 541
+            }
+          },
+          {
+            "text": "管理实例",
+            "cls": "btn btn-quiet",
+            "rect": {
+              "x": 296,
+              "y": 549,
+              "width": 262,
+              "height": 37,
+              "right": 558,
+              "bottom": 586
+            }
+          },
+          {
+            "text": "查看游戏库",
+            "cls": "btn btn-quiet btn-sm",
+            "rect": {
+              "x": 494,
+              "y": 638,
+              "width": 104,
+              "height": 37,
+              "right": 598,
+              "bottom": 675
+            }
+          },
+          {
+            "text": "打开下载中心",
+            "cls": "btn btn-quiet btn-sm",
+            "rect": {
+              "x": 256,
+              "y": 931,
+              "width": 139,
+              "height": 37,
+              "right": 395,
+              "bottom": 967
+            }
+          },
+          {
+            "text": "新建实例 选择版本、加载器与加载器版本",
+            "cls": "quick-action-tile",
+            "rect": {
+              "x": 256,
+              "y": 1033,
+              "width": 342,
+              "height": 51,
+              "right": 598,
+              "bottom": 1084
+            }
+          },
+          {
+            "text": "导入整合包 自动识别 Minecraft 与精确加载器版本",
+            "cls": "quick-action-tile",
+            "rect": {
+              "x": 256,
+              "y": 1096,
+              "width": 342,
+              "height": 51,
+              "right": 598,
+              "bottom": 1147
+            }
+          },
+          {
+            "text": "最近游戏 查看游戏库",
+            "cls": "ui3-section-head",
+            "rect": {
+              "x": 256,
+              "y": 638,
+              "width": 342,
+              "height": 46,
+              "right": 598,
+              "bottom": 684
+            }
+          },
+          {
+            "text": "下载 0 下载中 · 100 其他",
+            "cls": "ui3-section-head",
+            "rect": {
+              "x": 256,
+              "y": 852,
+              "width": 342,
+              "height": 34,
+              "right": 598,
+              "bottom": 886
+            }
+          },
+          {
+            "text": "新建游戏配置",
+            "cls": "ui3-section-head",
+            "rect": {
+              "x": 256,
+              "y": 983,
+              "width": 342,
+              "height": 34,
+              "right": 598,
+              "bottom": 1017
+            }
+          },
+          {
+            "text": "当前实例 Closing Song1.6.5 Forge 1.20.1 Java 25 · 64",
+            "cls": "home-hero",
+            "rect": {
+              "x": 256,
+              "y": 194,
+              "width": 342,
+              "height": 425,
+              "right": 598,
+              "bottom": 618
+            }
+          },
+          {
+            "text": "Closing Song1.6.5 上次异常退出 时间未知",
+            "cls": "recent-row",
+            "rect": {
+              "x": 256,
+              "y": 696,
+              "width": 342,
+              "height": 68,
+              "right": 598,
+              "bottom": 764
+            }
+          },
+          {
+            "text": "Closing Song1.6.5 上次正常退出 时间未知",
+            "cls": "recent-row",
+            "rect": {
+              "x": 256,
+              "y": 764,
+              "width": 342,
+              "height": 67,
+              "right": 598,
+              "bottom": 832
+            }
+          },
+          {
+            "text": "Closing Song1.6.5",
+            "cls": "",
+            "rect": {
+              "x": 296,
+              "y": 368,
+              "width": 262,
+              "height": 36,
+              "right": 558,
+              "bottom": 404
+            }
+          },
+          {
+            "text": "最近游戏",
+            "cls": "",
+            "rect": {
+              "x": 256,
+              "y": 643,
+              "width": 63,
+              "height": 25,
+              "right": 319,
+              "bottom": 668
+            }
+          },
+          {
+            "text": "下载",
+            "cls": "",
+            "rect": {
+              "x": 256,
+              "y": 852,
+              "width": 32,
+              "height": 25,
+              "right": 288,
+              "bottom": 877
+            }
+          },
+          {
+            "text": "新建游戏配置",
+            "cls": "",
+            "rect": {
+              "x": 256,
+              "y": 983,
+              "width": 95,
+              "height": 25,
+              "right": 351,
+              "bottom": 1008
+            }
+          }
+        ],
+        "singleCharacterWraps": [],
+        "compressed": [],
+        "leaks": [],
+        "bodyTextHead": "SH启动器\nv0.9.5 · Beta 测试版\nSH启动器\nv0.9.5\n首页\n游戏库\n发现\n下载\n账户\n设置\n帮助\n更新日志\n使用教程\nP\nPlayer\n本地离线账户\n123\nPlayer\n你好，Player\n\n本地数据仅保存在此设备上。\n\n开始游戏引导\n打开游戏库\n\n当前实例\n\nClosing Song1.6.5\nForge 1.20.1\nJava 25 · 64 位\n已就绪\n开始游戏\n管理实例\n最近游戏\n查看游戏库\nClosing Song1.6.5\n上次异常退出\n时间未知\nClosing Song1.6.5\n上次正常退出\n时间未知\n下载\n0 下载中 · 100 其他\n最近完成 100 项\n0%\n打开下载中心\n新建游戏配置\n新建实例\n选择版本、加载器与加载器版本\n导入整合包\n自动识别 Minecraft 与精确加载器版本"
+      },
+      "screenshot": "D:\\minecraft-java-launcher\\docs\\evidence\\nextgen\\audit\\ui-matrix\\1280x800@2\\home.png"
+    }
+  ],
+  "generatedAt": "2026-08-17T08:51:45.086Z",
+  "tool": "D:/.codex/.tmp/audit-ui-v4.mjs (home-only mode)",
+  "result": "OK"
+}

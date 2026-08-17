@@ -1,0 +1,467 @@
+/* ============ Buttons ============ */
+.btn,
+button:not(.nav-item):not(.window-control):not(.instance-tabs button):not(.ui3-tabs button):not(.settings-tabs button):not(.ui3-discover-tabs button):not(.account-switcher):not(.job-row) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 9px 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-2);
+  color: var(--text-primary);
+  font-size: var(--fs-body);
+  font-weight: 550;
+  line-height: 1.2;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast),
+    transform var(--transition-fast),
+    box-shadow var(--transition-fast);
+  user-select: none;
+  white-space: nowrap;
+}
+
+.btn:hover,
+button:not(.nav-item):not(.window-control):not(.instance-tabs button):not(.ui3-tabs button):not(.settings-tabs button):not(.ui3-discover-tabs button):not(.account-switcher):not(.job-row):not(:disabled):hover {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+.btn:active,
+button:not(.nav-item):not(.window-control):not(.instance-tabs button):not(.ui3-tabs button):not(.settings-tabs button):not(.ui3-discover-tabs button):not(.account-switcher):not(.job-row):not(:disabled):active {
+  transform: translateY(1px);
+}
+
+.btn:disabled,
+button:not(.nav-item):not(.window-control):not(.instance-tabs button):not(.ui3-tabs button):not(.settings-tabs button):not(.ui3-discover-tabs button):not(.account-switcher):not(.job-row):disabled {
+  opacity: 0.45;
+  filter: saturate(0.4);
+}
+
+.btn-primary,
+.play,
+button.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: #ffffff;
+  box-shadow: 0 4px 14px rgba(117, 105, 255, 0.28);
+}
+
+.btn-primary:hover,
+.play:hover,
+button.primary:not(:disabled):hover {
+  background: var(--accent-hover);
+  border-color: transparent;
+}
+
+.btn-primary:active,
+.play:active,
+button.primary:not(:disabled):active {
+  background: var(--accent-pressed);
+}
+
+.btn-primary:disabled,
+.play:disabled,
+button.primary:disabled {
+  box-shadow: none;
+}
+
+.btn-quiet,
+button.quiet {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-secondary);
+}
+
+.btn-quiet:hover,
+button.quiet:not(:disabled):hover {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+.btn-danger,
+button.danger {
+  background: var(--danger-soft);
+  border-color: rgba(244, 109, 117, 0.28);
+  color: var(--danger);
+}
+
+.btn-danger:hover,
+button.danger:not(:disabled):hover {
+  background: rgba(244, 109, 117, 0.22);
+}
+
+.btn-danger-quiet,
+button.danger-quiet {
+  background: transparent;
+  border-color: transparent;
+  color: var(--danger);
+}
+
+.btn-danger-quiet:hover,
+button.danger-quiet:not(:disabled):hover {
+  background: var(--danger-soft);
+}
+
+.btn-icon {
+  padding: 8px;
+  border-radius: var(--radius-md);
+}
+
+.btn-sm {
+  padding: 5px 10px;
+  font-size: var(--fs-secondary);
+  border-radius: var(--radius-sm);
+}
+
+.btn-lg {
+  padding: 12px 22px;
+  font-size: 15px;
+  border-radius: var(--radius-lg);
+}
+
+.link-button,
+button.link-button {
+  background: transparent;
+  border: 0;
+  color: var(--accent-text);
+  padding: 2px 4px;
+  font-size: var(--fs-secondary);
+}
+
+.link-button:hover,
+button.link-button:hover {
+  text-decoration: underline;
+}
+
+/* ============ Inputs ============ */
+.ui3-input,
+.ui3-select,
+input[type="text"],
+input[type="number"],
+input[type="password"],
+input[type="search"],
+select:not(.account-switcher):not(.loader-version) {
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 9px 12px;
+  color: var(--text-primary);
+  outline: 0;
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.ui3-input:focus,
+.ui3-select:focus,
+input[type="text"]:focus,
+input[type="number"]:focus,
+input[type="password"]:focus,
+input[type="search"]:focus,
+select:not(.account-switcher):not(.loader-version):focus {
+  border-color: var(--accent);
+  background: var(--surface-1);
+}
+
+.ui3-input::placeholder,
+input::placeholder {
+  color: var(--text-muted);
+}
+
+select {
+  cursor: pointer;
+}
+
+option {
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+}
+
+/* ============ Tabs ============ */
+.ui3-tabs {
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 18px;
+}
+
+.ui3-discover-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border-subtle);
+  margin: 8px 0 0;
+  overflow-x: auto;
+}
+
+.ui3-discover-tabs button {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+  padding: 10px 14px;
+  white-space: nowrap;
+}
+
+.ui3-discover-tabs button.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+/* ============ Progress ============ */
+.progress-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-strong);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), #8a7dff);
+  transition: width var(--transition-select);
+}
+
+.progress-fill.indeterminate {
+  width: 35% !important;
+  animation: ui3-indeterminate 1.2s ease-in-out infinite;
+}
+
+@keyframes ui3-indeterminate {
+  0% {
+    margin-left: -35%;
+  }
+  100% {
+    margin-left: 100%;
+  }
+}
+
+/* ============ Badge ============ */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: var(--fs-small);
+  font-weight: 600;
+}
+
+/* ============ Skeleton ============ */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+}
+
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.05),
+    transparent
+  );
+  animation: ui3-shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes ui3-shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* ============ Tooltip ============ */
+.tooltip-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.tooltip-wrap[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%) translateY(2px);
+  background: var(--surface-strong);
+  border: 1px solid var(--border-strong);
+  color: var(--text-primary);
+  font-size: var(--fs-small);
+  padding: 4px 9px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-fast);
+  z-index: 500;
+}
+
+.tooltip-wrap:hover[data-tooltip]::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ============ Dropdown ============ */
+.dropdown-menu {
+  position: absolute;
+  z-index: 300;
+  min-width: 180px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-2);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  color: var(--text-secondary);
+  font-size: var(--fs-secondary);
+}
+
+.dropdown-item:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.dropdown-item.danger-item {
+  color: var(--danger);
+}
+
+/* ============ Dialog ============ */
+.dialog-backdrop {
+  animation: ui3-fade-in var(--transition-dialog);
+}
+
+.dialog {
+  animation: ui3-scale-in var(--transition-dialog);
+}
+
+/* ============ Scroll area ============ */
+.scroll-area {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* ============ Table / list rows ============ */
+.list-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  transition: background var(--transition-fast);
+}
+
+.list-row:hover {
+  background: var(--surface-hover);
+}
+
+.list-row-main {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ============ Status dot ============ */
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-dot.ready {
+  background: var(--success);
+}
+
+.status-dot.busy {
+  background: var(--warning);
+}
+
+.status-dot.error {
+  background: var(--danger);
+}
+
+.status-dot.idle {
+  background: var(--text-muted);
+}
+
+/* ============ Segmented control ============ */
+.segmented {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 3px;
+}
+
+.segmented button {
+  border: 0;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  padding: 6px 12px;
+  font-size: var(--fs-secondary);
+}
+
+.segmented button.active {
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-1);
+}
+
+/* ============ Switch ============ */
+.switch {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--surface-strong);
+  border: 1px solid var(--border-subtle);
+  transition: background var(--transition-fast);
+  padding: 0;
+}
+
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  transition:
+    transform var(--transition-fast),
+    background var(--transition-fast);
+}
+
+.switch[aria-checked="true"] {
+  background: var(--accent);
+  border-color: transparent;
+}
+
+.switch[aria-checked="true"]::after {
+  transform: translateX(18px);
+  background: #ffffff;
+}

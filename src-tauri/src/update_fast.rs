@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_updater::UpdaterExt;
 
-const USER_AGENT: &str = "SHLauncher/0.9.5";
+const USER_AGENT: &str = "SHLauncher/0.10.0-beta.1";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// 连续多久没有收到任何字节就判定卡死并切换源。
 const NO_PROGRESS_ABORT: Duration = Duration::from_secs(20);

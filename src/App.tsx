@@ -23,19 +23,9 @@ import type {
   DownloadJob,
   CrashReport,
   ExportResult,
-  GameLog,
   OnlineProject,
-  ServerEntry,
   ModpackArchive,
 } from "./types";
-import { DiagnosticsPage } from "./pages/DiagnosticsPage";
-import { ServersPage } from "./pages/ServersPage";
-import { SettingsPage } from "./pages/SettingsPage";
-import { StoragePage } from "./pages/StoragePage";
-import { AccountsPage } from "./pages/AccountsPage";
-import { InstanceLibraryPage } from "./pages/InstanceLibraryPage";
-import { InstanceDetailPage } from "./pages/InstanceDetailPage";
-import { HomeUpdateCard } from "./components/HomeUpdateCard";
 import { SplashView } from "./components/SplashScreen";
 import { VersionHighlightsModal } from "./components/VersionHighlightsModal";
 import { ChangelogModal } from "./components/ChangelogModal";
@@ -47,50 +37,37 @@ import { GlobalProgressBar } from "./components/GlobalProgressBar";
 import { DownloadDetailsModal } from "./components/DownloadDetailsModal";
 import { checkForUpdate, updaterEnabled } from "./updater";
 import type { Update } from "./updater";
-import type {
-  BootHealthReport,
-} from "./types/splash";
+import type { BootHealthReport } from "./types/splash";
 import { APP_VERSION, RELEASE_CHANNEL_LABEL } from "./version";
 import { highlightsFor } from "./versionHighlights";
+import { errorText, inspectionSupportsGame, loaderLabel } from "./ui";
+import { AppShell } from "./app/AppShell";
 import {
-  ArchiveContentPage,
-  ComingSoonPage,
-  ModpacksPage,
-  ModsPage,
-  WorldsPage,
-} from "./pages/ContentPages";
-import {
-  errorText,
-  inspectionSupportsGame,
-  loaderLabel,
-  loaderOptions,
-  navItems,
-} from "./ui";
-import grassBlock from "./assets/grass-block.png";
-import {
-  CircleUserRound,
-  Compass,
-  Download,
-  FolderOpen,
-  Gamepad2,
-  House,
-  LibraryBig,
-  Play,
-  Puzzle,
-  Settings,
-  ShieldCheck,
-  Coffee,
-  CheckCircle2,
-  CircleAlert,
-  Minus,
-  Square,
-  X,
-} from "lucide-react";
-import "./App.css";
-import "./overrides.css";
-import ui2Css from "./ui2.css?inline";
+  ThemeProvider,
+  ToastProvider,
+  ToastStack,
+} from "./app/providers";
+import type { ThemeMode } from "./app/providers";
+import type { AppRoute, DiscoverTab, SettingsTab } from "./app/Router";
+import { HomePage } from "./features/home/HomePage";
+import type {
+  LoaderVersionRecord,
+  PlayHistoryEntry,
+} from "./features/home/HomePage";
+import { LibraryPage } from "./features/library/LibraryPage";
+import { InstancePage } from "./features/instance/InstancePage";
+import type { ContentKind } from "./features/instance/InstancePage";
+import { DiscoverPage } from "./features/discover/DiscoverPage";
+import { DownloadsPage } from "./features/downloads/DownloadsPage";
+import { AccountsPage } from "./features/accounts/AccountsPage";
+import { SettingsPage } from "./features/settings/SettingsPage";
 import "./ui/tokens.css";
+import "./ui/globals.css";
+import "./ui/components.css";
+import "./ui/motion.css";
+import "./ui/pages.css";
 import "./ui/shell.css";
+import "./ui/polish.css";
 
 function formatBytes(value: number): string {
   if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(2)} GB`;
@@ -162,79 +139,12 @@ type BootProblem = {
   text: string;
 };
 
-function DesktopTitleBar() {
-  const runWindowAction = async (
-    action: "minimize" | "maximize" | "close",
-  ) => {
-    if (!isTauri()) return;
-    const window = getCurrentWindow();
-    if (action === "minimize") await window.minimize();
-    if (action === "maximize") await window.toggleMaximize();
-    if (action === "close") {
-      const gameRunning =
-        document.documentElement.dataset.gameRunning === "true";
-      if (gameRunning) {
-        await invoke("hide_launcher_window");
-        return;
-      }
-      try {
-        await window.close();
-      } catch {
-        await invoke("hide_launcher_window");
-      }
-    }
-  };
-  const dragWindow = (event: React.MouseEvent<HTMLDivElement>) => {
-    if ((event.target as HTMLElement).closest("button")) return;
-    if (!isTauri()) return;
-    void getCurrentWindow().startDragging().catch(() => {});
-  };
-
-  return (
-    <div
-      className="desktop-titlebar"
-      onMouseDown={dragWindow}
-      onDoubleClick={() => void runWindowAction("maximize")}
-    >
-      <span className="desktop-title" data-tauri-drag-region>
-        SH启动器
-      </span>
-      <div className="window-controls">
-        <button
-          aria-label="最小化"
-          title="最小化"
-          onClick={() => void runWindowAction("minimize")}
-        >
-          <Minus size={16} />
-        </button>
-        <button
-          aria-label="最大化或还原"
-          title="最大化或还原"
-          onClick={() => void runWindowAction("maximize")}
-        >
-          <Square size={13} />
-        </button>
-        <button
-          className="window-close"
-          aria-label="关闭"
-          title="关闭"
-          onClick={() => void runWindowAction("close")}
-        >
-          <X size={17} />
-        </button>
-      </div>
-    </div>
-  );
-}
-
 export default function App() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState<number>();
-  const [servers, setServers] = useState<ServerEntry[]>([]);
   const [modpackArchives, setModpackArchives] = useState<ModpackArchive[]>([]);
   const [instances, setInstances] = useState<Instance[]>([]);
   const [selectedInstanceId, setSelectedInstanceId] = useState<number>();
-  const [openInstanceId, setOpenInstanceId] = useState<number>();
   const [versions, setVersions] = useState<VersionSummary[]>([]);
   const [javaRuntimes, setJavaRuntimes] = useState<JavaRuntime[]>([]);
   const [selectedJavaPath, setSelectedJavaPath] = useState<string>();
@@ -272,10 +182,11 @@ export default function App() {
     onSecondary?: () => void;
   } | null>(null);
   const bootCancelledRef = useRef(false);
-  const [activeNav, setActiveNav] = useState("主页");
-  const activeNavRef = useRef(activeNav);
-  const DISCOVER_TABS = ["模组", "整合包", "资源包", "光影", "存档"] as const;
-  const [, setDiscoverTab] = useState<(typeof DISCOVER_TABS)[number]>("模组");
+  const [route, setRoute] = useState<AppRoute>({ name: "home" });
+  const [discoverTab, setDiscoverTab] = useState<DiscoverTab>("mods");
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
+  const [contentKind, setContentKind] = useState<ContentKind>(undefined);
+  const [playHistory, setPlayHistory] = useState<PlayHistoryEntry[]>([]);
   const [showInstanceForm, setShowInstanceForm] = useState(false);
   const [instanceName, setInstanceName] = useState("");
   const [gameVersion, setGameVersion] = useState("");
@@ -283,13 +194,16 @@ export default function App() {
   const [downloadProgress, setDownloadProgress] = useState<
     Record<number, number>
   >({});
-  const [clientReady, setClientReady] = useState<Record<number, boolean>>({});
   const [loaderVersions, setLoaderVersions] = useState<
     Record<number, string[]>
   >({});
   const [loaderSelections, setLoaderSelections] = useState<
     Record<number, string>
   >({});
+  const [loaderBuilds, setLoaderBuilds] = useState<LoaderVersionRecord[]>([]);
+  const [selectedLoaderBuild, setSelectedLoaderBuild] = useState("");
+  const [buildsLoading, setBuildsLoading] = useState(false);
+  const [buildsCachedAt, setBuildsCachedAt] = useState<string>();
   const [modInspection, setModInspection] = useState<ModInspection>();
   const [modSourcePath, setModSourcePath] = useState("");
   const [modQueue, setModQueue] = useState<
@@ -315,8 +229,6 @@ export default function App() {
   const [worldItems, setWorldItems] = useState<ContentItem[]>([]);
   const [downloadJobs, setDownloadJobs] = useState<DownloadJob[]>([]);
   const [crashReports, setCrashReports] = useState<CrashReport[]>([]);
-  const [gameLogs, setGameLogs] = useState<GameLog[]>([]);
-  const [gameLogText, setGameLogText] = useState("");
   const [onlineModQuery, setOnlineModQuery] = useState("");
   const [onlinePackQuery, setOnlinePackQuery] = useState("");
   const [onlineModLoader, setOnlineModLoader] = useState("");
@@ -348,24 +260,8 @@ export default function App() {
     : undefined;
 
   useEffect(() => {
-    activeNavRef.current = activeNav;
-  }, [activeNav]);
-
-  useEffect(() => {
     if (isTauri()) {
       setIsSplash(getCurrentWindow().label === "splash");
-    }
-  }, []);
-
-  useEffect(() => {
-    // 统一新 UI：不再保留经典界面主题；历史 "classic" 设置也一律使用新主题。
-    document.documentElement.dataset.uiTheme = "modern";
-    const existing = document.getElementById("ui2-theme");
-    if (!existing) {
-      const style = document.createElement("style");
-      style.id = "ui2-theme";
-      style.textContent = ui2Css;
-      document.head.appendChild(style);
     }
   }, []);
 
@@ -427,8 +323,8 @@ export default function App() {
       javaResult,
       settingsResult,
       loginResult,
-      serversResult,
       archivesResult,
+      playHistoryResult,
     ] = await Promise.allSettled([
       invoke<Account[]>("list_accounts"),
       invoke<{ activeAccountId?: number; defaultAccountId?: number }>(
@@ -438,8 +334,8 @@ export default function App() {
       invoke<JavaRuntime[]>("detect_java_runtimes"),
       invoke<LauncherSettings>("get_settings"),
       invoke<boolean>("microsoft_login_available"),
-      invoke<ServerEntry[]>("list_servers"),
       invoke<ModpackArchive[]>("list_modpack_archives"),
+      invoke<PlayHistoryEntry[]>("list_play_history"),
     ]);
 
     if (accountsResult.status === "fulfilled") {
@@ -488,16 +384,14 @@ export default function App() {
       setMicrosoftLoginAvailable(loginResult.value);
     }
 
-    if (serversResult.status === "fulfilled") {
-      setServers(serversResult.value);
-    } else {
-      setMessage(errorText(serversResult.reason, "无法读取服务器列表。"));
-    }
-
     if (archivesResult.status === "fulfilled") {
       setModpackArchives(archivesResult.value);
     } else {
       setMessage(errorText(archivesResult.reason, "无法读取已下载整合包列表。"));
+    }
+
+    if (playHistoryResult.status === "fulfilled") {
+      setPlayHistory(playHistoryResult.value);
     }
 
     // 健康检查（完整 Mod 扫描）不阻塞首屏，Main 显示后后台执行。
@@ -528,7 +422,7 @@ export default function App() {
             severity: "warn",
             text: `缺少前置模组：${summary.missingDependencies
               .slice(0, 5)
-              .join("、")}（启动时会自动补齐）`,
+              .join("、")}（启动前会自动补齐）`,
           });
         }
         if (summary.incompatibleMods.length) {
@@ -616,6 +510,53 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (
+      !isTauri() ||
+      !showInstanceForm ||
+      !gameVersion.trim() ||
+      instanceLoader === "vanilla"
+    ) {
+      setLoaderBuilds([]);
+      setSelectedLoaderBuild("");
+      setBuildsCachedAt(undefined);
+      return;
+    }
+    let cancelled = false;
+    setBuildsLoading(true);
+    invoke<{
+      versions: LoaderVersionRecord[];
+      fromCache: boolean;
+      fetchedAt: string;
+    }>("list_loader_builds", {
+      loaderType: instanceLoader,
+      gameVersion: gameVersion.trim(),
+    })
+      .then((result) => {
+        if (cancelled) return;
+        setLoaderBuilds(result.versions);
+        setBuildsCachedAt(result.fetchedAt);
+        const recommended =
+          result.versions.find((build) => build.recommended) ??
+          result.versions.find((build) => build.latest) ??
+          result.versions[0];
+        setSelectedLoaderBuild(
+          (existing) => existing || recommended?.version || "",
+        );
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setLoaderBuilds([]);
+        setSelectedLoaderBuild("");
+      })
+      .finally(() => {
+        if (!cancelled) setBuildsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [showInstanceForm, gameVersion, instanceLoader]);
+
+  useEffect(() => {
     setModUpdates([]);
     if (!isTauri() || !modInstanceId) {
       setModItems([]);
@@ -633,11 +574,9 @@ export default function App() {
 
   useEffect(() => {
     const kind =
-      activeNav === "资源包"
-        ? "resourcepack"
-        : activeNav === "光影"
-          ? "shaderpack"
-          : undefined;
+      contentKind === "resourcepack" || contentKind === "shaderpack"
+        ? contentKind
+        : undefined;
     if (!isTauri() || !modInstanceId || !kind) {
       setArchiveItems([]);
       return;
@@ -650,13 +589,10 @@ export default function App() {
       .catch((error: unknown) =>
         setMessage(errorText(error, "无法读取内容列表。")),
       );
-  }, [activeNav, modInstanceId]);
+  }, [contentKind, modInstanceId]);
 
   useEffect(() => {
-    const kind = activeNav === "模组" ? "mod"
-      : activeNav === "资源包" ? "resourcepack"
-      : activeNav === "光影" ? "shaderpack"
-      : activeNav === "存档" ? "world" : undefined;
+    const kind = contentKind;
     if (!isTauri() || !modInstanceId || !kind) {
       setRemovedBackups([]);
       return;
@@ -664,10 +600,10 @@ export default function App() {
     invoke<BackupItem[]>("list_removed_backups", { instanceId: modInstanceId, kind })
       .then(setRemovedBackups)
       .catch((error: unknown) => setMessage(errorText(error, "无法读取可恢复备份。")));
-  }, [activeNav, modInstanceId]);
+  }, [contentKind, modInstanceId]);
 
   useEffect(() => {
-    if (!isTauri() || !modInstanceId || activeNav !== "存档") {
+    if (!isTauri() || !modInstanceId || contentKind !== "world") {
       setWorldItems([]);
       return;
     }
@@ -679,7 +615,7 @@ export default function App() {
       .catch((error: unknown) =>
         setMessage(errorText(error, "无法读取存档列表。")),
       );
-  }, [activeNav, modInstanceId]);
+  }, [contentKind, modInstanceId]);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -756,13 +692,13 @@ export default function App() {
     if (!isTauri()) return;
     let dispose: (() => void) | undefined;
     let cancelled = false;
+    const dropKind =
+      route.name === "discover" && discoverTab === "modpacks"
+        ? "modpack"
+        : contentKind;
     void getCurrentWebviewWindow()
       .onDragDropEvent((event) => {
-        if (
-          event.payload.type === "enter" &&
-          ["模组", "整合包", "资源包", "光影", "存档"].includes(activeNav)
-        )
-          setDragging(true);
+        if (event.payload.type === "enter" && dropKind) setDragging(true);
         if (event.payload.type === "leave") setDragging(false);
         if (event.payload.type !== "drop") return;
         setDragging(false);
@@ -770,7 +706,7 @@ export default function App() {
         if (!path) return;
         setBusy(true);
         setMessage("");
-        if (activeNav === "模组") {
+        if (dropKind === "mod") {
           Promise.all(
             event.payload.paths.map(async (candidate) => ({
               path: candidate,
@@ -790,7 +726,7 @@ export default function App() {
               setMessage(errorText(error, "拖入的模组无法通过预检。")),
             )
             .finally(() => setBusy(false));
-        } else if (activeNav === "整合包") {
+        } else if (dropKind === "modpack") {
           invoke<ModpackInspection>("inspect_modpack", { path })
             .then((inspection) => {
               setPackInspection(inspection);
@@ -800,8 +736,11 @@ export default function App() {
               setMessage(errorText(error, "拖入的整合包无法通过预检。")),
             )
             .finally(() => setBusy(false));
-        } else if (["资源包", "光影"].includes(activeNav) && modInstanceId) {
-          const kind = activeNav === "资源包" ? "resourcepack" : "shaderpack";
+        } else if (
+          (dropKind === "resourcepack" || dropKind === "shaderpack") &&
+          modInstanceId
+        ) {
+          const kind = dropKind;
           Promise.all(
             event.payload.paths.map((sourcePath) =>
               invoke<ContentItem>("install_content_archive", {
@@ -819,13 +758,18 @@ export default function App() {
                 ),
                 ...existing,
               ]);
-              setMessage(`已导入 ${items.length} 个${activeNav}。`);
+              setMessage(`已导入 ${items.length} 个${kind === "resourcepack" ? "资源包" : "光影"}。`);
             })
             .catch((error: unknown) =>
-              setMessage(errorText(error, `${activeNav}导入失败。`)),
+              setMessage(
+                errorText(
+                  error,
+                  `${kind === "resourcepack" ? "资源包" : "光影"}导入失败。`,
+                ),
+              ),
             )
             .finally(() => setBusy(false));
-        } else if (activeNav === "存档" && modInstanceId) {
+        } else if (dropKind === "world" && modInstanceId) {
           invoke<ContentItem>("import_world", {
             instanceId: modInstanceId,
             sourcePath: path,
@@ -854,7 +798,7 @@ export default function App() {
       cancelled = true;
       dispose?.();
     };
-  }, [activeNav, modInstanceId]);
+  }, [route.name, discoverTab, contentKind, modInstanceId]);
 
   function selectAccount(accountId: number) {
     setSelectedAccountId(accountId);
@@ -962,72 +906,6 @@ export default function App() {
     } catch (error) {
       setMessage(errorText(error, "外置登录失败。"));
       throw error;
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function addServer(
-    name: string,
-    address: string,
-    port: number,
-    description: string,
-  ) {
-    setBusy(true);
-    try {
-      const server = await invoke<ServerEntry>("add_server", {
-        name,
-        address,
-        port,
-        description,
-      });
-      setServers((existing) => [server, ...existing]);
-      setMessage("服务器已添加。");
-    } catch (error) {
-      setMessage(errorText(error, "添加服务器失败。"));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function updateServer(
-    server: ServerEntry,
-    name: string,
-    address: string,
-    port: number,
-    description: string,
-  ) {
-    setBusy(true);
-    try {
-      const updated = await invoke<ServerEntry>("update_server", {
-        serverId: server.id,
-        name,
-        address,
-        port,
-        description,
-      });
-      setServers((existing) =>
-        existing.map((candidate) =>
-          candidate.id === updated.id ? updated : candidate,
-        ),
-      );
-      setMessage("服务器已更新。");
-    } catch (error) {
-      setMessage(errorText(error, "更新服务器失败。"));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function removeServer(server: ServerEntry) {
-    if (!window.confirm(`确定删除服务器“${server.name}”吗？`)) return;
-    setBusy(true);
-    try {
-      await invoke("remove_server", { serverId: server.id });
-      setServers((existing) => existing.filter((candidate) => candidate.id !== server.id));
-      setMessage("服务器已删除。");
-    } catch (error) {
-      setMessage(errorText(error, "删除服务器失败。"));
     } finally {
       setBusy(false);
     }
@@ -1266,32 +1144,14 @@ export default function App() {
     setBusy(true);
     setMessage("");
     try {
-      const [jobs, crashes, logs] = await Promise.all([
+      const [jobs, crashes] = await Promise.all([
         invoke<DownloadJob[]>("list_download_jobs"),
         invoke<CrashReport[]>("list_crash_reports"),
-        invoke<GameLog[]>("list_game_logs"),
       ]);
       setDownloadJobs(jobs);
       setCrashReports(crashes);
-      setGameLogs(logs);
     } catch (error) {
       setMessage(errorText(error, "无法读取诊断信息。"));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function readGameLog(log: GameLog, level: string, query: string) {
-    setBusy(true);
-    try {
-      setGameLogText(await invoke<string>("read_game_log", {
-        instanceId: log.instanceId,
-        fileName: log.fileName,
-        level,
-        query,
-      }));
-    } catch (error) {
-      setMessage(errorText(error, "无法读取游戏日志。"));
     } finally {
       setBusy(false);
     }
@@ -1645,6 +1505,12 @@ export default function App() {
         gameVersion: gameVersion.trim(),
         loaderType: instanceLoader,
       });
+      if (instanceLoader !== "vanilla" && selectedLoaderBuild) {
+        setLoaderSelections((existing) => ({
+          ...existing,
+          [instance.id]: selectedLoaderBuild,
+        }));
+      }
       setInstances((existing) => [instance, ...existing]);
       setSelectedInstanceId(instance.id);
       setModInstanceId(instance.id);
@@ -1770,7 +1636,6 @@ export default function App() {
       ...instance,
       status: instance.loaderType === "vanilla" ? "ready" : "loader_missing",
     };
-    setClientReady((existing) => ({ ...existing, [instance.id]: true }));
     setInstances((existing) =>
       existing.map((candidate) =>
         candidate.id === instance.id ? updated : candidate,
@@ -1863,7 +1728,11 @@ export default function App() {
       setMessage(
         `正在自动安装兼容的 ${loaderLabel(ready.loaderType)} 模组环境…`,
       );
-      ready = await installInstanceLoaderFiles(ready, java?.path);
+      ready = await installInstanceLoaderFiles(
+        ready,
+        java?.path,
+        options.inspection?.loaderVersion ?? undefined,
+      );
     }
     setInstances((existing) =>
       existing.map((candidate) =>
@@ -1884,25 +1753,6 @@ export default function App() {
       instanceId: ready.id,
     });
     return ready;
-  }
-
-  async function installClient(instance: Instance) {
-    if (!isTauri()) return;
-    setBusy(true);
-    setMessage("正在查找电脑里已有的游戏文件，并检查缺少的部分…");
-    try {
-      await installClientFiles(instance);
-      setMessage("游戏文件已经检查完成，可以继续启动。");
-    } catch (error) {
-      setDownloadProgress((existing) => {
-        const next = { ...existing };
-        delete next[instance.id];
-        return next;
-      });
-      setMessage(errorText(error, "游戏安装失败。"));
-    } finally {
-      setBusy(false);
-    }
   }
 
   async function terminateRunningGame() {
@@ -1930,6 +1780,7 @@ export default function App() {
   async function installInstanceLoaderFiles(
     instance: Instance,
     javaPathOverride?: string,
+    exactLoaderVersion?: string,
   ): Promise<Instance> {
     let available = loaderVersions[instance.id];
     if (!available?.length) {
@@ -1945,7 +1796,17 @@ export default function App() {
         [instance.id]: available,
       }));
     }
-    const loaderVersion = loaderSelections[instance.id] ?? available[0];
+    const loaderVersion =
+      exactLoaderVersion ??
+      loaderSelections[instance.id] ??
+      available[0];
+    if (exactLoaderVersion && !available.includes(exactLoaderVersion)) {
+      available = [exactLoaderVersion, ...available];
+      setLoaderVersions((existing) => ({
+        ...existing,
+        [instance.id]: available,
+      }));
+    }
     setLoaderSelections((existing) => ({
       ...existing,
       [instance.id]: loaderVersion,
@@ -1977,8 +1838,6 @@ export default function App() {
   async function launchSelectedInstance(
     targetInstance?: Instance,
     force = false,
-    server?: ServerEntry,
-    accountId?: number,
   ) {
     const requestedInstance = targetInstance ?? selectedInstance;
     if (!requestedInstance) {
@@ -1988,8 +1847,7 @@ export default function App() {
     setBusy(true);
     setMessage("正在准备游戏…");
     try {
-      let launchAccount =
-        accountId ? accounts.find((account) => account.id === accountId) ?? current : current;
+      let launchAccount = current;
       if (!launchAccount) {
         setMessage("正在创建本机测试档案…");
         launchAccount = await invoke<Account>("create_offline_account", {
@@ -2023,43 +1881,6 @@ export default function App() {
         setMessage("没有找到可用的 64 位 Java，请先到设置里点击“一键检查并安装”。");
         return;
       }
-      if (server) {
-        // 服务器连接预检：接入真实连接链路，网络级失败直接分类提示并阻止无效启动。
-        try {
-          const probe = await invoke<{
-            classification: string;
-            message: string;
-          }>("diagnose_server", {
-            rawAddress:
-              server.port && server.port !== 25565
-                ? `${server.address}:${server.port}`
-                : server.address,
-          });
-          const blocking = [
-            "INVALID_ADDRESS",
-            "DNS_FAILED",
-            "SRV_FAILED",
-            "TCP_REFUSED",
-            "TCP_TIMEOUT",
-            "NETWORK_UNREACHABLE",
-            "PROXY_FAILURE",
-          ];
-          if (blocking.includes(probe.classification)) {
-            setBusy(false);
-            setErrorModal({
-              title: "服务器连接预检未通过",
-              lines: [
-                probe.message,
-                `分类：${probe.classification}`,
-                "可稍后重试，或检查服务器地址与端口。",
-              ],
-            });
-            return;
-          }
-        } catch {
-          // 预检失败不阻断启动，避免网络抖动误伤；游戏内仍会给出真实连接结果。
-        }
-      }
       setMessage("文件和 Java 已就绪，正在启动 Minecraft…");
       const result = await invoke<{ processId: number; logPath: string }>(
         "launch_instance",
@@ -2068,21 +1889,11 @@ export default function App() {
           accountId: launchAccount.id,
           javaPath,
           force,
-          serverAddress: server?.address ?? null,
-          serverPort: server?.port ?? null,
-          serverId: server?.id ?? null,
         },
       );
       setMessage(
         `游戏进程已启动（PID ${result.processId}），日志：${result.logPath}`,
       );
-      if (server) {
-        try {
-          setServers(await invoke<ServerEntry[]>("list_servers"));
-        } catch {
-          // 刷新失败不影响游戏
-        }
-      }
       if (settings.closeLauncherAfterGameStart) {
         await invoke("exit_launcher");
       }
@@ -2103,11 +1914,6 @@ export default function App() {
                 setErrorModal(null);
                 void repairDependencies(requestedInstance);
               },
-              secondaryLabel: "仍要启动",
-              onSecondary: () => {
-                setErrorModal(null);
-                void launchSelectedInstance(requestedInstance, true);
-              },
             }
           : {}),
       });
@@ -2125,20 +1931,7 @@ export default function App() {
       });
       setMessage("前置模组已补齐，请再次点击“开始游戏”。");
     } catch (error) {
-      setMessage(errorText(error, "自动补齐失败，可稍后重试或仍要启动。"));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function installInstanceLoader(instance: Instance) {
-    setBusy(true);
-    setMessage(`正在自动选择并安装 ${loaderLabel(instance.loaderType)}…`);
-    try {
-      const updated = await installInstanceLoaderFiles(instance);
-      setMessage(`${loaderLabel(updated.loaderType)} 模组环境已安装并校验。`);
-    } catch (error) {
-      setMessage(errorText(error, "模组运行环境安装失败。"));
+      setMessage(errorText(error, "自动补齐失败，已阻止启动。请修复后重试。"));
     } finally {
       setBusy(false);
     }
@@ -2225,7 +2018,7 @@ export default function App() {
       );
     } catch (error) {
       setMessage(
-        errorText(error, "整合包导入失败；已经下载的内容仍保留在单独目录中，可以稍后继续。"),
+        errorText(error, "整合包导入未完成，已撤销本次导入，没有提交不完整实例。"),
       );
     } finally {
       setDownloading(false);
@@ -2261,23 +2054,10 @@ export default function App() {
           "这个 CurseForge 整合包未声明游戏版本或加载器，无法自动创建独立实例；请手动选择现有实例导入。",
         );
       }
-      const instance = await invoke<Instance>("create_instance_profile", {
-        name:
-          inspection.name ??
-          inspection.fileName.replace(/\.(zip|mrpack)$/i, ""),
-        gameVersion,
-        loaderType,
-      });
-      const imported = await invoke<ImportedLocalPack>("import_local_pack", {
-        instanceId: instance.id,
+      const imported = await invoke<ImportedModpack>("import_curseforge_pack", {
         sourcePath,
       });
-      if (imported.unresolvedRemoteFiles) {
-        setMessage(
-          `${imported.unresolvedRemoteFiles} 个模组下载失败（网络或已下架），导入继续；可在“下载”页查看原因。`,
-        );
-      }
-      return await finishNewInstanceImport(instance, {
+      return await finishNewInstanceImport(imported.instance, {
         sourcePath,
         inspection,
         projectId,
@@ -2638,731 +2418,433 @@ export default function App() {
     }
   }
 
-  const profileName = current?.displayName ?? "尚未创建档案";
   const selectedInstance =
     instances.find((instance) => instance.id === selectedInstanceId) ??
     instances[0];
   const selectedJava =
     javaRuntimes.find((runtime) => runtime.path === selectedJavaPath) ??
     javaRuntimes.find((runtime) => runtime.is64Bit);
-  const navIcons = [House, LibraryBig, Compass, Download, CircleUserRound, Settings];
-  const isDiscoverActive =
-    DISCOVER_TABS.includes(activeNav as (typeof DISCOVER_TABS)[number]);
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
+    try {
+      const saved = localStorage.getItem("sh-ui3-theme");
+      if (saved === "light" || saved === "system") return saved;
+    } catch {
+      // 存储不可用时使用深色
+    }
+    return "dark";
+  });
+
+  const navigate = (next: AppRoute) => {
+    setRoute(next);
+    setMessage("");
+    if (next.name === "discover") {
+      if (next.tab) setDiscoverTab(next.tab);
+      setContentKind(
+        next.tab === "mods"
+          ? "mod"
+          : next.tab === "resourcepacks"
+            ? "resourcepack"
+            : next.tab === "shaders"
+              ? "shaderpack"
+              : undefined,
+      );
+    } else if (next.name === "instance") {
+      setSelectedInstanceId(next.instanceId);
+      setModInstanceId(next.instanceId);
+      setContentKind(
+        next.tab === "mods"
+          ? "mod"
+          : next.tab === "resourcepacks"
+            ? "resourcepack"
+            : next.tab === "shaders"
+              ? "shaderpack"
+              : next.tab === "worlds"
+                ? "world"
+                : undefined,
+      );
+    } else if (next.name === "settings") {
+      if (next.tab) setSettingsTab(next.tab);
+      setContentKind(undefined);
+    } else {
+      setContentKind(undefined);
+    }
+  };
+
   if (isSplash) {
     return <SplashView />;
   }
-  return (
-    <div className="app-frame ui3-shell">
-      <DesktopTitleBar />
-      <main className="shell">
-      <aside>
-        <div className="brand">
-          <img className="brand-art" src={grassBlock} alt="Minecraft grass block" />
-          <span className="brand-copy">
-            <strong>SH启动器</strong>
-            <small>v{APP_VERSION} · {RELEASE_CHANNEL_LABEL}</small>
-          </span>
-        </div>
-        <button
-          className="changelog-sidebar-button"
-          type="button"
-          onClick={() => setShowChangelog(true)}
-        >
-          更新日志
-        </button>
-        <button
-          className="changelog-sidebar-button"
-          type="button"
-          onClick={() => setShowTutorial(true)}
-        >
-          使用教程
-        </button>
-        <nav>
-          {navItems.map((item, index) => {
-            const Icon = navIcons[index] ?? Gamepad2;
-            const active =
-              item === "发现" ? isDiscoverActive : item === activeNav;
-            return (
-            <button
-              className={active ? "active" : ""}
-              onClick={() => {
-                if (item === "发现") {
-                  setDiscoverTab("模组");
-                  setActiveNav("模组");
-                } else {
-                  setActiveNav(item);
-                }
-                setMessage("");
-              }}
-              key={item}
-            >
-              <Icon size={20} strokeWidth={1.8} />
-              <span>{item}</span>
-            </button>
-            );
-          })}
-        </nav>
-        <section className="account">
-          <div className="avatar">
-            {current ? profileName[0].toUpperCase() : <CircleUserRound size={22} />}
-          </div>
-          <div>
-            <strong>{profileName}</strong>
-            <small>
-              {current
-                ? current.accountType === "MICROSOFT"
-                  ? "Microsoft 正版账户"
-                  : current.accountType === "EXTERNAL"
-                    ? "外置登录账户"
-                    : "本地离线账户"
-                : "需要设置"}
-            </small>
-          </div>
-          {accounts.length > 1 ? (
-            <select className="account-switcher" aria-label="切换账户" value={current?.id ?? ""} onChange={(event) => selectAccount(Number(event.target.value))}>
-              {accounts.map((account) => <option key={account.id} value={account.id}>{account.displayName} · {account.accountType === "MICROSOFT" ? "正版" : account.accountType === "EXTERNAL" ? "外置" : "离线"}</option>)}
-            </select>
-          ) : null}
-        </section>
-      </aside>
-      <section className="content">
-        {isDiscoverActive ? (
-          <div className="ui3-discover-tabs" role="tablist" aria-label="发现分类">
-            {DISCOVER_TABS.map((tab) => (
-              <button
-                key={tab}
-                type="button"
-                role="tab"
-                aria-selected={activeNav === tab}
-                className={activeNav === tab ? "active" : ""}
-                onClick={() => {
-                  setDiscoverTab(tab);
-                  setActiveNav(tab);
-                }}
-              >
-                {tab}
-              </button>
-            ))}
-          </div>
-        ) : null}
-        {activeNav === "主页" ? (
-          <div className="ui3-home">
-            <header>
-              <div>
-                <h1>
-                  {current ? `你好，${profileName}` : "欢迎使用 SH启动器"}
-                </h1>
-                <p>本地数据仅保存在此设备上。</p>
-              </div>
-              <div className="header-actions">
-                <button
-                  className="quiet"
-                  type="button"
-                  onClick={() => setShowOnboarding(true)}
-                >
-                  开始游戏引导
-                </button>
-                <button
-                  className="quiet"
-                  type="button"
-                  onClick={() => setShowTutorial(true)}
-                >
-                  使用教程
-                </button>
-              </div>
-            </header>
-            <section className="distribution-note" role="note">
-              <strong>启动器不包含 Minecraft 游戏本体</strong>
-              <span>
-                创建游戏配置并确认后，启动器才会从 Mojang 官方网站下载游戏文件，
-                并检查文件是否完整；请使用你合法取得的游戏许可。
-              </span>
-            </section>
-            <HomeUpdateCard
-              update={bootUpdate}
-              checking={updateChecking}
-              checkError={updateCheckError}
-              onRetry={() => void runUpdateCheck()}
-            />
-            {bootProblems.length ? (
-              <section className="boot-problems-card" role="alert">
-                <div className="boot-problems-head">
-                  <CircleAlert size={17} />
-                  <strong>启动前发现问题</strong>
-                </div>
-                <ul>
-                  {bootProblems.slice(0, 8).map((problem, index) => (
-                    <li key={index} data-severity={problem.severity}>
-                      {problem.instanceName ? (
-                        <b>{problem.instanceName}：</b>
-                      ) : null}
-                      {problem.text}
-                    </li>
-                  ))}
-                </ul>
-                <p>建议先处理以上问题再开始游戏，避免启动失败。</p>
-              </section>
-            ) : null}
-            <div className="layout">
-              <section className="hero">
-                <div className="instance-icon"><img src={grassBlock} alt="" /></div>
-                <div className="hero-copy">
-                  <p className="eyebrow">当前游戏配置</p>
-                  <h2>{selectedInstance?.name ?? "尚未安装游戏"}</h2>
-                  {instances.length > 1 ? (
-                    <select
-                      aria-label="当前游戏配置"
-                      value={selectedInstance?.id ?? ""}
-                      onChange={(event) =>
-                        setSelectedInstanceId(Number(event.target.value))
-                      }
-                    >
-                      {instances.map((instance) => (
-                        <option key={instance.id} value={instance.id}>
-                          {instance.name} · {loaderLabel(instance.loaderType)}
-                        </option>
-                      ))}
-                    </select>
-                  ) : null}
-                  <div className="facts">
-                    <span>
-                      {selectedInstance
-                        ? `${loaderLabel(selectedInstance.loaderType)} ${selectedInstance.gameVersion}`
-                        : "选择 Minecraft 版本后开始安装"}
-                    </span>
-                    <span>
-                      {selectedJava
-                        ? `Java ${selectedJava.majorVersion ?? selectedJava.version} · 64 位`
-                        : "未检测到兼容的 64 位 Java"}
-                    </span>
-                  </div>
-                  <div className="hero-status-list">
-                    <div><ShieldCheck size={18} /><span>完整性</span><strong>{selectedInstance?.status === "ready" ? "已验证" : "等待安装"}</strong><CheckCircle2 size={17} /></div>
-                    <div><Coffee size={18} /><span>Java</span><strong>{selectedJava ? `Java ${selectedJava.majorVersion ?? selectedJava.version}` : "未检测"}</strong><CheckCircle2 size={17} /></div>
-                    <div><FolderOpen size={18} /><span>游戏目录</span><strong>.minecraft</strong></div>
-                  </div>
-                </div>
-                <div className="hero-actions">
-                  <button
-                    className="play"
-                    disabled={busy || gameRunning}
-                    onClick={() => void launchSelectedInstance()}
-                  >
-                    <Play size={20} fill="currentColor" />{gameRunning ? "游戏运行中" : "开始游戏"}
-                  </button>
-                  {gameRunning ? (
-                    <button className="force-stop" onClick={() => void terminateRunningGame()}>
-                      强制结束游戏
-                    </button>
-                  ) : null}
-                </div>
-                <p className="notice">
-                  本软件仅是启动器，不捆绑游戏；已支持服务器列表、外置登录与快速加入。
-                </p>
-              </section>
-              <aside className="activity">
-                <section className="download-card">
-                  <div className="side-card-title"><h3>下载任务</h3><span>⌃</span></div>
-                  <strong className="download-state">{downloadJobs.some((job) => job.status === "downloading") ? "正在下载" : "下载任务"}</strong>
-                  <p>{downloadJobs[0]?.targetPath?.split("\\").pop() ?? "暂无进行中的任务"}</p>
-                  <div className="side-progress"><span style={{ width: `${selectedInstanceId ? (downloadProgress[selectedInstanceId] ?? 0) : 0}%` }} /></div>
-                  <div className="side-progress-meta"><span>{selectedInstanceId ? `${downloadProgress[selectedInstanceId] ?? 0}%` : "—"}</span><span>{downloadJobs.length} 个任务</span></div>
-                  <div className="side-actions"><button disabled={!busy}>Ⅱ</button><button disabled={!busy}>×</button></div>
-                </section>
-                <section className="recent-card">
-                  <div className="side-card-title"><h3>最近活动</h3><button className="link-button">查看全部</button></div>
-                  <div className="recent-item"><Download size={20} /><span><strong>启动器已就绪</strong><small>{selectedInstance?.name ?? "尚未创建实例"}</small></span><time>刚刚</time></div>
-                  <div className="recent-item"><Play size={20} /><span><strong>开始游戏</strong><small>{selectedInstance?.gameVersion ?? "等待配置"}</small></span><time>—</time></div>
-                  <div className="recent-item"><Puzzle size={20} /><span><strong>模组管理</strong><small>支持拖拽导入</small></span><time>—</time></div>
-                </section>
-              </aside>
-            </div>
-            <section className="instances">
-              <div>
-                <h2>我的游戏配置</h2>
-                <p>每一套版本、模组和存档分开保存，不会互相影响。</p>
-              </div>
-              <button
-                className="new"
-                onClick={() =>
-                  showInstanceForm
-                    ? setShowInstanceForm(false)
-                    : void openInstanceForm()
-                }
-              >
-                + 新建游戏配置
-              </button>
-            </section>
-            {showInstanceForm ? (
-              <section className="instance-form">
-                <input
-                  value={instanceName}
-                  onChange={(event) => setInstanceName(event.target.value)}
-                  placeholder="给这套游戏起个名字"
-                />
-                <select
-                  aria-label="模组运行环境"
-                  value={instanceLoader}
-                  onChange={(event) => setInstanceLoader(event.target.value)}
-                >
-                  {loaderOptions.map((loader) => (
-                    <option key={loader} value={loader}>
-                      {loaderLabel(loader)}
-                    </option>
-                  ))}
-                </select>
-                {versions.length ? (
-                  <select
-                    aria-label="Minecraft 版本"
-                    value={gameVersion}
-                    onChange={(event) => setGameVersion(event.target.value)}
-                  >
-                    {versions.map((version) => (
-                      <option key={version.id} value={version.id}>
-                        {version.id}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    value={gameVersion}
-                    onChange={(event) => setGameVersion(event.target.value)}
-                    placeholder={busy ? "正在读取官方版本…" : "Minecraft 版本"}
-                  />
-                )}
-                <button
-                  disabled={busy || !instanceName.trim() || !gameVersion}
-                  onClick={() => void createInstance()}
-                >
-                  创建游戏配置
-                </button>
-                <small>
-                  {instanceLoader === "vanilla"
-                    ? "Vanilla 是纯原版，不使用模组运行环境。"
-                    : `${loaderLabel(instanceLoader)} 是模组运行环境，创建后还需要点击安装。`}
-                </small>
-              </section>
-            ) : null}
-            <div className="rows">
-              {instances.length ? (
-                instances.map((instance) => (
-                  <div key={instance.id}>
-                    <span className="cube">◆</span>
-                    <strong>{instance.name}</strong>
-                    <small>
-                      {loaderLabel(instance.loaderType)} {instance.gameVersion}{" "}
-                      · {instance.memoryMb} MB
-                    </small>
-                    <em className="pending">
-                      {instance.status === "loader_missing"
-                        ? "模组环境待安装"
-                        : instance.status === "ready"
-                          ? "游戏文件已校验"
-                          : downloadProgress[instance.id]
-                            ? `${downloadProgress[instance.id]}%`
-                            : "基础游戏待安装"}
-                    </em>
-                    <div className="instance-row-actions">
-                      {loaderVersions[instance.id]?.length ? (
-                        <select
-                          className="loader-version"
-                          aria-label={`${instance.name} 模组运行环境版本`}
-                          value={loaderSelections[instance.id]}
-                          onChange={(event) =>
-                            setLoaderSelections((existing) => ({
-                              ...existing,
-                              [instance.id]: event.target.value,
-                            }))
-                          }
-                        >
-                          {loaderVersions[instance.id].map((version) => (
-                            <option value={version} key={version}>
-                              {version}
-                            </option>
-                          ))}
-                        </select>
-                      ) : null}
-                      <button
-                        className="install-client"
-                        disabled={busy}
-                        onClick={() => void installClient(instance)}
-                      >
-                        {instance.status === "ready"
-                          ? "校验 / 修复"
-                          : instance.status === "loader_missing" ||
-                              clientReady[instance.id]
-                            ? "校验基础游戏"
-                            : "检查并补齐游戏"}
-                      </button>
-                      {instance.loaderType !== "vanilla" &&
-                      (instance.status === "loader_missing" ||
-                        clientReady[instance.id]) ? (
-                        <button
-                          className="install-loader"
-                          disabled={busy}
-                          onClick={() => void installInstanceLoader(instance)}
-                        >
-                          {loaderVersions[instance.id]?.length
-                            ? "安装模组环境"
-                            : "选择环境版本"}
-                        </button>
-                      ) : null}
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div>
-                  <span className="cube muted">◆</span>
-                  <strong>还没有游戏配置</strong>
-                  <small>选择游戏版本和模组运行环境后创建</small>
-                  <em className="pending">待配置</em>
-                </div>
-              )}
-            </div>
-            <section className="onboard">
-              <label htmlFor="profile">创建本地玩家名称</label>
-              <div>
-                <input
-                  id="profile"
-                  value={draft}
-                  onChange={(event) => setDraft(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") void createProfile();
-                  }}
-                  placeholder="3–16 位：字母、数字或下划线"
-                />
-                <button disabled={busy} onClick={() => void createProfile()}>
-                  {busy ? "保存中…" : "保存"}
-                </button>
-              </div>
-              {message ? (
-                <p className="form-message" role="alert">
-                  {message}
-                </p>
-              ) : null}
-            </section>
-            {showHighlights ? (
-              <VersionHighlightsModal
-                onClose={() => {
-                  setShowHighlights(false);
-                  try {
-                    localStorage.setItem(
-                      "sh-launcher-highlights-seen",
-                      APP_VERSION,
-                    );
-                  } catch {
-                    // 忽略存储失败
-                  }
-                }}
-              />
-            ) : null}
-            {showChangelog ? (
-              <ChangelogModal onClose={() => setShowChangelog(false)} />
-            ) : null}
-            {showTutorial ? (
-              <TutorialModal onClose={() => setShowTutorial(false)} />
-            ) : null}
-            {showOnboarding ? (
-              <OnboardingGuide
-                onClose={() => {
-                  setShowOnboarding(false);
-                  try {
-                    localStorage.setItem("sh-onboarding-seen", "1");
-                  } catch {
-                    // 忽略存储失败
-                  }
-                }}
-              />
-            ) : null}
-          </div>
-        ) : activeNav === "联机" ? (
-          <ServersPage
-            servers={servers}
-            instances={instances}
-            accounts={accounts}
-            selectedInstanceId={selectedInstanceId}
-            selectedAccountId={current?.id}
-            busy={busy}
-            message={message}
-            onAddServer={addServer}
-            onUpdateServer={updateServer}
-            onRemoveServer={removeServer}
-            javaPath={selectedJava?.path}
-            onJoin={(server, instanceId, accountId) => {
-              const instance = instances.find((candidate) => candidate.id === instanceId);
-              if (!instance) {
-                setMessage("请先选择一套已就绪的游戏配置。");
-                return;
-              }
-              setSelectedInstanceId(instanceId);
-              selectAccount(accountId);
-              void launchSelectedInstance(instance, false, server, accountId);
-            }}
-            onQuickJoin={(address, instanceId, accountId) => {
-              const instance = instances.find(
-                (candidate) => candidate.id === instanceId,
-              );
-              if (!instance) {
-                setMessage("请先选择一套已就绪的游戏配置。");
-                return;
-              }
-              setSelectedInstanceId(instanceId);
-              selectAccount(accountId);
-              void launchSelectedInstance(
-                instance,
-                false,
-                {
-                  id: 0,
-                  name: "快速加入",
-                  address,
-                  port: 25565,
-                  description: "",
-                  createdAt: "",
-                },
-                accountId,
-              );
-            }}
-          />
-        ) : activeNav === "存储" ? (
-          <StoragePage />
-        ) : activeNav === "游戏库" || activeNav === "实例" ? (
-          openInstanceId ? (
-            (() => {
-              const detailInstance = instances.find(
-                (instance) => instance.id === openInstanceId,
-              );
-              if (!detailInstance) return null;
-              return (
-                <InstanceDetailPage
-                  instance={detailInstance}
-                  javaLabel={
-                    selectedJava
-                      ? `Java ${selectedJava.majorVersion ?? selectedJava.version} · 64 位`
-                      : "未检测到 64 位 Java"
-                  }
-                  onBack={() => setOpenInstanceId(undefined)}
-                  onLaunch={(instance) => {
-                    setSelectedInstanceId(instance.id);
-                    void launchSelectedInstance(instance);
-                  }}
-                  onRepair={(instance) => void repairInstance(instance)}
-                  onOpenFolder={(instance) => void openInstanceDirectory(instance.id, "game")}
-                  onMemoryChange={(instance, memoryMb) =>
-                    void updateInstanceMemory(instance, memoryMb)
-                  }
-                />
-              );
-            })()
-          ) : (
-            <InstanceLibraryPage
-            instances={instances}
-            onCreate={() => { setActiveNav("主页"); setShowInstanceForm(true); }}
-            onPlay={(instance) => { setSelectedInstanceId(instance.id); void launchSelectedInstance(instance); }}
-            onClone={(instance) => void cloneInstance(instance)}
-            onRename={(instance) => void renameInstance(instance)}
-            onMemoryChange={(instance, memoryMb) =>
-              void updateInstanceMemory(instance, memoryMb)
-            }
-            onRepair={(instance) => void repairInstance(instance)}
-            onDelete={(instance) => void deleteInstance(instance)}
-            onOpen={(instance) => void openInstanceDirectory(instance.id, "game")}
-            onOpenDetails={(instance) => setOpenInstanceId(instance.id)}
-          />
-          )
-        ) : activeNav === "模组" ? (
-          <ModsPage
-            instances={instances}
-            selectedId={modInstanceId}
-            onSelect={setModInstanceId}
-            items={modItems}
-            inspection={modInspection}
-            busy={busy}
-            message={message}
-            onPick={() => void inspectMod()}
-            onInstall={() => void installMod()}
-            onToggle={(item) => void toggleMod(item)}
-            onRemove={(item) => void removeMod(item)}
-            queuedCount={modQueue.length}
-            dragging={dragging}
-            onlineQuery={onlineModQuery}
-            onlineProjects={onlineModProjects}
-            onOnlineQuery={setOnlineModQuery}
-            onOnlineSearch={() => void searchOnline("mod")}
-            onOnlineInstall={(project) => void installOnlineMod(project)}
-            onTranslate={translateSearchText}
-            onInstallCurseforgeUrl={(url) => void installCurseforgeUrl(url)}
-            onlineLoader={onlineModLoader}
-            onlineVersion={onlineModVersion}
-            onOnlineLoader={setOnlineModLoader}
-            onOnlineVersion={setOnlineModVersion}
-            problemMods={modProblemMaps[modInstanceId ?? -1] ?? {}}
-            updates={modUpdates}
-            onCheckUpdates={() => void checkModUpdates()}
-            onUpdate={(item) => void updateMod(item)}
-            onUpdateAll={() => void updateAllMods()}
-            backups={removedBackups}
-            onRestore={(item) => void restoreBackup(item)}
-            onOpenFolder={() => void openInstanceDirectory(modInstanceId, "mods")}
-          />
-        ) : activeNav === "整合包" ? (
-          <ModpacksPage
-            inspection={packInspection}
-            busy={busy}
-            message={message}
-            dragging={dragging}
-            onPick={() => void inspectPack()}
-            onImport={() => void importPack()}
-            instances={instances}
-            targetId={modInstanceId}
-            onTarget={setModInstanceId}
-            onlineQuery={onlinePackQuery}
-            onlineProjects={onlinePackProjects}
-            onOnlineQuery={setOnlinePackQuery}
-            onOnlineSearch={() => void searchOnline("modpack")}
-            onOnlineInstall={(project) => void installOnlinePack(project)}
-            onTranslate={translateSearchText}
-            onExport={(instanceId, includeSaves) => void exportPack(instanceId, includeSaves)}
-            archives={modpackArchives}
-            javaRuntimes={javaRuntimes}
-            onImportArchive={(archive) => void importArchiveAsNewInstance(archive)}
-            onRemoveArchive={(archive) => void removeModpackArchive(archive)}
-            onInstallJava={(major) => void installManagedJava(major)}
-          />
-        ) : activeNav === "账户" ? (
-          <AccountsPage
-            accounts={accounts}
-            selectedAccountId={current?.id}
-            busy={busy}
-            message={message}
-            onSelect={selectAccount}
-            onRemove={(account) => void removeAccount(account)}
-            onCreateOffline={async (name) => {
-              setDraft(name);
-              await createProfile();
-            }}
-            onOpenSettings={() => setActiveNav("设置")}
-          />
-        ) : activeNav === "设置" ? (
-          <SettingsPage
-            settings={settings}
-            busy={busy}
-            message={message}
-            onChange={setSettings}
-            onSave={() => void saveLauncherSettings()}
-            onChooseExistingGameDirectory={() => void chooseExistingGameDirectory()}
-            javaRuntimes={javaRuntimes}
-            selectedJavaPath={selectedJava?.path}
-            onSelectJava={setSelectedJavaPath}
-            onInstallJava={(major) => void installManagedJava(major)}
-            onCheckEnvironment={() => void checkEnvironment()}
-            onSetupRecommended={() => void installManagedJava(21)}
-            onLoginMicrosoft={() => void loginMicrosoft()}
-            onLoginExternal={loginExternal}
-            microsoftLoginAvailable={microsoftLoginAvailable}
-            accounts={accounts}
-            selectedAccountId={current?.id}
-            onSelectAccount={selectAccount}
-            onRemoveAccount={(account) => void removeAccount(account)}
-            onCleanCache={() => void cleanLauncherCache()}
-          />
-        ) : activeNav === "下载" ? (
-          <DiagnosticsPage
-            jobs={downloadJobs}
-            crashes={crashReports}
-            busy={busy}
-            message={message}
-            onRefresh={() => void refreshDiagnostics()}
-            onExport={() => void exportDiagnostics()}
-            onCancel={() => void cancelDownloads()}
-            logs={gameLogs}
-            logText={gameLogText}
-            onReadLog={(log, level, query) => void readGameLog(log, level, query)}
-          />
-        ) : activeNav === "资源包" || activeNav === "光影" ? (
-          <ArchiveContentPage
-            title={activeNav}
-            kind={activeNav === "资源包" ? "resourcepack" : "shaderpack"}
-            instances={instances}
-            targetId={modInstanceId}
-            items={archiveItems}
-            busy={busy}
-            message={message}
-            dragging={dragging}
-            onTarget={setModInstanceId}
-            onImport={() =>
-              void importArchives(
-                activeNav === "资源包" ? "resourcepack" : "shaderpack",
-              )
-            }
-            onToggle={(item) => void toggleArchive(item)}
-            onRemove={(item) => void removeArchive(item)}
-            backups={removedBackups}
-            onRestore={(item) => void restoreBackup(item)}
-            onOpenFolder={() => void openInstanceDirectory(modInstanceId, activeNav === "资源包" ? "resourcepacks" : "shaderpacks")}
-          />
-        ) : activeNav === "存档" ? (
-          <WorldsPage
-            instances={instances}
-            targetId={modInstanceId}
-            items={worldItems}
-            busy={busy}
-            message={message}
-            dragging={dragging}
-            onTarget={setModInstanceId}
-            onFolder={() => void chooseAndImportWorld(true)}
-            onZip={() => void chooseAndImportWorld(false)}
-            onBackup={(item) => void backupWorld(item)}
-            onDuplicate={(item) => void duplicateWorld(item)}
-            onExport={(item) => void exportWorld(item)}
-            onRemove={(item) => void removeWorld(item)}
-            onDeletePermanent={(item) => void deleteWorldPermanently(item)}
-            backups={removedBackups}
-            onRestore={(item) => void restoreBackup(item)}
-            onOpenFolder={() => void openInstanceDirectory(modInstanceId, "saves")}
-          />
-        ) : (
-          <ComingSoonPage title={activeNav} />
-        )}
-      </section>
-      </main>
-      <GlobalProgressBar
-        visible={busy || downloading || activeDownloadJobs.length > 0}
-        message={
-          activeDownloadJobs.length
-            ? `${activeDownloadJobs.length} 个下载目标 · 总进度 ${aggregateDownloadPercent ?? "—"}%`
-            : busy || downloading
-              ? "正在处理…"
-              : "就绪"
-        }
-        progress={aggregateDownloadPercent}
-        onClick={() => setShowDownloadDetails(true)}
-      />
-      {showDownloadDetails ? (
-        <DownloadDetailsModal
-          jobs={downloadJobs}
-          instanceProgress={downloadProgress}
+
+  const detailInstance =
+    route.name === "instance"
+      ? instances.find((instance) => instance.id === route.instanceId)
+      : undefined;
+
+  const content = (
+    <>
+      {route.name === "home" ? (
+        <HomePage
+          accountName={current?.displayName}
+          selectedInstance={selectedInstance}
           instances={instances}
-          onClose={() => setShowDownloadDetails(false)}
+          onSelectInstance={setSelectedInstanceId}
+          selectedJava={selectedJava}
+          gameRunning={gameRunning}
+          busy={busy}
+          downloading={downloading}
+          onLaunch={() => void launchSelectedInstance()}
+          onTerminate={() => void terminateRunningGame()}
+          onOpenLibrary={() => navigate({ name: "library" })}
+          onOpenInstance={(instanceId) =>
+            navigate({ name: "instance", instanceId })
+          }
+          bootProblems={bootProblems}
+          update={bootUpdate}
+          updateChecking={updateChecking}
+          updateCheckError={updateCheckError}
+          onRetryUpdate={() => void runUpdateCheck()}
+          onOpenOnboarding={() => setShowOnboarding(true)}
+          downloadJobs={downloadJobs}
+          downloadProgress={downloadProgress}
+          aggregateDownloadPercent={aggregateDownloadPercent}
+          onOpenDownloads={() => navigate({ name: "downloads" })}
+          playHistory={playHistory}
+          versions={versions}
+          showInstanceForm={showInstanceForm}
+          instanceName={instanceName}
+          gameVersion={gameVersion}
+          instanceLoader={instanceLoader}
+          onInstanceName={setInstanceName}
+          onGameVersion={setGameVersion}
+          onInstanceLoader={setInstanceLoader}
+          onToggleInstanceForm={() => {
+            if (showInstanceForm) setShowInstanceForm(false);
+            else void openInstanceForm();
+          }}
+          onCreateInstance={() => void createInstance()}
+          loaderBuilds={loaderBuilds}
+          selectedLoaderBuild={selectedLoaderBuild}
+          buildsLoading={buildsLoading}
+          buildsCachedAt={buildsCachedAt}
+          onLoaderBuildsChange={setSelectedLoaderBuild}
+          onOpenModpacks={() => navigate({ name: "discover", tab: "modpacks" })}
         />
       ) : null}
-      {errorModal ? (
-        <ErrorModal
-          title={errorModal.title}
-          lines={errorModal.lines}
-          actionLabel={errorModal.actionLabel}
-          onAction={errorModal.action}
-          secondaryLabel={errorModal.secondaryLabel}
-          onSecondary={errorModal.onSecondary}
-          onClose={() => setErrorModal(null)}
+      {route.name === "library" ? (
+        <LibraryPage
+          instances={instances}
+          onCreate={() => {
+            navigate({ name: "home" });
+            void openInstanceForm();
+          }}
+          onPlay={(instance) => {
+            setSelectedInstanceId(instance.id);
+            void launchSelectedInstance(instance);
+          }}
+          onClone={(instance) => void cloneInstance(instance)}
+          onRename={(instance) => void renameInstance(instance)}
+          onMemoryChange={(instance, memoryMb) =>
+            void updateInstanceMemory(instance, memoryMb)
+          }
+          onRepair={(instance) => void repairInstance(instance)}
+          onDelete={(instance) => void deleteInstance(instance)}
+          onOpen={(instance) => void openInstanceDirectory(instance.id, "game")}
+          onOpenDetails={(instance) =>
+            navigate({ name: "instance", instanceId: instance.id })
+          }
         />
       ) : null}
-      {incompatibleGroups.length ? (
-        <IncompatibleModsModal
-          groups={incompatibleGroups}
-          onDelete={() => void deleteIncompatibleMods()}
-          onClose={() => setIncompatibleGroups([])}
+      {route.name === "instance" && detailInstance ? (
+        <InstancePage
+          instance={detailInstance}
+          javaLabel={
+            selectedJava
+              ? `Java ${selectedJava.majorVersion ?? selectedJava.version} · 64 位`
+              : "未检测到 64 位 Java"
+          }
+          onBack={() => navigate({ name: "library" })}
+          onSwitchInstance={(instanceId, tab) =>
+            navigate({ name: "instance", instanceId, tab })
+          }
+          onOpenSettings={() => navigate({ name: "settings", tab: "game" })}
+          onLaunch={(instance) => {
+            setSelectedInstanceId(instance.id);
+            void launchSelectedInstance(instance);
+          }}
+          onRepair={(instance) => void repairInstance(instance)}
+          onClone={(instance) => void cloneInstance(instance)}
+          onRename={(instance) => void renameInstance(instance)}
+          onDelete={(instance) => void deleteInstance(instance)}
+          onExport={(instanceId, includeSaves) =>
+            void exportPack(instanceId, includeSaves)
+          }
+          onOpenFolder={(instanceId, section) =>
+            void openInstanceDirectory(instanceId, section)
+          }
+          onMemoryChange={(instance, memoryMb) =>
+            void updateInstanceMemory(instance, memoryMb)
+          }
+          onContentKindChange={setContentKind}
+          busy={busy}
+          message={message}
+          downloadProgress={downloadProgress}
+          instances={instances}
+          modItems={modItems}
+          modInspection={modInspection}
+          modQueueCount={modQueue.length}
+          dragging={dragging}
+          onlineModQuery={onlineModQuery}
+          onlineModProjects={onlineModProjects}
+          modLoader={onlineModLoader}
+          modVersion={onlineModVersion}
+          problemMods={modProblemMaps[detailInstance.id] ?? {}}
+          modUpdates={modUpdates}
+          removedBackups={removedBackups}
+          onPickMod={() => void inspectMod()}
+          onInstallMod={() => void installMod()}
+          onToggleMod={(item) => void toggleMod(item)}
+          onRemoveMod={(item) => void removeMod(item)}
+          onOnlineModQuery={setOnlineModQuery}
+          onOnlineModSearch={() => void searchOnline("mod")}
+          onOnlineModInstall={(project) => void installOnlineMod(project)}
+          onTranslate={translateSearchText}
+          onInstallCurseforgeUrl={(url) => void installCurseforgeUrl(url)}
+          onOnlineModLoader={setOnlineModLoader}
+          onOnlineModVersion={setOnlineModVersion}
+          onCheckModUpdates={() => void checkModUpdates()}
+          onUpdateMod={(item) => void updateMod(item)}
+          onUpdateAllMods={() => void updateAllMods()}
+          onRestoreBackup={(item) => void restoreBackup(item)}
+          archiveItems={archiveItems}
+          onToggleArchive={(item) => void toggleArchive(item)}
+          onRemoveArchive={(item) => void removeArchive(item)}
+          onImportArchive={(kind) => void importArchives(kind)}
+          worldItems={worldItems}
+          onImportWorldFolder={() => void chooseAndImportWorld(true)}
+          onImportWorldZip={() => void chooseAndImportWorld(false)}
+          onBackupWorld={(item) => void backupWorld(item)}
+          onDuplicateWorld={(item) => void duplicateWorld(item)}
+          onExportWorld={(item) => void exportWorld(item)}
+          onRemoveWorld={(item) => void removeWorld(item)}
+          onDeleteWorldPermanently={(item) => void deleteWorldPermanently(item)}
+          crashes={crashReports}
+          onRefreshDiagnostics={() => void refreshDiagnostics()}
         />
       ) : null}
-    </div>
+      {route.name === "discover" ? (
+        <DiscoverPage
+          tab={discoverTab}
+          onTab={setDiscoverTab}
+          onContentKindChange={setContentKind}
+          instances={instances}
+          targetId={modInstanceId}
+          onTarget={setModInstanceId}
+          busy={busy}
+          message={message}
+          dragging={dragging}
+          modItems={modItems}
+          modInspection={modInspection}
+          modQueueCount={modQueue.length}
+          onlineModQuery={onlineModQuery}
+          onlineModProjects={onlineModProjects}
+          modLoader={onlineModLoader}
+          modVersion={onlineModVersion}
+          problemMods={modProblemMaps[modInstanceId ?? -1] ?? {}}
+          modUpdates={modUpdates}
+          removedBackups={removedBackups}
+          onPickMod={() => void inspectMod()}
+          onInstallMod={() => void installMod()}
+          onToggleMod={(item) => void toggleMod(item)}
+          onRemoveMod={(item) => void removeMod(item)}
+          onOnlineModQuery={setOnlineModQuery}
+          onOnlineModSearch={() => void searchOnline("mod")}
+          onOnlineModInstall={(project) => void installOnlineMod(project)}
+          onTranslate={translateSearchText}
+          onInstallCurseforgeUrl={(url) => void installCurseforgeUrl(url)}
+          onOnlineModLoader={setOnlineModLoader}
+          onOnlineModVersion={setOnlineModVersion}
+          onCheckModUpdates={() => void checkModUpdates()}
+          onUpdateMod={(item) => void updateMod(item)}
+          onUpdateAllMods={() => void updateAllMods()}
+          onRestoreBackup={(item) => void restoreBackup(item)}
+          onOpenModFolder={() => void openInstanceDirectory(modInstanceId, "mods")}
+          packInspection={packInspection}
+          onlinePackQuery={onlinePackQuery}
+          onlinePackProjects={onlinePackProjects}
+          archives={modpackArchives}
+          javaRuntimes={javaRuntimes}
+          onPickPack={() => void inspectPack()}
+          onImportPack={(gameVersion, loaderType) =>
+            void importPack(gameVersion, loaderType)
+          }
+          onOnlinePackQuery={setOnlinePackQuery}
+          onOnlinePackSearch={() => void searchOnline("modpack")}
+          onOnlinePackInstall={(project) => void installOnlinePack(project)}
+          onExportPack={(instanceId, includeSaves) =>
+            void exportPack(instanceId, includeSaves)
+          }
+          onImportArchiveInstance={(archive) =>
+            void importArchiveAsNewInstance(archive)
+          }
+          onRemoveArchive={(archive) => void removeModpackArchive(archive)}
+          onInstallJava={(major) => void installManagedJava(major)}
+          archiveItems={archiveItems}
+          onToggleArchive={(item) => void toggleArchive(item)}
+          onRemoveArchiveItem={(item) => void removeArchive(item)}
+          onImportArchive={(kind) => void importArchives(kind)}
+          onOpenArchiveFolder={(kind) =>
+            void openInstanceDirectory(modInstanceId, kind)
+          }
+        />
+      ) : null}
+      {route.name === "downloads" ? (
+        <DownloadsPage
+          jobs={downloadJobs}
+          busy={busy}
+          message={message}
+          onRefresh={() => void refreshDiagnostics()}
+          onExport={() => void exportDiagnostics()}
+          onCancel={() => void cancelDownloads()}
+        />
+      ) : null}
+      {route.name === "accounts" ? (
+        <AccountsPage
+          accounts={accounts}
+          selectedAccountId={current?.id}
+          busy={busy}
+          message={message}
+          onSelect={selectAccount}
+          onRemove={(account) => void removeAccount(account)}
+          onCreateOffline={async (name) => {
+            setDraft(name);
+            await createProfile();
+          }}
+          onOpenSettings={() => navigate({ name: "settings", tab: "general" })}
+        />
+      ) : null}
+      {route.name === "settings" ? (
+        <SettingsPage
+          tab={settingsTab}
+          onTab={setSettingsTab}
+          settings={settings}
+          busy={busy}
+          message={message}
+          onChange={setSettings}
+          onSave={() => void saveLauncherSettings()}
+          onChooseExistingGameDirectory={() => void chooseExistingGameDirectory()}
+          javaRuntimes={javaRuntimes}
+          selectedJavaPath={selectedJava?.path}
+          onSelectJava={setSelectedJavaPath}
+          onInstallJava={(major) => void installManagedJava(major)}
+          onCheckEnvironment={() => void checkEnvironment()}
+          onSetupRecommended={() => void installManagedJava(21)}
+          onLoginMicrosoft={() => void loginMicrosoft()}
+          onLoginExternal={loginExternal}
+          microsoftLoginAvailable={microsoftLoginAvailable}
+          accounts={accounts}
+          selectedAccountId={current?.id}
+          onSelectAccount={selectAccount}
+          onRemoveAccount={(account) => void removeAccount(account)}
+          onCleanCache={() => void cleanLauncherCache()}
+          onExportDiagnostics={() => void exportDiagnostics()}
+          themeMode={themeMode}
+          onThemeMode={setThemeMode}
+          version={APP_VERSION}
+          channelLabel={RELEASE_CHANNEL_LABEL}
+        />
+      ) : null}
+    </>
+  );
+
+  return (
+    <ThemeProvider mode={themeMode} onModeChange={setThemeMode}>
+      <ToastProvider>
+        <AppShell
+          route={route}
+          onNavigate={navigate}
+          account={current}
+          accounts={accounts}
+          onSelectAccount={selectAccount}
+          version={APP_VERSION}
+          channelLabel={RELEASE_CHANNEL_LABEL}
+          gameRunning={gameRunning}
+          onOpenChangelog={() => setShowChangelog(true)}
+          onOpenTutorial={() => setShowTutorial(true)}
+        >
+          {content}
+        </AppShell>
+        <GlobalProgressBar
+          visible={busy || downloading || activeDownloadJobs.length > 0}
+          message={
+            activeDownloadJobs.length
+              ? `${activeDownloadJobs.length} 个下载目标 · 总进度 ${aggregateDownloadPercent ?? "—"}%`
+              : busy || downloading
+                ? "正在处理…"
+                : "就绪"
+          }
+          progress={aggregateDownloadPercent}
+          onClick={() => setShowDownloadDetails(true)}
+        />
+        {showDownloadDetails ? (
+          <DownloadDetailsModal
+            jobs={downloadJobs}
+            instanceProgress={downloadProgress}
+            instances={instances}
+            onClose={() => setShowDownloadDetails(false)}
+          />
+        ) : null}
+        {errorModal ? (
+          <ErrorModal
+            title={errorModal.title}
+            lines={errorModal.lines}
+            actionLabel={errorModal.actionLabel}
+            onAction={errorModal.action}
+            secondaryLabel={errorModal.secondaryLabel}
+            onSecondary={errorModal.onSecondary}
+            onClose={() => setErrorModal(null)}
+          />
+        ) : null}
+        {incompatibleGroups.length ? (
+          <IncompatibleModsModal
+            groups={incompatibleGroups}
+            onDelete={() => void deleteIncompatibleMods()}
+            onClose={() => setIncompatibleGroups([])}
+          />
+        ) : null}
+        {showHighlights ? (
+          <VersionHighlightsModal
+            onClose={() => {
+              setShowHighlights(false);
+              try {
+                localStorage.setItem(
+                  "sh-launcher-highlights-seen",
+                  APP_VERSION,
+                );
+              } catch {
+                // 忽略存储失败
+              }
+            }}
+          />
+        ) : null}
+        {showChangelog ? (
+          <ChangelogModal onClose={() => setShowChangelog(false)} />
+        ) : null}
+        {showTutorial ? (
+          <TutorialModal onClose={() => setShowTutorial(false)} />
+        ) : null}
+        {showOnboarding ? (
+          <OnboardingGuide
+            onClose={() => {
+              setShowOnboarding(false);
+              try {
+                localStorage.setItem("sh-onboarding-seen", "1");
+              } catch {
+                // 忽略存储失败
+              }
+            }}
+          />
+        ) : null}
+        <ToastStack />
+      </ToastProvider>
+    </ThemeProvider>
   );
 }

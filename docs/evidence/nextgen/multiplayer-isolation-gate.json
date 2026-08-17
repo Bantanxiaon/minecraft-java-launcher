@@ -1,0 +1,47 @@
+{
+  "head": "4c908c80e9d3dd0b7ff6601d72d82624fa1f8cd8",
+  "workingTreeHash": "ff561b832e8b4667d0605edb8c42df253d4436d41ff7c3562c1578259f19d14e",
+  "generatedAt": "2026-08-17T09:54:58.654Z",
+  "productionUiVisible": false,
+  "productionNavEntries": [
+    "首页",
+    "游戏库",
+    "发现",
+    "下载",
+    "账户",
+    "设置"
+  ],
+  "productionRouteEntries": [
+    "home",
+    "library",
+    "instance",
+    "discover",
+    "downloads",
+    "accounts",
+    "settings"
+  ],
+  "serversRoutePresent": false,
+  "serversNavPresent": false,
+  "normalLaunchCanReachMultiplayer": false,
+  "normalLaunchMultiplayerNetworkRequests": 0,
+  "normalLaunchMultiplayerWrites": 0,
+  "autoE4mcInstallDuringNormalLaunch": false,
+  "e4mcFilesInManagedInstances": 0,
+  "multiplayerHistoryRows": 0,
+  "multiplayerSessionsActive": 0,
+  "serversRows": 0,
+  "normalLaunchEvidence": {
+    "instance": "Closing Song1.6.5",
+    "loader": "forge",
+    "gameVersion": "1.20.1",
+    "javaProcessSpawned": true,
+    "aliveAfter75s": true,
+    "modsHashTreeBefore": "7d5dc3ca361b6d004ea5dc5c902f9e1dde652727a9cc20e5e2b5534ccfd0bf08",
+    "modsHashTreeAfter": "7d5dc3ca361b6d004ea5dc5c902f9e1dde652727a9cc20e5e2b5534ccfd0bf08",
+    "modsHashTreeUnchanged": true,
+    "e4mcAdded": false,
+    "multiplayerDbSessionAdded": false
+  },
+  "staticAuditViolations": [],
+  "gate": "PASS"
+}

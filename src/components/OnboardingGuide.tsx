@@ -4,7 +4,7 @@ const STEPS = [
   {
     title: "欢迎使用 SH启动器",
     body: [
-      "SH启动器可以帮你：下载并启动 Minecraft、导入整合包、管理模组、联机进服、管理下载进度，并支持自动云更新。",
+      "SH启动器可以帮你：下载并启动 Minecraft、导入整合包、管理模组、管理下载进度，并支持自动云更新。",
       "所有数据保存在 D 盘，不污染系统；安装包可随时在线升级。",
       "点击“下一步”开始 7 步引导，也可以随时跳过。",
     ],
@@ -29,7 +29,7 @@ const STEPS = [
     title: "第 3 步：开始游戏",
     body: [
       "配置状态变成“游戏文件已校验”后，回到主页点绿色“开始游戏”。",
-      "启动前会自动做模组/前置检查；缺前置时可一键“自动补齐”或“仍要启动”。",
+      "启动前会自动做模组/前置检查；缺前置时可一键“自动补齐”，补齐失败会阻止启动。",
       "游戏运行中可点“强制结束游戏”终止无响应进程。",
     ],
   },
@@ -42,18 +42,18 @@ const STEPS = [
     ],
   },
   {
-    title: "第 5 步：联机",
+    title: "第 5 步：账户与外置登录",
     body: [
-      "“服务器”页添加服务器地址和端口，点“启动并加入”自动进服。",
-      "正版服务器用 Microsoft 账户；外置登录服（如 LittleSkin）在“设置 → 添加外置登录”。",
-      "朋友联机可用 Radmin VPN / ZeroTier / Tailscale 组成虚拟局域网后填对方 IP。",
+      "“账户”页可以创建本地离线档案，用来保存你的游戏身份。",
+      "外置登录（如 LittleSkin）在“设置 → 常规 → 添加外置登录”填写 authlib 地址、用户名和密码。",
+      "Microsoft 正版登录暂未开放；开放后会在“账户”页直接登录。",
     ],
   },
   {
     title: "第 6 步：更多功能",
     body: [
       "下载：底部进度条显示全部任务总进度，点开可查看每个下载/安装目标。",
-      "设置：每套实例内存下拉选择（4–16GB 或自定义）、界面主题（新界面/经典界面可回退）、清理缓存。",
+      "设置：每套实例内存下拉选择（4–16GB 或自定义）、深色/浅色主题、下载模式与存储管理。",
       "侧栏“更新日志”实时显示版本内容；侧栏“使用教程”可随时查看完整功能说明。",
     ],
   },
@@ -67,7 +67,7 @@ export function OnboardingGuide({ onClose }: { onClose: () => void }) {
     <div className="error-modal-backdrop" role="dialog" aria-modal="true" aria-label="开始游戏引导">
       <div className="changelog-modal onboarding-modal">
         <button
-          className="download-detail-close"
+          className="btn btn-icon"
           aria-label="关闭"
           onClick={onClose}
         >

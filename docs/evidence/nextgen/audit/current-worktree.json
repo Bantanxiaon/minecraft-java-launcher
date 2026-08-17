@@ -1,0 +1,16 @@
+{
+  "head": "4c908c80e9d3dd0b7ff6601d72d82624fa1f8cd8",
+  "branch": "dev",
+  "dirty": true,
+  "changedFiles": 22,
+  "insertions": 4144,
+  "deletions": 4934,
+  "untrackedSourceFilesIncluded": 31,
+  "workingTreeHash": "ff561b832e8b4667d0605edb8c42df253d4436d41ff7c3562c1578259f19d14e",
+  "preFixWorkingTreeHash": "3f31e0535964a659165f76441e0461aa309901524d3f259c4eb3457797938b55",
+  "hashInputs": "git diff --binary HEAD + untracked non-docs source/config/test files (sorted, raw bytes, LF)",
+  "tool": "git fetch --all --tags; git checkout dev; git status --porcelain; git rev-parse HEAD; PowerShell SHA-256",
+  "result": "OK",
+  "note": "preFixWorkingTreeHash 为验收开始时（修复前）指纹；修复（依赖解析/启动阻止/时间显示）后工作树更新为 workingTreeHash。",
+  "timestamp": "2026-08-17T17:50:00+08:00"
+}

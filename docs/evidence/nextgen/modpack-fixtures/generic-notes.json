@@ -1,0 +1,7 @@
+{
+  "format": "generic",
+  "rule": "仅无标准 Manifest 时才进入 UnknownPackInspector；扫描 mods/*.jar 的 fabric.mod.json / quilt.mod.json / META-INF/mods.toml / neoforge.mods.toml 投票",
+  "confidence": "recognized / scanned（0..1），低置信度必须要求用户确认，禁止自动装",
+  "example": "扫描 20 个 JAR，其中 16 个带 Forge 元数据 → confidence=0.80",
+  "loaderVersion": "None（通用 ZIP 不猜测精确 build，安装时使用用户确认的推荐/最新兼容版本）"
+}

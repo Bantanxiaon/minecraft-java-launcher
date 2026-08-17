@@ -3,7 +3,7 @@ export function TutorialModal({ onClose }: { onClose: () => void }) {
     <div className="error-modal-backdrop" role="dialog" aria-modal="true" aria-label="使用教程">
       <div className="changelog-modal tutorial-modal">
         <button
-          className="download-detail-close"
+          className="btn btn-icon"
           aria-label="关闭"
           onClick={onClose}
         >
@@ -11,7 +11,7 @@ export function TutorialModal({ onClose }: { onClose: () => void }) {
         </button>
         <h2>SH启动器 完整使用教程</h2>
         <p className="changelog-subtitle">
-          覆盖开始游戏、整合包、模组、联机、下载与设置；所有数据保存在 D 盘，不影响系统。
+          覆盖开始游戏、整合包、模组、下载与设置；所有数据保存在 D 盘，不影响系统。
         </p>
         <div className="changelog-list">
           <section>
@@ -42,13 +42,12 @@ export function TutorialModal({ onClose }: { onClose: () => void }) {
             </ul>
           </section>
           <section>
-            <h3>4. 联机（服务器与好友）</h3>
+            <h3>4. 账户与外置登录</h3>
             <ul>
-              <li>“服务器”页点“+ 添加服务器”，填写地址和端口（默认 25565），保存后点“检测”查看延迟。</li>
-              <li>选好启动配置和账户后点“启动并加入”，游戏会自动进服。</li>
-              <li>正版服务器用 Microsoft 账户；外置登录服（如 LittleSkin）在“设置 → 添加外置登录”填写 authlib 地址、用户名、密码。</li>
-              <li>和朋友联机：双方装 Radmin VPN / ZeroTier / Tailscale，把对方虚拟 IP 存进服务器列表即可；同一 WiFi 直接填内网 IP。</li>
-              <li>开服给更多人玩：自建服务器后用 frp / 花生壳 / Cloudflare Tunnel 做内网穿透，再把地址填进列表。</li>
+              <li>“账户”页创建本地离线档案，启动游戏时使用该档案身份。</li>
+              <li>外置登录（如 LittleSkin）在“设置 → 常规 → 添加外置登录”填写 authlib 地址、用户名和密码。</li>
+              <li>Microsoft 正版登录暂未开放；开放后会在“账户”页直接登录。</li>
+              <li>离线账户使用标准离线 UUID，可在单机与明确允许离线身份的服务器使用。</li>
             </ul>
           </section>
           <section>
@@ -63,7 +62,7 @@ export function TutorialModal({ onClose }: { onClose: () => void }) {
             <h3>6. 设置</h3>
             <ul>
               <li>游戏库可修改每套实例的运行内存（4/6/8/10/12/14/16 GB 或自定义）。</li>
-              <li>“界面主题”可切换新界面 / 经典界面，随时回退，功能完全一致。</li>
+              <li>“界面主题”支持深色 / 浅色 / 跟随系统。</li>
               <li>“清理缓存”只删除下载缓存和临时文件，不会动游戏、模组、整合包和存档。</li>
               <li>已有游戏目录可以复用 PCL / 官方启动器正在使用的 .minecraft。</li>
             </ul>
@@ -77,9 +76,11 @@ export function TutorialModal({ onClose }: { onClose: () => void }) {
             </ul>
           </section>
         </div>
-        <button className="primary" type="button" onClick={onClose}>
-          我知道了
-        </button>
+        <div className="dialog-actions">
+          <button className="primary" type="button" onClick={onClose}>
+            我知道了
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -147,6 +147,7 @@ export function DiagnosticsPage({
   logs,
   logText,
   onReadLog,
+  embedded = false,
 }: {
   jobs: DownloadJob[];
   crashes: CrashReport[];
@@ -158,6 +159,7 @@ export function DiagnosticsPage({
   logs: GameLog[];
   logText: string;
   onReadLog: (log: GameLog, level: string, query: string) => void;
+  embedded?: boolean;
 }) {
   const [selectedJob, setSelectedJob] = useState<DownloadJob>();
   const [selectedLog, setSelectedLog] = useState("");
@@ -196,23 +198,25 @@ export function DiagnosticsPage({
   };
   return (
     <>
-      <header>
-        <div>
-          <h1>下载与诊断</h1>
-          <p>真实任务记录、失败恢复动作和本地崩溃分析。</p>
-        </div>
-        <div className="header-actions">
-          <button disabled={!busy} onClick={onCancel}>
-            取消当前下载
-          </button>
-          <button disabled={busy} onClick={onRefresh}>
-            刷新
-          </button>
-          <button className="primary" disabled={busy} onClick={onExport}>
-            导出脱敏报告
-          </button>
-        </div>
-      </header>
+      {!embedded ? (
+        <header>
+          <div>
+            <h1>下载与诊断</h1>
+            <p>真实任务记录、失败恢复动作和本地崩溃分析。</p>
+          </div>
+          <div className="header-actions">
+            <button disabled={!busy} onClick={onCancel}>
+              取消当前下载
+            </button>
+            <button disabled={busy} onClick={onRefresh}>
+              刷新
+            </button>
+            <button className="primary" disabled={busy} onClick={onExport}>
+              导出脱敏报告
+            </button>
+          </div>
+        </header>
+      ) : null}
       <section className="diagnostic-card">
         <div className="section-heading">
           <div>

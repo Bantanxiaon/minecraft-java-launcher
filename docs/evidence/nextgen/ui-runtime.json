@@ -1,0 +1,41 @@
+{
+  "head": "4c908c80e9d3dd0b7ff6601d72d82624fa1f8cd8",
+  "workingTreeHash": "ff561b832e8b4667d0605edb8c42df253d4436d41ff7c3562c1578259f19d14e",
+  "generatedAt": "2026-08-17T09:54:58.651Z",
+  "uiGeneration": 3,
+  "runtime": "tauri",
+  "productionShell": true,
+  "oldUiDefault": false,
+  "productionEntry": "src/main.tsx -> src/App.tsx -> ThemeProvider/ToastProvider -> AppShell -> Router(route)",
+  "requiredPages": [
+    "src/features/home/HomePage.tsx",
+    "src/features/library/LibraryPage.tsx",
+    "src/features/instance/InstancePage.tsx",
+    "src/features/discover/DiscoverPage.tsx",
+    "src/features/downloads/DownloadsPage.tsx",
+    "src/features/accounts/AccountsPage.tsx",
+    "src/features/settings/SettingsPage.tsx"
+  ],
+  "productionRoutes": [
+    "home",
+    "library",
+    "instance",
+    "discover",
+    "downloads",
+    "accounts",
+    "settings"
+  ],
+  "screenshots": {
+    "afterPostFixHome": "docs/evidence/nextgen/audit/ui-v4-postfix/home.png",
+    "after": "docs/evidence/nextgen/audit/ui-v4/*.png",
+    "after150": "docs/evidence/nextgen/audit/ui-v4-150/*.png",
+    "matrix": "docs/evidence/nextgen/audit/ui-matrix/*/home.png"
+  },
+  "actionsVerified": 108,
+  "brokenActions": 0,
+  "placeholderActions": 0,
+  "visualGate": "manual_review_required",
+  "visualGateNote": "主观视觉评分（Launcher Feel/Hierarchy/Typography >=7，平均 >=8）未完成：本会话模型不支持图像输入，不得伪造 PASS。",
+  "splashToMainHandoff": "StartupWindowCoordinator: MainVisibleConfirmed -> SplashClosed -> Ready（2026-08-17 09:41 UTC 真实日志）",
+  "evidenceNote": "UI 截图大部分来自修复前工作树（3f31e053...）；Home 已用修复后构建重截（时间显示修复）。"
+}

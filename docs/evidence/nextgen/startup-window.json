@@ -1,0 +1,22 @@
+{
+  "head": "4c908c80e9d3dd0b7ff6601d72d82624fa1f8cd8",
+  "workingTreeHash": "ff561b832e8b4667d0605edb8c42df253d4436d41ff7c3562c1578259f19d14e",
+  "generatedAt": "2026-08-17T09:54:58.648Z",
+  "tool": "startup-window-gate.mjs + launcher.log tail",
+  "command": "Start-Process src-tauri/target/release/app.exe (post-fix build 12e509422a113ae8...)",
+  "result": "PASS",
+  "runtime": "tauri production EXE",
+  "mainVisibleConfirmed": true,
+  "evidenceLog": "D:\\MinecraftLauncherData\\logs\\launcher.log",
+  "logLines": [
+    "[2026-08-17][09:41:00] startup-window state=Boot reason=process_start",
+    "[2026-08-17][09:41:03] startup-window state=UiReady reason=bootstrap_ready_or_timeout",
+    "[2026-08-17][09:41:03] startup-window state=MainShowRequested reason=coordinator_show",
+    "[2026-08-17][09:41:03] startup-window state=MainVisibleProbing reason=probing_started",
+    "[2026-08-17][09:41:06] startup-window state=MainVisibleConfirmed reason=main_visible_confirmed",
+    "[2026-08-17][09:41:07] startup-window state=SplashClosed reason=splash_closed_after_visible_confirmed",
+    "[2026-08-17][09:41:07] startup-window state=PostHandoffMonitoring reason=grace_monitor_started",
+    "[2026-08-17][09:41:17] startup-window state=Ready reason=startup_ready"
+  ],
+  "note": "MainVisibleConfirmed -> SplashClosed -> Ready（10s）。同日 08:55:50 UTC 另一次运行被正确捕获为 ShowAckButNotVisible -> Failed，证明 show ACK != visible 的看门狗有效。"
+}

@@ -1,0 +1,15 @@
+{
+  "minecraft": {
+    "version": "1.20.1",
+    "modLoaders": [
+      { "id": "forge-47.4.22", "primary": true }
+    ]
+  },
+  "manifestType": "minecraftModpack",
+  "manifestVersion": 1,
+  "name": "CurseForge Exact Fixture",
+  "version": "1.0.0",
+  "files": [
+    { "projectID": 586095, "fileID": 7756316, "required": true }
+  ]
+}

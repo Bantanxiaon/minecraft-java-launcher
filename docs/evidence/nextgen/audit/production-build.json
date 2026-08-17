@@ -1,0 +1,17 @@
+{
+  "head": "4c908c80e9d3dd0b7ff6601d72d82624fa1f8cd8",
+  "workingTreeHash": "0c2963d3c57c49836046f3c261c79f6ebf192b398e3e41fe6706cb18e8276ead",
+  "binaryPath": "D:\\minecraft-java-launcher\\src-tauri\\target\\release\\app.exe",
+  "sha256": "41d0cd10e68da39ab2b4f7d74d59212a90c9ffd3c9d86f41246d68c398eedbed",
+  "sizeBytes": 11245056,
+  "buildTimestamp": "2026-08-17T18:41:13+08:00",
+  "fileVersion": "0.10.0-beta.1",
+  "productVersion": "0.10.0-beta.1",
+  "productName": "SH启动器",
+  "command": "pnpm tauri build --bundles nsis",
+  "frontendAssets": "dist/index.html + assets/* (built by beforeBuildCommand pnpm build)",
+  "devUrlDependency": "none (frontendDist=../dist; release binary embeds production assets)",
+  "updaterArtifacts": "not generated (TAURI_SIGNING_PRIVATE_KEY absent)",
+  "result": "OK",
+  "generatedAt": "2026-08-17T10:44:56.134Z"
+}
