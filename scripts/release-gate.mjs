@@ -131,4 +131,14 @@ if (actionGate.status !== 0) {
   fail("UI Action Gate 未通过（存在 BROKEN/PLACEHOLDER 交互）。");
 }
 
+// 7. UI3_RUNTIME_GATE：生产界面必须是 UI3，且截图/运行证据完整。
+const ui3Gate = spawnSync(
+  process.execPath,
+  ["scripts/ui3-runtime-gate.mjs"],
+  { cwd: process.cwd(), stdio: "inherit" },
+);
+if (ui3Gate.status !== 0) {
+  fail("UI3_RUNTIME_GATE 未通过（UI 3.0 未完成运行验收）。");
+}
+
 console.log("[release-gate] PASS");
