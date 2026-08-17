@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { CircleUserRound, Plus, Trash2, UserPlus } from "lucide-react";
 import type { Account } from "../types";
+import { currentLocale, t } from "../i18n";
 
 type AccountsPageProps = {
   accounts: Account[];
@@ -24,13 +25,14 @@ export function AccountsPage({
   onOpenSettings,
 }: AccountsPageProps) {
   const [name, setName] = useState("");
+  const locale = currentLocale();
 
   return (
     <div className="accounts-page">
       <header>
         <div>
-          <h1>账户</h1>
-          <p>离线与第三方登录账户集中管理。</p>
+          <h1>{t("accounts.title", locale)}</h1>
+          <p>{t("accounts.subtitle", locale)}</p>
         </div>
       </header>
 
@@ -41,7 +43,7 @@ export function AccountsPage({
         {accounts.length === 0 ? (
           <div className="empty-state">
             <CircleUserRound size={26} />
-            <p>还没有账户，先创建一个离线账户即可开始游戏。</p>
+            <p>{t("accounts.empty", locale)}</p>
           </div>
         ) : (
           accounts.map((account) => {
@@ -90,7 +92,7 @@ export function AccountsPage({
       </section>
 
       <section className="account-create">
-        <h2>添加离线账户</h2>
+        <h2>{t("accounts.addOffline", locale)}</h2>
         <div className="account-create-row">
           <input
             value={name}
@@ -105,12 +107,10 @@ export function AccountsPage({
             disabled={busy || name.trim().length < 3}
             onClick={() => void onCreateOffline(name).then(() => setName(""))}
           >
-            <UserPlus size={16} /> 创建
+            <UserPlus size={16} /> {t("accounts.create", locale)}
           </button>
         </div>
-        <p className="account-hint">
-          离线账户使用标准离线 UUID，可在单机与明确允许离线身份的服务器使用。
-        </p>
+        <p className="account-hint">{t("accounts.offlineHint", locale)}</p>
       </section>
 
       <section className="account-providers">
@@ -118,12 +118,12 @@ export function AccountsPage({
         <div className="account-provider-row">
           <span>外置登录（Yggdrasil / LittleSkin / ely.by）</span>
           <button type="button" className="quiet" onClick={onOpenSettings}>
-            <Plus size={16} /> 在设置中管理
+            <Plus size={16} /> {t("accounts.openSettings", locale)}
           </button>
         </div>
         <div className="account-provider-row deferred">
           <span>Microsoft 正版登录</span>
-          <small>后续支持（等待官方授权）</small>
+          <small>{t("accounts.microsoftDeferred", locale)}</small>
         </div>
       </section>
     </div>

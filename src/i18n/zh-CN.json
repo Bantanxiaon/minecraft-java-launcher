@@ -1,0 +1,10 @@
+{
+  "accounts.title": "账户",
+  "accounts.subtitle": "离线与第三方登录账户集中管理。",
+  "accounts.empty": "还没有账户，先创建一个离线账户即可开始游戏。",
+  "accounts.addOffline": "添加离线账户",
+  "accounts.create": "创建",
+  "accounts.microsoftDeferred": "后续支持（等待官方授权）",
+  "accounts.openSettings": "在设置中管理",
+  "accounts.offlineHint": "离线账户使用标准离线 UUID，可在单机与明确允许离线身份的服务器使用。"
+}

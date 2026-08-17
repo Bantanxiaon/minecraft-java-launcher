@@ -1,0 +1,10 @@
+{
+  "accounts.title": "Accounts",
+  "accounts.subtitle": "Manage offline and third-party accounts.",
+  "accounts.empty": "No accounts yet. Create an offline account to start playing.",
+  "accounts.addOffline": "Add Offline Account",
+  "accounts.create": "Create",
+  "accounts.microsoftDeferred": "Coming later (awaiting official authorization)",
+  "accounts.openSettings": "Manage in Settings",
+  "accounts.offlineHint": "Offline accounts use the standard offline UUID and work in single-player and servers that allow offline identities."
+}
