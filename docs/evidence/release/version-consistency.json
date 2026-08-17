@@ -1,0 +1,11 @@
+{
+  "head": "4c908c80e9d3dd0b7ff6601d72d82624fa1f8cd8",
+  "workingTreeHash": "0c2963d3c57c49836046f3c261c79f6ebf192b398e3e41fe6706cb18e8276ead",
+  "generatedAt": "2026-08-17T10:44:56.134Z",
+  "packageJson": "0.10.0-beta.1",
+  "cargoToml": "0.10.0-beta.1",
+  "tauriConfJson": "0.10.0-beta.1",
+  "updateFastUserAgent": "SHLauncher/0.10.0-beta.1",
+  "consistent": true,
+  "result": "PASS"
+}

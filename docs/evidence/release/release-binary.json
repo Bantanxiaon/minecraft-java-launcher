@@ -1,0 +1,14 @@
+{
+  "filename": "SH启动器_0.10.0-beta.1_x64-setup.exe",
+  "version": "0.10.0-beta.1",
+  "architecture": "x64",
+  "size": 4759475,
+  "sha256": "d68b1d9f6dfb4630f519dc1c1906e0ec2956ab3fb98bb8931cc95360747aa014",
+  "buildTimestamp": "2026-08-17T10:41:13.952Z",
+  "workingTreeHash": "0c2963d3c57c49836046f3c261c79f6ebf192b398e3e41fe6706cb18e8276ead",
+  "releaseCommit": "3f4a01e08730d33944349d6211c3dba143e7a4df",
+  "appExeSha256": "41d0cd10e68da39ab2b4f7d74d59212a90c9ffd3c9d86f41246d68c398eedbed",
+  "signing": "unsigned (no private key; Beta 如实记录，不伪造签名)",
+  "updaterArtifacts": "not generated (TAURI_SIGNING_PRIVATE_KEY absent)",
+  "generatedAt": "2026-08-17T10:44:56.132Z"
+}

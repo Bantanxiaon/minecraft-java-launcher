@@ -1,0 +1,264 @@
+{
+  "head": "4c908c80e9d3dd0b7ff6601d72d82624fa1f8cd8",
+  "workingTreeHash": "0c2963d3c57c49836046f3c261c79f6ebf192b398e3e41fe6706cb18e8276ead",
+  "generatedAt": "2026-08-17T10:42:10.249Z",
+  "binarySha256": "41d0cd10e68da39ab2b4f7d74d59212a90c9ffd3c9d86f41246d68c398eedbed",
+  "launcherOk": {
+    "mainVisible": true,
+    "accountVisible": true,
+    "libraryEntryVisible": true,
+    "versionShown": true
+  },
+  "results": {
+    "forgeCore": {
+      "label": "forge-core-instance-2",
+      "health": {
+        "ok": true,
+        "value": {
+          "instanceId": 2,
+          "name": "Closing Song1.6.5",
+          "gameVersion": "1.20.1",
+          "loaderType": "forge",
+          "loaderVersion": "47.4.10",
+          "memoryMb": 4096,
+          "status": "ready",
+          "gameFilesOk": true,
+          "modCount": 278,
+          "missingDependencies": [],
+          "incompatibleMods": []
+        }
+      },
+      "launch": {
+        "ok": true,
+        "value": {
+          "processId": 170060,
+          "logPath": "D:\\MinecraftLauncherData\\instances\\2\\.minecraft\\logs\\launcher-1786963334740562900.log"
+        }
+      },
+      "mainMenuReached": true,
+      "fatalDetected": false,
+      "waitSeconds": 15
+    },
+    "modrinthImport": {
+      "ok": true,
+      "value": {
+        "instance": {
+          "id": 5,
+          "name": "SH Audit Fixture",
+          "rootPath": "D:\\MinecraftLauncherData\\instances\\5",
+          "gameVersion": "1.20.1",
+          "loaderType": "forge",
+          "memoryMb": 4096,
+          "status": "ready",
+          "source": "modrinth"
+        },
+        "downloadedFiles": 1,
+        "overrideFiles": 2
+      }
+    },
+    "modrinthHealth": {
+      "ok": true,
+      "value": {
+        "instanceId": 5,
+        "name": "SH Audit Fixture",
+        "gameVersion": "1.20.1",
+        "loaderType": "forge",
+        "loaderVersion": "47.4.22",
+        "memoryMb": 4096,
+        "status": "ready",
+        "gameFilesOk": true,
+        "modCount": 1,
+        "missingDependencies": [],
+        "incompatibleMods": []
+      }
+    },
+    "modrinthLaunch": {
+      "label": "modrinth-import",
+      "health": {
+        "ok": true,
+        "value": {
+          "instanceId": 5,
+          "name": "SH Audit Fixture",
+          "gameVersion": "1.20.1",
+          "loaderType": "forge",
+          "loaderVersion": "47.4.22",
+          "memoryMb": 4096,
+          "status": "ready",
+          "gameFilesOk": true,
+          "modCount": 1,
+          "missingDependencies": [],
+          "incompatibleMods": []
+        }
+      },
+      "launch": {
+        "ok": true,
+        "value": {
+          "processId": 173616,
+          "logPath": "D:\\MinecraftLauncherData\\instances\\5\\.minecraft\\logs\\launcher-1786963391945838600.log"
+        }
+      },
+      "mainMenuReached": true,
+      "fatalDetected": false,
+      "waitSeconds": 11
+    },
+    "curseforgeImport": {
+      "ok": true,
+      "value": {
+        "instance": {
+          "id": 6,
+          "name": "SH Audit CF Fixture",
+          "rootPath": "D:\\MinecraftLauncherData\\instances\\6",
+          "gameVersion": "1.20.1",
+          "loaderType": "forge",
+          "memoryMb": 4096,
+          "status": "ready",
+          "source": "curseforge"
+        },
+        "downloadedFiles": 1,
+        "overrideFiles": 1
+      }
+    },
+    "curseforgeHealth": {
+      "ok": true,
+      "value": {
+        "instanceId": 6,
+        "name": "SH Audit CF Fixture",
+        "gameVersion": "1.20.1",
+        "loaderType": "forge",
+        "loaderVersion": "47.4.22",
+        "memoryMb": 4096,
+        "status": "ready",
+        "gameFilesOk": true,
+        "modCount": 1,
+        "missingDependencies": [],
+        "incompatibleMods": []
+      }
+    },
+    "curseforgeLaunch": {
+      "label": "curseforge-import",
+      "health": {
+        "ok": true,
+        "value": {
+          "instanceId": 6,
+          "name": "SH Audit CF Fixture",
+          "gameVersion": "1.20.1",
+          "loaderType": "forge",
+          "loaderVersion": "47.4.22",
+          "memoryMb": 4096,
+          "status": "ready",
+          "gameFilesOk": true,
+          "modCount": 1,
+          "missingDependencies": [],
+          "incompatibleMods": []
+        }
+      },
+      "launch": {
+        "ok": true,
+        "value": {
+          "processId": 172968,
+          "logPath": "D:\\MinecraftLauncherData\\instances\\6\\.minecraft\\logs\\launcher-1786963429522810200.log"
+        }
+      },
+      "mainMenuReached": true,
+      "fatalDetected": false,
+      "waitSeconds": 9
+    }
+  },
+  "dbBefore": {
+    "label": "before",
+    "e4mc": 0,
+    "mp": 0,
+    "servers": 0,
+    "sessions": 0,
+    "instances": [
+      {
+        "id": 2,
+        "name": "Closing Song1.6.5",
+        "status": "ready"
+      },
+      {
+        "id": 3,
+        "name": "SH Audit Fixture",
+        "status": "ready"
+      },
+      {
+        "id": 4,
+        "name": "SH Audit CF Fixture",
+        "status": "ready"
+      }
+    ],
+    "accounts": [
+      {
+        "id": 1,
+        "display_name": "Player",
+        "account_type": "OFFLINE"
+      },
+      {
+        "id": 2,
+        "display_name": "123",
+        "account_type": "OFFLINE"
+      }
+    ],
+    "settingsSha256": "7c579e33f34190800b5d384315b1e91c27e2743d9181053be7e3da2b845489cb"
+  },
+  "modsHashTreeInstance2Before": "7d5dc3ca361b6d004ea5dc5c902f9e1dde652727a9cc20e5e2b5534ccfd0bf08",
+  "dbAfter": {
+    "label": "after",
+    "e4mc": 0,
+    "mp": 0,
+    "servers": 0,
+    "sessions": 0,
+    "instances": [
+      {
+        "id": 2,
+        "name": "Closing Song1.6.5",
+        "status": "ready"
+      },
+      {
+        "id": 3,
+        "name": "SH Audit Fixture",
+        "status": "ready"
+      },
+      {
+        "id": 4,
+        "name": "SH Audit CF Fixture",
+        "status": "ready"
+      },
+      {
+        "id": 5,
+        "name": "SH Audit Fixture",
+        "status": "ready"
+      },
+      {
+        "id": 6,
+        "name": "SH Audit CF Fixture",
+        "status": "ready"
+      }
+    ],
+    "accounts": [
+      {
+        "id": 1,
+        "display_name": "Player",
+        "account_type": "OFFLINE"
+      },
+      {
+        "id": 2,
+        "display_name": "123",
+        "account_type": "OFFLINE"
+      }
+    ],
+    "settingsSha256": "7c579e33f34190800b5d384315b1e91c27e2743d9181053be7e3da2b845489cb"
+  },
+  "modsHashTreeInstance2After": "7d5dc3ca361b6d004ea5dc5c902f9e1dde652727a9cc20e5e2b5534ccfd0bf08",
+  "dataSafety": {
+    "originalInstance2Intact": true,
+    "accountsIntact": true,
+    "settingsIntact": true,
+    "modsTreeUnchanged": true,
+    "e4mcRows": 0,
+    "multiplayerHistoryRows": 0,
+    "serversRows": 0,
+    "multiplayerSessions": 0
+  },
+  "result": "PASS"
+}

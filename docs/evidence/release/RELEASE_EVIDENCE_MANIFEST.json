@@ -1,0 +1,23 @@
+{
+  "releaseVersion": "0.10.0-beta.1",
+  "head": "4c908c80e9d3dd0b7ff6601d72d82624fa1f8cd8",
+  "workingTreeHash": "0c2963d3c57c49836046f3c261c79f6ebf192b398e3e41fe6706cb18e8276ead",
+  "binarySha256": "d68b1d9f6dfb4630f519dc1c1906e0ec2956ab3fb98bb8931cc95360747aa014",
+  "generatedAt": "2026-08-17T10:44:56.134Z",
+  "releaseCommit": "3f4a01e08730d33944349d6211c3dba143e7a4df",
+  "tagCommit": "v0.10.0-beta.1 (tag points to the final docs commit)",
+  "tag": "v0.10.0-beta.1",
+  "releaseCriticalEvidence": {
+    "productionBuild": "docs/evidence/nextgen/audit/production-build.json (final binary info in docs/evidence/release/release-binary.json)",
+    "startupWindow": "docs/evidence/nextgen/startup-window.json",
+    "dependencyRepairE2E": "docs/evidence/nextgen/dependency-repair-current.json",
+    "forgeCoreSmoke": "docs/evidence/release/release-smoke-test.json (forge-core-instance-2 mainMenuReached=true)",
+    "modpackDetection": "docs/evidence/nextgen/audit/e2e-modpack.json inspect 段 + e2e-curseforge.json inspect 段",
+    "modpackInstallationE2E": "docs/evidence/release/release-smoke-test.json (modrinth-import / curseforge-import ready + mainMenuReached=true)",
+    "multiplayerIsolation": "docs/evidence/nextgen/multiplayer-isolation-current.json",
+    "dataSafety": "docs/evidence/release/release-smoke-test.json dataSafety",
+    "secretScan": "docs/evidence/release/secret-scan.json",
+    "versionConsistency": "docs/evidence/release/version-consistency.json",
+    "binaryVerification": "docs/evidence/release/release-binary.json + SHA256SUMS.txt"
+  }
+}
