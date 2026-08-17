@@ -162,22 +162,10 @@ export function SettingsPage({
           <div>
             <strong>界面主题</strong>
             <small>
-              新界面更清爽统一；经典界面保留旧外观，可随时回退，两种主题功能完全一致。
+              已统一为新界面主题（深色现代视觉），不再提供经典界面。
             </small>
           </div>
-          <select
-            aria-label="界面主题"
-            value={settings.uiTheme}
-            onChange={(event) =>
-              onChange({
-                ...settings,
-                uiTheme: event.target.value as "modern" | "classic",
-              })
-            }
-          >
-            <option value="modern">新界面（推荐）</option>
-            <option value="classic">经典界面</option>
-          </select>
+          <span className="ready-label">新界面</span>
         </div>
         <div className="environment-check" role="region" aria-label="运行环境检查">
           <div>

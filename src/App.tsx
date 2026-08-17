@@ -358,19 +358,16 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    document.documentElement.dataset.uiTheme = settings.uiTheme;
+    // 统一新 UI：不再保留经典界面主题；历史 "classic" 设置也一律使用新主题。
+    document.documentElement.dataset.uiTheme = "modern";
     const existing = document.getElementById("ui2-theme");
-    if (settings.uiTheme === "modern") {
-      if (!existing) {
-        const style = document.createElement("style");
-        style.id = "ui2-theme";
-        style.textContent = ui2Css;
-        document.head.appendChild(style);
-      }
-    } else if (existing) {
-      existing.remove();
+    if (!existing) {
+      const style = document.createElement("style");
+      style.id = "ui2-theme";
+      style.textContent = ui2Css;
+      document.head.appendChild(style);
     }
-  }, [settings.uiTheme]);
+  }, []);
 
   useEffect(() => {
     if (!isTauri()) {
