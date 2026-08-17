@@ -222,3 +222,106 @@
   justify-content: center;
   gap: 12px;
 }
+
+/* 设置页 */
+.ui3-shell .settings-panel,
+.ui3-shell .settings-account-list,
+.ui3-shell .microsoft-login-card,
+.ui3-shell .external-login-form,
+.ui3-shell .cache-clean-card,
+.ui3-shell .environment-check,
+.ui3-shell .directory-picker {
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+}
+
+.ui3-shell .settings-account-row {
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+}
+
+.ui3-shell input[type="text"],
+.ui3-shell input[type="number"],
+.ui3-shell select,
+.ui3-shell textarea {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+/* 存储页 */
+.ui3-shell .storage-hero,
+.ui3-shell .installed-mods,
+.ui3-shell .storage-categories,
+.ui3-shell .pack-export-card {
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+}
+
+.ui3-shell .storage-category-row {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* 发现 / 内容页 */
+.ui3-shell .online-catalog,
+.ui3-shell .catalog-filters {
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+}
+
+.ui3-shell .catalog-grid {
+  gap: 12px;
+}
+
+.ui3-shell .catalog-grid article,
+.ui3-shell .catalog-card {
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  transition: transform var(--motion-fast), border-color var(--motion-fast);
+}
+
+.ui3-shell .catalog-grid article:hover {
+  border-color: var(--accent-primary);
+  transform: translateY(-2px);
+}
+
+.ui3-shell .catalog-mark {
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+  border-radius: 10px;
+}
+
+.ui3-shell .catalog-original,
+.ui3-shell .catalog-source {
+  color: var(--text-muted);
+}
+
+/* 下载 / 诊断页 */
+.ui3-shell .diagnostic-card,
+.ui3-shell .diagnostic-grid > section,
+.ui3-shell .mod-rows {
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+}
+
+.ui3-shell .section-heading {
+  color: var(--text-primary);
+}
+
+.ui3-shell .ready-label {
+  color: var(--success);
+}

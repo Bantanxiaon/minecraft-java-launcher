@@ -1,4 +1,8 @@
 const HIGHLIGHTS_BY_VERSION: Record<string, string[]> = {
+  "0.9.5": [
+    "UI 3.0 第二阶段：设置/存储/发现/下载诊断页统一暗色",
+    "UI Action Gate 自动检查：0 个无效按钮、0 个占位交互",
+  ],
   "0.9.4": [
     "UI 3.0 第一阶段：暗色现代 Shell + 六项导航",
     "新增独立账户页，发现页标签整合内容管理",

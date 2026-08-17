@@ -1,6 +1,7 @@
 // 机器级发布门禁：任何一项失败退出 1，阻止 tag / Release / latest.json / updater。
 
 import fs from "node:fs";
+import { spawnSync } from "node:child_process";
 
 const fail = (message) => {
   console.error(`[release-gate] FAIL: ${message}`);
@@ -119,4 +120,15 @@ try {
 if (multiplayerExternalPending.length > 0) {
   console.warn("[release-gate] WARN: External acceptance remains pending.");
 }
+
+// 6. UI Action Gate：不允许任何 BROKEN / PLACEHOLDER 交互控件。
+const actionGate = spawnSync(
+  process.execPath,
+  ["scripts/ui-action-gate.mjs"],
+  { cwd: process.cwd(), stdio: "inherit" },
+);
+if (actionGate.status !== 0) {
+  fail("UI Action Gate 未通过（存在 BROKEN/PLACEHOLDER 交互）。");
+}
+
 console.log("[release-gate] PASS");
