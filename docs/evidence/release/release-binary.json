@@ -2,13 +2,14 @@
   "filename": "SH启动器_0.10.0-beta.1_x64-setup.exe",
   "version": "0.10.0-beta.1",
   "architecture": "x64",
-  "size": 4759475,
-  "sha256": "d68b1d9f6dfb4630f519dc1c1906e0ec2956ab3fb98bb8931cc95360747aa014",
+  "size": 4759567,
+  "sha256": "6bba526694b5eb51a303b089b9c81bd7ae12c5bacc106e5adbf1aab350383697",
   "buildTimestamp": "2026-08-17T10:41:13.952Z",
   "workingTreeHash": "0c2963d3c57c49836046f3c261c79f6ebf192b398e3e41fe6706cb18e8276ead",
   "releaseCommit": "3f4a01e08730d33944349d6211c3dba143e7a4df",
   "appExeSha256": "41d0cd10e68da39ab2b4f7d74d59212a90c9ffd3c9d86f41246d68c398eedbed",
-  "signing": "unsigned (no private key; Beta 如实记录，不伪造签名)",
-  "updaterArtifacts": "not generated (TAURI_SIGNING_PRIVATE_KEY absent)",
-  "generatedAt": "2026-08-17T10:44:56.132Z"
+  "signing": "updater minisign signed; Windows Authenticode: unavailable (no certificate)",
+  "updaterArtifacts": "generated (minisign, empty-password key)",
+  "generatedAt": "2026-08-17T10:44:56.132Z",
+  "updaterSignature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRNlEzRFNJdU9Sa01IMGdZcko4bkZDaXd2Um5VQnpVMkdvYTRYQ29EenNMUkJUWU9COE5xcVFINUNlczJKK05nbFJGTTdxSkNnT1M1SFg4RkJjSFlKT1VGRG9NTXNzUWdZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2OTY0Njg0CWZpbGU6U0jlkK/liqjlmahfMC4xMC4wLWJldGEuMV94NjQtc2V0dXAuZXhlCm9QWTREZmVRTG5WWU50V0RNcUJwRHVvOFREMkNoaTBWZm1kL2FERFJ6UEN2UVUyWHVDNE80MDFsalpwT2d0RTNKWElKcDBkcjRHWUJ3OW5mVDIyZkFRPT0K"
 }

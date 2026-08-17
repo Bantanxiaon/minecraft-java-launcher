@@ -3,6 +3,17 @@
   "head": "4c908c80e9d3dd0b7ff6601d72d82624fa1f8cd8",
   "workingTreeHash": "0c2963d3c57c49836046f3c261c79f6ebf192b398e3e41fe6706cb18e8276ead",
   "binarySha256": "d68b1d9f6dfb4630f519dc1c1906e0ec2956ab3fb98bb8931cc95360747aa014",
+  "finalBinarySha256": "6bba526694b5eb51a303b089b9c81bd7ae12c5bacc106e5adbf1aab350383697",
+  "updaterSignature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRNlEzRFNJdU9Sa01IMGdZcko4bkZDaXd2Um5VQnpVMkdvYTRYQ29EenNMUkJUWU9COE5xcVFINUNlczJKK05nbFJGTTdxSkNnT1M1SFg4RkJjSFlKT1VGRG9NTXNzUWdZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2OTY0Njg0CWZpbGU6U0jlkK/liqjlmahfMC4xMC4wLWJldGEuMV94NjQtc2V0dXAuZXhlCm9QWTREZmVRTG5WWU50V0RNcUJwRHVvOFREMkNoaTBWZm1kL2FERFJ6UEN2UVUyWHVDNE80MDFsalpwT2d0RTNKWElKcDBkcjRHWUJ3OW5mVDIyZkFRPT0K",
+  "updaterArtifacts": {
+    "latestJson": "docs/evidence/release/updater/latest.json",
+    "signature": "docs/evidence/release/updater/SHLauncher_0.10.0-beta.1_x64-setup.exe.sig",
+    "publishedTo": [
+      "https://github.com/Bantanxiaon/minecraft-java-launcher/releases/tag/v0.10.0-beta.1",
+      "https://github.com/Bantanxiaon/minecraft-java-launcher/blob/main/release-assets/latest.json"
+    ],
+    "endToEndVerification": "cargo test v0100_beta1_signed_installer_verifies_against_embedded_pubkey -- --ignored -> PASS"
+  },
   "generatedAt": "2026-08-17T10:44:56.134Z",
   "releaseCommit": "3f4a01e08730d33944349d6211c3dba143e7a4df",
   "tagCommit": "v0.10.0-beta.1 (tag points to the final docs commit)",
@@ -18,6 +29,7 @@
     "dataSafety": "docs/evidence/release/release-smoke-test.json dataSafety",
     "secretScan": "docs/evidence/release/secret-scan.json",
     "versionConsistency": "docs/evidence/release/version-consistency.json",
-    "binaryVerification": "docs/evidence/release/release-binary.json + SHA256SUMS.txt"
+    "binaryVerification": "docs/evidence/release/release-binary.json + SHA256SUMS.txt",
+    "updaterSigningAndDistribution": "docs/evidence/release/updater/latest.json + .sig; main@release-assets/latest.json; end-to-end signature test PASS"
   }
 }

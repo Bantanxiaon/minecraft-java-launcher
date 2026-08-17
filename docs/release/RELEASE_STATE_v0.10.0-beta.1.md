@@ -8,9 +8,10 @@
 - Release Commit: 3f4a01e08730d33944349d6211c3dba143e7a4df（docs 最终提交见 Tag）
 - Working Tree Hash (source state): 0c2963d3c57c49836046f3c261c79f6ebf192b398e3e41fe6706cb18e8276ead
 - Binary: docs/evidence/release/release-binary.json
-- Binary SHA-256: d68b1d9f6dfb4630f519dc1c1906e0ec2956ab3fb98bb8931cc95360747aa014
-- Signing: unsigned（无私钥，如实记录）
-- Updater artifacts: 未生成（无 TAURI_SIGNING_PRIVATE_KEY）
+- Binary SHA-256: 6bba526694b5eb51a303b089b9c81bd7ae12c5bacc106e5adbf1aab350383697
+- Signing: updater Minisign 已签名（私钥位于私有目录，公钥与内置 pubkey 一致）；Windows Authenticode 无证书，未签名
+- Updater artifacts: latest.json + .sig 已生成并发布（GitHub Release + main@release-assets/latest.json）
+- End-to-End 验证: v0100_beta1_signed_installer_verifies_against_embedded_pubkey PASS
 
 ## Enabled Features
 

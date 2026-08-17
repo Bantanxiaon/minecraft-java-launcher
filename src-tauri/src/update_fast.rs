@@ -268,4 +268,29 @@ mod tests {
         let pubkey = updater_pubkey().expect("pubkey");
         verify_update_signature(&bytes, SIGNATURE, &pubkey).expect("真实签名必须通过");
     }
+
+    /// v0.10.0-beta.1 真实网络回归：安装包 + 更新签名 + 内置公钥 端到端验证。
+    #[tokio::test]
+    #[ignore = "network"]
+    async fn v0100_beta1_signed_installer_verifies_against_embedded_pubkey() {
+        const SIGNATURE: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVRNlEzRFNJdU9Sa01IMGdZcko4bkZDaXd2Um5VQnpVMkdvYTRYQ29EenNMUkJUWU9COE5xcVFINUNlczJKK05nbFJGTTdxSkNnT1M1SFg4RkJjSFlKT1VGRG9NTXNzUWdZPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg2OTY0Njg0CWZpbGU6U0jlkK/liqjlmahfMC4xMC4wLWJldGEuMV94NjQtc2V0dXAuZXhlCm9QWTREZmVRTG5WWU50V0RNcUJwRHVvOFREMkNoaTBWZm1kL2FERFJ6UEN2UVUyWHVDNE80MDFsalpwT2d0RTNKWElKcDBkcjRHWUJ3OW5mVDIyZkFRPT0K";
+        let url =
+            "https://github.com/Bantanxiaon/minecraft-java-launcher/releases/download/v0.10.0-beta.1/SHLauncher_0.10.0-beta.1_x64-setup.exe";
+        let client = reqwest::Client::builder()
+            .user_agent("SHLauncher-update-test")
+            .build()
+            .expect("client");
+        let bytes = client
+            .get(url)
+            .send()
+            .await
+            .expect("下载失败")
+            .bytes()
+            .await
+            .expect("读取失败")
+            .to_vec();
+        assert!(bytes.len() > 4_000_000, "安装包大小异常");
+        let pubkey = updater_pubkey().expect("pubkey");
+        verify_update_signature(&bytes, SIGNATURE, &pubkey).expect("真实签名必须通过");
+    }
 }

@@ -1,2 +1,2 @@
-d68b1d9f6dfb4630f519dc1c1906e0ec2956ab3fb98bb8931cc95360747aa014  SH启动器_0.10.0-beta.1_x64-setup.exe
+6bba526694b5eb51a303b089b9c81bd7ae12c5bacc106e5adbf1aab350383697  SHLauncher_0.10.0-beta.1_x64-setup.exe
 41d0cd10e68da39ab2b4f7d74d59212a90c9ffd3c9d86f41246d68c398eedbed  app.exe
