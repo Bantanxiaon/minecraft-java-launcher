@@ -2023,6 +2023,43 @@ export default function App() {
         setMessage("没有找到可用的 64 位 Java，请先到设置里点击“一键检查并安装”。");
         return;
       }
+      if (server) {
+        // 服务器连接预检：接入真实连接链路，网络级失败直接分类提示并阻止无效启动。
+        try {
+          const probe = await invoke<{
+            classification: string;
+            message: string;
+          }>("diagnose_server", {
+            rawAddress:
+              server.port && server.port !== 25565
+                ? `${server.address}:${server.port}`
+                : server.address,
+          });
+          const blocking = [
+            "INVALID_ADDRESS",
+            "DNS_FAILED",
+            "SRV_FAILED",
+            "TCP_REFUSED",
+            "TCP_TIMEOUT",
+            "NETWORK_UNREACHABLE",
+            "PROXY_FAILURE",
+          ];
+          if (blocking.includes(probe.classification)) {
+            setBusy(false);
+            setErrorModal({
+              title: "服务器连接预检未通过",
+              lines: [
+                probe.message,
+                `分类：${probe.classification}`,
+                "可稍后重试，或检查服务器地址与端口。",
+              ],
+            });
+            return;
+          }
+        } catch {
+          // 预检失败不阻断启动，避免网络抖动误伤；游戏内仍会给出真实连接结果。
+        }
+      }
       setMessage("文件和 Java 已就绪，正在启动 Minecraft…");
       const result = await invoke<{ processId: number; logPath: string }>(
         "launch_instance",
