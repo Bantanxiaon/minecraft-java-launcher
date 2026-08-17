@@ -1,0 +1,35 @@
+/* SH Graphite / SH Indigo —— UI 3.0 设计令牌 */
+:root {
+  --bg-primary: #101218;
+  --bg-secondary: #151821;
+  --surface: #191d27;
+  --surface-hover: #202532;
+  --surface-elevated: #242a38;
+  --text-primary: #f4f6fa;
+  --text-secondary: #a7b0c0;
+  --text-muted: #747e90;
+  --accent-primary: #7569ff;
+  --accent-hover: #8a80ff;
+  --accent-soft: rgba(117, 105, 255, 0.16);
+  --success: #4cc38a;
+  --warning: #f1b957;
+  --danger: #f46d75;
+  --border-subtle: rgba(255, 255, 255, 0.07);
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --shadow-elevated: 0 12px 32px rgba(0, 0, 0, 0.45);
+  --motion-fast: 140ms ease-out;
+}
+
+[data-ui3-theme="light"] {
+  --bg-primary: #f5f6fa;
+  --bg-secondary: #eceef4;
+  --surface: #ffffff;
+  --surface-hover: #f0f1f7;
+  --surface-elevated: #ffffff;
+  --text-primary: #171a22;
+  --text-secondary: #525b6b;
+  --text-muted: #8a93a5;
+  --border-subtle: rgba(15, 18, 26, 0.08);
+  --shadow-elevated: 0 12px 32px rgba(20, 24, 40, 0.12);
+}

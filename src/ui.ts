@@ -3,14 +3,9 @@ import type { LauncherError } from "./types";
 export const navItems = [
   "主页",
   "游戏库",
-  "模组",
-  "整合包",
-  "资源包",
-  "光影",
-  "存档",
-  "联机",
+  "发现",
   "下载",
-  "存储",
+  "账户",
   "设置",
 ];
 

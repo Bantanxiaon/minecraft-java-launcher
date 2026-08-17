@@ -1,0 +1,224 @@
+/* UI 3.0 App Shell：暗色、游戏化、实例优先（XMCL 视觉方向） */
+.ui3-shell {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  min-height: 100vh;
+}
+
+.ui3-shell aside {
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-subtle);
+}
+
+.ui3-shell aside .brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+}
+
+.ui3-shell aside .brand .brand-art {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  box-shadow: 0 6px 18px rgba(117, 105, 255, 0.35);
+}
+
+.ui3-shell aside .brand-copy strong {
+  color: var(--text-primary);
+  font-size: 15px;
+}
+
+.ui3-shell aside .brand-copy small {
+  color: var(--text-muted);
+}
+
+.ui3-shell aside nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+}
+
+.ui3-shell aside nav button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+
+.ui3-shell aside nav button:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.ui3-shell aside nav button.active {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  box-shadow: inset 2px 0 0 var(--accent-primary);
+}
+
+.ui3-shell aside .account {
+  border-top: 1px solid var(--border-subtle);
+  margin-top: auto;
+}
+
+.ui3-shell main.shell {
+  background: var(--bg-primary);
+}
+
+/* 首页 Hero：Play 是第一视觉焦点 */
+.ui3-home .hero {
+  background: linear-gradient(135deg, var(--surface-elevated), var(--bg-secondary));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 28px;
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  box-shadow: var(--shadow-elevated);
+}
+
+.ui3-home .hero .instance-icon img {
+  width: 92px;
+  height: 92px;
+  border-radius: 18px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+}
+
+.ui3-home .hero .eyebrow {
+  color: var(--accent-hover);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 12px;
+  margin: 0 0 4px;
+}
+
+.ui3-home .hero h2 {
+  color: var(--text-primary);
+  font-size: 26px;
+  margin: 0 0 8px;
+}
+
+.ui3-home .hero .facts {
+  color: var(--text-secondary);
+  font-size: 13px;
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.ui3-home .hero-actions .play {
+  background: var(--accent-primary);
+  border: none;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+  padding: 12px 26px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  transition: background var(--motion-fast), transform var(--motion-fast);
+}
+
+.ui3-home .hero-actions .play:hover {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+}
+
+.ui3-home .hero-actions .play:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.ui3-home .hero-status-list > div {
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+}
+
+/* 发现页标签 */
+.ui3-discover-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-secondary);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+
+.ui3-discover-tabs button {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 8px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+
+.ui3-discover-tabs button:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+.ui3-discover-tabs button.active {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+/* 通用暗色卡片与状态 */
+.ui3-shell .card,
+.ui3-shell .panel,
+.ui3-shell .instance-card {
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.ui3-shell .empty-state {
+  color: var(--text-muted);
+}
+
+.ui3-shell button.primary {
+  background: var(--accent-primary);
+  border: none;
+  color: #fff;
+  border-radius: 10px;
+  padding: 9px 16px;
+  cursor: pointer;
+}
+
+.ui3-shell button.primary:hover {
+  background: var(--accent-hover);
+}
+
+.ui3-shell button.primary:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* 启动小窗暗色 */
+.ui3-splash {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}

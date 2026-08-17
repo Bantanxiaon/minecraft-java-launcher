@@ -32,6 +32,7 @@ import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { ServersPage } from "./pages/ServersPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { StoragePage } from "./pages/StoragePage";
+import { AccountsPage } from "./pages/AccountsPage";
 import { InstanceLibraryPage } from "./pages/InstanceLibraryPage";
 import { InstanceDetailPage } from "./pages/InstanceDetailPage";
 import { HomeUpdateCard } from "./components/HomeUpdateCard";
@@ -67,22 +68,17 @@ import {
 } from "./ui";
 import grassBlock from "./assets/grass-block.png";
 import {
-  Box,
   CircleUserRound,
+  Compass,
   Download,
   FolderOpen,
   Gamepad2,
-  HardDrive,
   House,
-  Image as ImageIcon,
   LibraryBig,
-  Package,
   Play,
   Puzzle,
-  Server,
   Settings,
   ShieldCheck,
-  Sun,
   Coffee,
   CheckCircle2,
   CircleAlert,
@@ -93,6 +89,8 @@ import {
 import "./App.css";
 import "./overrides.css";
 import ui2Css from "./ui2.css?inline";
+import "./ui/tokens.css";
+import "./ui/shell.css";
 
 function formatBytes(value: number): string {
   if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(2)} GB`;
@@ -276,6 +274,8 @@ export default function App() {
   const bootCancelledRef = useRef(false);
   const [activeNav, setActiveNav] = useState("主页");
   const activeNavRef = useRef(activeNav);
+  const DISCOVER_TABS = ["模组", "整合包", "资源包", "光影", "存档"] as const;
+  const [, setDiscoverTab] = useState<(typeof DISCOVER_TABS)[number]>("模组");
   const [showInstanceForm, setShowInstanceForm] = useState(false);
   const [instanceName, setInstanceName] = useState("");
   const [gameVersion, setGameVersion] = useState("");
@@ -2611,12 +2611,14 @@ export default function App() {
   const selectedJava =
     javaRuntimes.find((runtime) => runtime.path === selectedJavaPath) ??
     javaRuntimes.find((runtime) => runtime.is64Bit);
-  const navIcons = [House, LibraryBig, Puzzle, Package, ImageIcon, Sun, Box, Server, Download, HardDrive, Settings];
+  const navIcons = [House, LibraryBig, Compass, Download, CircleUserRound, Settings];
+  const isDiscoverActive =
+    DISCOVER_TABS.includes(activeNav as (typeof DISCOVER_TABS)[number]);
   if (isSplash) {
     return <SplashView />;
   }
   return (
-    <div className="app-frame">
+    <div className="app-frame ui3-shell">
       <DesktopTitleBar />
       <main className="shell">
       <aside>
@@ -2644,11 +2646,18 @@ export default function App() {
         <nav>
           {navItems.map((item, index) => {
             const Icon = navIcons[index] ?? Gamepad2;
+            const active =
+              item === "发现" ? isDiscoverActive : item === activeNav;
             return (
             <button
-              className={item === activeNav ? "active" : ""}
+              className={active ? "active" : ""}
               onClick={() => {
-                setActiveNav(item);
+                if (item === "发现") {
+                  setDiscoverTab("模组");
+                  setActiveNav("模组");
+                } else {
+                  setActiveNav(item);
+                }
                 setMessage("");
               }}
               key={item}
@@ -2683,8 +2692,27 @@ export default function App() {
         </section>
       </aside>
       <section className="content">
+        {isDiscoverActive ? (
+          <div className="ui3-discover-tabs" role="tablist" aria-label="发现分类">
+            {DISCOVER_TABS.map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                role="tab"
+                aria-selected={activeNav === tab}
+                className={activeNav === tab ? "active" : ""}
+                onClick={() => {
+                  setDiscoverTab(tab);
+                  setActiveNav(tab);
+                }}
+              >
+                {tab}
+              </button>
+            ))}
+          </div>
+        ) : null}
         {activeNav === "主页" ? (
-          <>
+          <div className="ui3-home">
             <header>
               <div>
                 <h1>
@@ -3012,7 +3040,7 @@ export default function App() {
                 }}
               />
             ) : null}
-          </>
+          </div>
         ) : activeNav === "联机" ? (
           <ServersPage
             servers={servers}
@@ -3165,6 +3193,20 @@ export default function App() {
             onImportArchive={(archive) => void importArchiveAsNewInstance(archive)}
             onRemoveArchive={(archive) => void removeModpackArchive(archive)}
             onInstallJava={(major) => void installManagedJava(major)}
+          />
+        ) : activeNav === "账户" ? (
+          <AccountsPage
+            accounts={accounts}
+            selectedAccountId={current?.id}
+            busy={busy}
+            message={message}
+            onSelect={selectAccount}
+            onRemove={(account) => void removeAccount(account)}
+            onCreateOffline={async (name) => {
+              setDraft(name);
+              await createProfile();
+            }}
+            onOpenSettings={() => setActiveNav("设置")}
           />
         ) : activeNav === "设置" ? (
           <SettingsPage
