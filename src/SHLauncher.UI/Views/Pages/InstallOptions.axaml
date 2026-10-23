@@ -1,0 +1,13 @@
+<UserControl xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:vm="using:SHLauncher.UI.ViewModels" xmlns:i="using:SHLauncher.Contracts.Install" x:Class="SHLauncher.UI.Views.Pages.InstallOptions" x:DataType="vm:DownloadsViewModel">
+ <ScrollViewer><StackPanel Spacing="12" Margin="16" MinWidth="360" MaxWidth="600">
+  <TextBlock Text="{Binding Minecraft.Id}" FontSize="24"/>
+  <TextBlock Text="加载器"/><ComboBox ItemsSource="{Binding LoaderTypes}" SelectedItem="{Binding Loader}" HorizontalAlignment="Stretch"/>
+  <ComboBox ItemsSource="{Binding LoaderVersions}" SelectedItem="{Binding LoaderVersion}" IsVisible="{Binding NeedsLoader}" HorizontalAlignment="Stretch"><ComboBox.ItemTemplate><DataTemplate x:DataType="i:LoaderVersionInfo"><TextBlock Text="{Binding Version}"/></DataTemplate></ComboBox.ItemTemplate></ComboBox>
+  <TextBlock Text="{Binding SelectionReason}" TextWrapping="Wrap" Opacity="0.7"/>
+  <TextBlock Text="实例名称"/><TextBox Text="{Binding DirectoryName}" MaxLength="64" PlaceholderText="输入实例名称"/>
+  <TextBlock Text="{Binding InstallBlocker}" TextWrapping="Wrap"/>
+  <TextBlock Text="{Binding ResolutionMessage}" IsVisible="{Binding HasResolutionProblem}" TextWrapping="Wrap" Foreground="#F599A4"/>
+  <Button Content="重试版本解析" Command="{Binding ResolutionRetryCommand}" IsVisible="{Binding HasResolutionProblem}"/>
+  <Button Content="安装到新实例" Command="{Binding InstallCommand}" HorizontalAlignment="Right"/>
+ </StackPanel></ScrollViewer>
+</UserControl>

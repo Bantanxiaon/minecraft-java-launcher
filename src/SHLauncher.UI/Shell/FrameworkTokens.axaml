@@ -1,0 +1,27 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+ <!-- One palette bridge for Semi forms and all Ursa overlays. -->
+ <StaticResource x:Key="DialogBackground" ResourceKey="SHLN.Surface"/>
+ <StaticResource x:Key="DrawerBackground" ResourceKey="SHLN.Surface"/>
+ <StaticResource x:Key="ToastCardBackground" ResourceKey="SHLN.SurfaceElevated"/>
+ <StaticResource x:Key="ToastCardContentForeground" ResourceKey="SHLN.TextPrimary"/>
+ <StaticResource x:Key="OverlayDialogMaskBrush" ResourceKey="SHLN.OverlayDim"/>
+ <StaticResource x:Key="DialogCornerRadius" ResourceKey="SHLN.DialogRadius"/>
+ <StaticResource x:Key="DrawerCornerRadius" ResourceKey="SHLN.DialogRadius"/>
+ <StaticResource x:Key="ToastCardCornerRadius" ResourceKey="SHLN.ControlRadius"/>
+ <StaticResource x:Key="ButtonDefaultPrimaryForeground" ResourceKey="SHLN.TextPrimary"/>
+ <StaticResource x:Key="ButtonDefaultBackground" ResourceKey="SHLN.SurfaceElevated"/>
+ <SolidColorBrush x:Key="ButtonDefaultPointeroverBackground" Color="#344258"/>
+ <SolidColorBrush x:Key="ButtonDefaultPressedBackground" Color="#29384E"/>
+ <StaticResource x:Key="ButtonSolidPrimaryBackground" ResourceKey="SHLN.Accent"/>
+ <StaticResource x:Key="ButtonSolidPrimaryPointeroverBackground" ResourceKey="SHLN.AccentHover"/>
+ <SolidColorBrush x:Key="ButtonSolidPrimaryPressedBackground" Color="#3477CB"/>
+ <StaticResource x:Key="ButtonSolidPrimaryBorderBrush" ResourceKey="SHLN.Accent"/>
+ <StaticResource x:Key="ButtonSolidPrimaryPointeroverBorderBrush" ResourceKey="SHLN.AccentHover"/>
+ <StaticResource x:Key="ButtonSolidPrimaryPressedBorderBrush" ResourceKey="ButtonSolidPrimaryPressedBackground"/>
+ <StaticResource x:Key="TextBoxDefaultBorderBrush" ResourceKey="SHLN.BorderSubtle"/><SolidColorBrush x:Key="TextBoxDefaultBackground" Color="#77151D2B"/>
+ <StaticResource x:Key="TextBoxPointeroverBackground" ResourceKey="SHLN.SurfaceElevated"/>
+ <StaticResource x:Key="TextBoxForeground" ResourceKey="SHLN.TextPrimary"/>
+ <StaticResource x:Key="TextBoxPlaceholderForeground" ResourceKey="SHLN.TextSecondary"/>
+ <StaticResource x:Key="TextBoxFocusBorderBrush" ResourceKey="SHLN.Accent"/>
+ <StaticResource x:Key="NotificationCardInformationIconForeground" ResourceKey="SHLN.Accent"/>
+</ResourceDictionary>

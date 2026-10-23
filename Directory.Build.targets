@@ -1,0 +1,17 @@
+<Project>
+  <PropertyGroup>
+    <IsProductProject Condition="'$(MSBuildProjectName)' == 'SHLauncher.Core' Or '$(MSBuildProjectName)' == 'SHLauncher.Contracts' Or '$(MSBuildProjectName)' == 'SHLauncher.Application' Or '$(MSBuildProjectName)' == 'SHLauncher.Infrastructure' Or '$(MSBuildProjectName)' == 'SHLauncher.Platform' Or '$(MSBuildProjectName)' == 'SHLauncher.UI' Or '$(MSBuildProjectName)' == 'SHLauncher.Engine.CmlLib' Or '$(MSBuildProjectName)' == 'SHLauncher.Bootstrap' Or '$(MSBuildProjectName)' == 'SHLauncher.Downloads'">true</IsProductProject>
+    <AllowedProjectReference Condition="'$(MSBuildProjectName)' == 'SHLauncher.UI'">SHLauncher.Application;SHLauncher.Bootstrap</AllowedProjectReference>
+    <AllowedProjectReference Condition="'$(MSBuildProjectName)' == 'SHLauncher.Application' Or '$(MSBuildProjectName)' == 'SHLauncher.Infrastructure' Or '$(MSBuildProjectName)' == 'SHLauncher.Platform' Or '$(MSBuildProjectName)' == 'SHLauncher.Engine.CmlLib' Or '$(MSBuildProjectName)' == 'SHLauncher.Downloads'">SHLauncher.Contracts</AllowedProjectReference>
+    <AllowedProjectReference Condition="'$(MSBuildProjectName)' == 'SHLauncher.Bootstrap'">SHLauncher.Application;SHLauncher.Infrastructure;SHLauncher.Engine.CmlLib;SHLauncher.Downloads;SHLauncher.Platform</AllowedProjectReference>
+    <AllowedProjectReference Condition="'$(MSBuildProjectName)' == 'SHLauncher.Contracts'">SHLauncher.Core</AllowedProjectReference>
+  </PropertyGroup>
+  <Target Name="ValidateProductArchitecture" BeforeTargets="PrepareForBuild;IncludeTransitiveProjectReferences" Condition="'$(IsProductProject)' == 'true'">
+    <ItemGroup>
+      <InvalidProjectReference Include="@(ProjectReference)" Condition="!$([System.String]::Copy(';$(AllowedProjectReference);').Contains(';%(ProjectReference.Filename);'))" />
+      <InvalidPackageReference Include="@(PackageReference)" Condition="!(('$(MSBuildProjectName)' == 'SHLauncher.UI' And ('%(PackageReference.Identity)' == 'Avalonia' Or '%(PackageReference.Identity)' == 'Avalonia.Desktop' Or '%(PackageReference.Identity)' == 'Avalonia.Themes.Fluent' Or '%(PackageReference.Identity)' == 'AnimationImage.Avalonia' Or '%(PackageReference.Identity)' == 'Irihi.Ursa' Or '%(PackageReference.Identity)' == 'Irihi.Ursa.Themes.Semi')) Or ('$(MSBuildProjectName)' == 'SHLauncher.Infrastructure' And ('%(PackageReference.Identity)' == 'SharpZipLib' Or '%(PackageReference.Identity)' == 'Tomlyn')) Or ('$(MSBuildProjectName)' == 'SHLauncher.Engine.CmlLib' And ('%(PackageReference.Identity)' == 'CmlLib.Core' Or '%(PackageReference.Identity)' == 'CmlLib.Core.Installer.Forge')))" />
+    </ItemGroup>
+    <Error Condition="'@(InvalidProjectReference)' != ''" Text="Architecture violation in $(MSBuildProjectName): @(InvalidProjectReference). Review the dependency direction." />
+    <Error Condition="'@(InvalidPackageReference)' != ''" Text="Dependency not approved for $(MSBuildProjectName): @(InvalidPackageReference). Complete source and license research before updating this policy." />
+  </Target>
+</Project>

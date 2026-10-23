@@ -1,0 +1,38 @@
+<UserControl xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:vm="using:SHLauncher.UI.ViewModels" xmlns:a="using:SHLauncher.Contracts.Accounts" xmlns:shell="using:SHLauncher.UI.Shell" x:Class="SHLauncher.UI.Shell.AccountSurface" x:DataType="vm:AccountsViewModel">
+ <Grid Name="AccountLayout" ColumnDefinitions="53*,47*">
+  <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+   <StackPanel Name="AccountBody" MaxWidth="300" Margin="32,40,32,40" VerticalAlignment="Center" Spacing="14">
+    <TextBlock Text="{Binding Heading}" FontSize="32" FontWeight="SemiBold"/>
+    <TextBlock Text="选择账户" IsVisible="{Binding IsChoice}" Classes="secondary" Margin="0,0,0,10"/>
+    <StackPanel IsVisible="{Binding IsChoice}" IsEnabled="{Binding CanEdit}" Spacing="10">
+     <ItemsControl ItemsSource="{Binding SavedAccounts}" IsVisible="{Binding HasAccounts}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="vm:SavedAccountRow">
+      <Button Classes="account" Command="{Binding UseCommand}" HorizontalAlignment="Stretch" Margin="0,0,0,8" AutomationProperties.Name="{Binding Name}"><Grid ColumnDefinitions="40,*" ColumnSpacing="12"><Border Background="#34465F" CornerRadius="7" Width="40" Height="40"><shell:SavedAccountAvatar Width="32" Height="32"/></Border><StackPanel Grid.Column="1" VerticalAlignment="Center"><TextBlock Text="{Binding Name}"/><TextBlock Text="{Binding Provider}" Classes="secondary" FontSize="12"/></StackPanel></Grid></Button>
+     </DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+     <Expander Header="管理账户" IsVisible="{Binding HasAccounts}"><StackPanel Spacing="8">
+      <ComboBox ItemsSource="{Binding Accounts}" SelectedItem="{Binding SelectedAccount}" HorizontalAlignment="Stretch" AutomationProperties.Name="管理的账户"><ComboBox.ItemTemplate><DataTemplate x:DataType="a:MinecraftAccount"><TextBlock Text="{Binding ProfileName}"/></DataTemplate></ComboBox.ItemTemplate></ComboBox>
+      <Grid ColumnDefinitions="*,*" ColumnSpacing="8"><Button Content="退出登录" Command="{Binding LogoutCommand}"/><Button Grid.Column="1" Content="移除账户" Command="{Binding RemoveCommand}"/></Grid>
+     </StackPanel></Expander>
+     <TextBlock Text="其他方式" IsVisible="{Binding HasAccounts}" Classes="secondary" FontSize="12" Margin="0,6,0,0"/>
+     <Button Content="Microsoft · 尚未配置" IsEnabled="False" HorizontalAlignment="Stretch" AutomationProperties.Name="Microsoft 尚未配置"/>
+     <Grid ColumnDefinitions="*,*" ColumnSpacing="10"><Button Content="第三方登录" Command="{Binding ThirdPartyCommand}" HorizontalAlignment="Stretch"/><Button Grid.Column="1" Content="离线模式" Command="{Binding OfflineCommand}" HorizontalAlignment="Stretch"/></Grid>
+    </StackPanel>
+    <StackPanel IsVisible="{Binding IsOffline}" IsEnabled="{Binding CanEdit}" Spacing="12">
+     <TextBlock Text="游戏名称"/><TextBox Name="OfflineNameInput" Text="{Binding OfflineName}" MaxLength="16" PlaceholderText="3–16 位字母、数字或下划线" AutomationProperties.Name="游戏名称"/>
+     <Button Content="继续" Command="{Binding OfflineLoginCommand}" HorizontalAlignment="Stretch"/>
+    </StackPanel>
+    <StackPanel IsVisible="{Binding IsThirdParty}" IsEnabled="{Binding CanEdit}" Spacing="10">
+     <TextBlock Text="认证服务器"/>
+     <ComboBox ItemsSource="{Binding Authorities}" SelectedItem="{Binding Authority}" PlaceholderText="选择认证服务器" HorizontalAlignment="Stretch" AutomationProperties.Name="认证服务器"><ComboBox.ItemTemplate><DataTemplate x:DataType="a:AuthenticationAuthority"><TextBlock Text="{Binding DisplayName}"/></DataTemplate></ComboBox.ItemTemplate></ComboBox>
+     <Expander Header="添加认证服务器"><StackPanel Spacing="8"><TextBox Name="AuthorityInput" Text="{Binding AuthorityUrl}" PlaceholderText="https://" MaxLength="2048" AutomationProperties.Name="认证服务器地址"/><Button Content="验证并添加" Command="{Binding AddAuthorityCommand}"/></StackPanel></Expander>
+     <TextBlock Text="账号"/><TextBox Name="IdentifierInput" Text="{Binding Identifier}" MaxLength="256" AutomationProperties.Name="账号"/>
+     <TextBlock Text="密码"/><TextBox Text="{Binding Password}" PasswordChar="●" MaxLength="4096" AutomationProperties.Name="密码"/>
+     <Button Content="登录" Command="{Binding OnlineLoginCommand}" HorizontalAlignment="Stretch"/>
+    </StackPanel>
+    <TextBlock Text="正在处理…" IsVisible="{Binding Busy}" AutomationProperties.LiveSetting="Polite"/>
+    <TextBlock Text="{Binding Message}" IsVisible="{Binding HasMessage}" Foreground="#F599A4" TextWrapping="Wrap" AutomationProperties.LiveSetting="Assertive"/>
+    <Button Content="返回" Command="{Binding BackCommand}" IsVisible="{Binding !IsChoice}"/>
+    <Button Content="返回主页" Command="{Binding ReturnCommand}" IsEnabled="{Binding CanEdit}" IsVisible="{Binding CanReturn}"/>
+   </StackPanel>
+  </ScrollViewer>
+ </Grid>
+</UserControl>

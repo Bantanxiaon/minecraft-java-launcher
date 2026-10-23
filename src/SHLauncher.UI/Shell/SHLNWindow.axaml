@@ -1,0 +1,22 @@
+<Window xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:shell="using:SHLauncher.UI.Shell" xmlns:ursa="using:Ursa.Controls" xmlns:automation="using:Avalonia.Automation" x:Class="SHLauncher.UI.Shell.SHLNWindow" Width="1100" Height="680" MinWidth="800" MinHeight="560" Title="SHLN" Foreground="{DynamicResource SHLN.TextPrimary}" Background="Transparent" ExtendClientAreaToDecorationsHint="True" ExtendClientAreaTitleBarHeightHint="48" WindowDecorations="Full" RequestedThemeVariant="Dark" WindowStartupLocation="CenterScreen">
+ <Window.Resources><ResourceDictionary><ResourceDictionary.MergedDictionaries><ResourceInclude Source="/Shell/ShellTokens.axaml"/><ResourceInclude Source="/Shell/WindowDecorations.axaml"/><ResourceInclude Source="/Shell/FrameworkTokens.axaml"/><ResourceInclude Source="/Shell/ToastTheme.axaml"/></ResourceDictionary.MergedDictionaries></ResourceDictionary></Window.Resources>
+ <Window.WindowDecorationsTheme><StaticResource ResourceKey="SHLNWindowDecorations"/></Window.WindowDecorationsTheme>
+ <Window.Styles>
+  <Style Selector="Button#PART_CloseButton"><Setter Property="(automation:AutomationProperties.Name)" Value="关闭"/></Style>
+
+  <Style Selector="TextBlock.secondary"><Setter Property="Foreground" Value="{DynamicResource SHLN.TextSecondary}"/></Style>
+  <Style Selector="Button"><Setter Property="CornerRadius" Value="{DynamicResource SHLN.ControlRadius}"/></Style>
+ </Window.Styles>
+ <Border Name="WindowSurface" CornerRadius="{StaticResource SHLN.WindowRadius}" ClipToBounds="True" Background="{StaticResource SHLN.Background}">
+  <Grid>
+   <shell:SceneHost Name="SceneLayer"/>
+   <Border Name="WorkspaceBackdrop" Background="#0C121C" IsVisible="False"/>
+   <Grid Name="ContentLayer" RowDefinitions="48,*,Auto">
+    <Border Name="ChromeLayer" Background="Transparent" WindowDecorationProperties.ElementRole="TitleBar"><Grid><TextBlock Text="SHLN" Margin="28,0" FontSize="{DynamicResource SHLN.Subtitle}" FontWeight="SemiBold" VerticalAlignment="Center" IsHitTestVisible="False"/><ContentControl Name="AccountCenterHost" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,148,0" WindowDecorationProperties.ElementRole="DecorationsElement"/></Grid></Border>
+    <TransitioningContentControl Name="PageHost" Grid.Row="1" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"/>
+    <Border Name="NavigationLayer" Grid.Row="2" Padding="{StaticResource SHLN.WindowInset}" Background="#26080E18"><StackPanel Name="PrototypeNavigation" Orientation="Horizontal" Spacing="{StaticResource SHLN.S}"/></Border>
+   </Grid>
+   <ursa:OverlayDialogHost Name="OverlayHost" HostId="SHLN" IsModalStatusReporter="True" OverlayMaskBrush="{StaticResource SHLN.OverlayDim}"/>
+  </Grid>
+ </Border>
+</Window>

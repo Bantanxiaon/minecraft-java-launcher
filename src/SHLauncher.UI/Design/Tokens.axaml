@@ -1,0 +1,126 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:sys="using:System">
+  <ResourceDictionary.ThemeDictionaries>
+    <ResourceDictionary x:Key="Light">
+      <SolidColorBrush x:Key="Background.Primary" Color="#F5F4F0"/>
+      <SolidColorBrush x:Key="Background.Secondary" Color="#EEEDE8"/>
+      <SolidColorBrush x:Key="Surface.Primary" Color="#FDFCFA"/>
+      <SolidColorBrush x:Key="Surface.Secondary" Color="#EFEEE9"/>
+      <SolidColorBrush x:Key="Surface.Elevated" Color="#FFFFFF"/>
+      <SolidColorBrush x:Key="Surface.Glass" Color="#DBFAFAF7"/>
+      <SolidColorBrush x:Key="Surface.Selected" Color="#EBF2FC"/>
+      <SolidColorBrush x:Key="Surface.Hover" Color="#E5EDF8"/>
+      <SolidColorBrush x:Key="Navigation.Selected" Color="#EFF5FE"/>
+      <SolidColorBrush x:Key="Border.Subtle" Color="#E3E4DE"/>
+      <SolidColorBrush x:Key="Text.Primary" Color="#262F2D"/>
+      <SolidColorBrush x:Key="Text.Secondary" Color="#626D67"/>
+      <SolidColorBrush x:Key="Text.Tertiary" Color="#626D67"/>
+      <SolidColorBrush x:Key="Accent.Primary" Color="#2771CF"/>
+      <SolidColorBrush x:Key="State.Success" Color="#3F674F"/>
+      <SolidColorBrush x:Key="State.Error" Color="#A63D3B"/>
+      <SolidColorBrush x:Key="State.ErrorSurface" Color="#F8E9E5"/>
+      <SolidColorBrush x:Key="State.Warning" Color="#89632A"/>
+      <SolidColorBrush x:Key="State.Disabled" Color="#858D87"/>
+      <SolidColorBrush x:Key="Action.Foreground" Color="#FFFFFF"/>
+      <SolidColorBrush x:Key="Action.Disabled" Color="#E1E4DE"/>
+    </ResourceDictionary>
+    <ResourceDictionary x:Key="Dark">
+      <SolidColorBrush x:Key="Background.Primary" Color="#15181F"/>
+      <SolidColorBrush x:Key="Background.Secondary" Color="#1A1E27"/>
+      <SolidColorBrush x:Key="Surface.Primary" Color="#202530"/>
+      <SolidColorBrush x:Key="Surface.Secondary" Color="#1C212B"/>
+      <SolidColorBrush x:Key="Surface.Elevated" Color="#293140"/>
+      <SolidColorBrush x:Key="Surface.Glass" Color="#DA293140"/>
+      <SolidColorBrush x:Key="Surface.Selected" Color="#283B53"/>
+      <SolidColorBrush x:Key="Surface.Hover" Color="#293140"/>
+      <SolidColorBrush x:Key="Navigation.Selected" Color="#2A405E"/>
+      <SolidColorBrush x:Key="Border.Subtle" Color="#343E4E"/>
+      <SolidColorBrush x:Key="Text.Primary" Color="#EEF2FA"/>
+      <SolidColorBrush x:Key="Text.Secondary" Color="#ADB8CA"/>
+      <SolidColorBrush x:Key="Text.Tertiary" Color="#9BA8BD"/>
+      <SolidColorBrush x:Key="Accent.Primary" Color="#438DEB"/>
+      <SolidColorBrush x:Key="State.Success" Color="#B1CCA7"/>
+      <SolidColorBrush x:Key="State.Error" Color="#F3B9AB"/>
+      <SolidColorBrush x:Key="State.ErrorSurface" Color="#482F2C"/>
+      <SolidColorBrush x:Key="State.Warning" Color="#D8C18E"/>
+      <SolidColorBrush x:Key="State.Disabled" Color="#7E8A80"/>
+      <SolidColorBrush x:Key="Action.Foreground" Color="#FFFFFF"/>
+      <SolidColorBrush x:Key="Action.Disabled" Color="#313C4C"/>
+    </ResourceDictionary>
+  </ResourceDictionary.ThemeDictionaries>
+  <x:Double x:Key="Space4">4</x:Double>
+  <x:Double x:Key="Space8">8</x:Double>
+  <x:Double x:Key="Space12">12</x:Double>
+  <x:Double x:Key="Space16">16</x:Double>
+  <x:Double x:Key="Space20">20</x:Double>
+  <x:Double x:Key="Space24">24</x:Double>
+  <x:Double x:Key="Space32">32</x:Double>
+  <x:Double x:Key="Space40">40</x:Double>
+  <x:Double x:Key="FontCaption">12</x:Double>
+  <x:Double x:Key="FontBody">14</x:Double>
+  <x:Double x:Key="FontSection">20</x:Double>
+  <x:Double x:Key="FontPage">28</x:Double>
+  <x:Double x:Key="FontGreeting">24</x:Double>
+  <x:Double x:Key="FontHero">42</x:Double>
+  <x:Double x:Key="FontCard">17</x:Double>
+  <x:Double x:Key="FontMonogram">22</x:Double>
+  <x:Double x:Key="SidebarWidth">184</x:Double>
+  <x:Double x:Key="CaptionHeight">38</x:Double>
+  <x:Double x:Key="CaptionButtonWidth">46</x:Double>
+  <x:Double x:Key="HeroHeight">370</x:Double>
+  <x:Double x:Key="HeroTextWidth">540</x:Double>
+  <x:Double x:Key="InstanceCardWidth">272</x:Double>
+  <x:Double x:Key="CoverHeight">126</x:Double>
+  <x:Double x:Key="PageMaxWidth">1480</x:Double>
+  <x:Double x:Key="SettingsMaxWidth">960</x:Double>
+  <x:Double x:Key="IconSize">18</x:Double>
+  <x:Double x:Key="AvatarSize">30</x:Double>
+  <x:Double x:Key="LogoSize">36</x:Double>
+  <x:Double x:Key="IndicatorSize">24</x:Double>
+  <x:Double x:Key="ProgressHeight">4</x:Double>
+  <x:Double x:Key="PrimaryMinWidth">156</x:Double>
+  <x:Double x:Key="OpacityDisabled">0.48</x:Double>
+  <x:Double x:Key="OpacityQuiet">0.72</x:Double>
+  <x:Double x:Key="OpacityHover">0.94</x:Double>
+  <Thickness x:Key="Inset12">12</Thickness>
+  <Thickness x:Key="Inset24">24</Thickness>
+  <Thickness x:Key="PagePadding">40,24,40,40</Thickness>
+  <Thickness x:Key="HeroPadding">32</Thickness>
+  <Thickness x:Key="SidebarPadding">16,18,16,18</Thickness>
+  <Thickness x:Key="CardPadding">18,16,18,18</Thickness>
+  <Thickness x:Key="ButtonPadding">20,12</Thickness>
+  <Thickness x:Key="NavPadding">14,11</Thickness>
+  <Thickness x:Key="RowPadding">20,16</Thickness>
+  <Thickness x:Key="CardGap">0,0,16,16</Thickness>
+  <Thickness x:Key="SectionGap">0,12,0,0</Thickness>
+  <Thickness x:Key="MetadataGap">0,0,16,6</Thickness>
+  <Thickness x:Key="AccountGap">10,0,0,0</Thickness>
+  <Thickness x:Key="CaptionPadding">20,0</Thickness>
+  <Thickness x:Key="FocusThickness">2</Thickness>
+  <Thickness x:Key="Hairline">0,0,0,1</Thickness>
+  <Thickness x:Key="Zero">0</Thickness>
+  <CornerRadius x:Key="RadiusSmall">7</CornerRadius>
+  <CornerRadius x:Key="RadiusCard">12</CornerRadius>
+  <CornerRadius x:Key="RadiusHero">28</CornerRadius>
+  <CornerRadius x:Key="RadiusPill">40</CornerRadius>
+  <sys:TimeSpan x:Key="MotionFast">0:0:0.12</sys:TimeSpan>
+  <sys:TimeSpan x:Key="MotionPage">0:0:0.22</sys:TimeSpan>
+  <sys:TimeSpan x:Key="MotionSlow">0:0:0.3</sys:TimeSpan>
+  <sys:TimeSpan x:Key="MotionStartupDefault">0:0:0.24</sys:TimeSpan>
+  <sys:TimeSpan x:Key="MotionFastDefault">0:0:0.12</sys:TimeSpan>
+  <sys:TimeSpan x:Key="MotionPageDefault">0:0:0.22</sys:TimeSpan>
+  <sys:TimeSpan x:Key="MotionSlowDefault">0:0:0.3</sys:TimeSpan>
+  <CubicEaseOut x:Key="MotionEase"/>
+  <BoxShadows x:Key="ElevationSoft">0 3 12 0 #090F2217</BoxShadows>
+  <BoxShadows x:Key="ElevationHover">0 5 16 0 #0D0F2217</BoxShadows>
+  <SolidColorBrush x:Key="HeroForegroundBrush" Color="#F7F4E9"/>
+  <SolidColorBrush x:Key="HeroSecondaryBrush" Color="#DEE5D6"/>
+  <SolidColorBrush x:Key="HeroGlassBrush" Color="#26374539"/>
+  <SolidColorBrush x:Key="InkBrush" Color="#17304E"/>
+  <SolidColorBrush x:Key="HeroStrokeBrush" Color="#3DF7F4E9"/>
+  <StreamGeometry x:Key="HomeIcon">M 3,10 L 12,3 21,10 M 6,9 L 6,21 10,21 10,15 14,15 14,21 18,21 18,9</StreamGeometry>
+  <StreamGeometry x:Key="LibraryIcon">M 4,4 L 9,4 9,20 4,20 Z M 13,4 L 18,3 21,19 16,20 Z</StreamGeometry>
+  <StreamGeometry x:Key="SettingsIcon">M 4,6 L 20,6 M 4,12 L 20,12 M 4,18 L 20,18 M 8,3 L 8,9 M 16,9 L 16,15 M 10,15 L 10,21</StreamGeometry>
+  <!-- Lucide paths: see licenses/Lucide-LICENSE.txt and assets/icons/lucide. -->
+  <StreamGeometry x:Key="DownloadIcon">M12 15V3 M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M7 10l5 5 5-5</StreamGeometry>
+  <StreamGeometry x:Key="ImportIcon">M2 9V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-1 M2 13h10 M9 16l3-3-3-3</StreamGeometry>
+</ResourceDictionary>

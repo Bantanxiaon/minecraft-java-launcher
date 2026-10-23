@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../SHLauncher.Contracts/SHLauncher.Contracts.csproj" />
+    <PackageReference Include="CmlLib.Core" />
+    <PackageReference Include="CmlLib.Core.Installer.Forge" />
+  </ItemGroup>
+</Project>

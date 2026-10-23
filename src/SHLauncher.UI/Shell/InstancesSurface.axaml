@@ -1,0 +1,9 @@
+<UserControl xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:vm="using:SHLauncher.UI.ViewModels" x:Class="SHLauncher.UI.Shell.InstancesSurface" x:DataType="vm:LibraryViewModel">
+ <Grid Margin="36,28,36,24" RowDefinitions="Auto,Auto,*" RowSpacing="14">
+  <Grid ColumnDefinitions="*,Auto"><TextBlock Text="实例" FontSize="32" FontWeight="SemiBold"/><TextBlock Grid.Column="1" Text="{Binding CountLabel}" Classes="secondary" VerticalAlignment="Center"/></Grid>
+  <Grid Grid.Row="1" ColumnDefinitions="*,Auto"><TextBlock Text="{Binding SelectionHint}" Classes="secondary"/><Button Grid.Column="1" Content="管理当前实例 Mod" Command="{Binding ModsCommand}"/></Grid>
+  <ScrollViewer Grid.Row="2"><StackPanel Spacing="12"><TextBlock Text="尚无实例" IsVisible="{Binding IsEmpty}"/><Button Content="安装实例" Command="{Binding CreateCommand}" IsVisible="{Binding IsEmpty}"/><ItemsControl ItemsSource="{Binding Cards}"><ItemsControl.ItemTemplate><DataTemplate x:DataType="vm:InstanceCardViewModel">
+   <Button Classes="instance" Classes.selected="{Binding IsSelected}" Command="{Binding SelectCommand}" Margin="0,0,0,10" AutomationProperties.Name="{Binding Name}"><Grid ColumnDefinitions="*,Auto" ColumnSpacing="16"><StackPanel Spacing="6"><TextBlock Text="{Binding Name}" FontSize="19"/><TextBlock Text="{Binding Version}" Classes="secondary" FontSize="13"/></StackPanel><TextBlock Grid.Column="1" Text="{Binding SelectionLabel}" VerticalAlignment="Center" Classes="secondary"/></Grid></Button>
+  </DataTemplate></ItemsControl.ItemTemplate></ItemsControl></StackPanel></ScrollViewer>
+ </Grid>
+</UserControl>

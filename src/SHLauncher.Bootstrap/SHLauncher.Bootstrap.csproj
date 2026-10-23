@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk"><ItemGroup>
+  <ProjectReference Include="../SHLauncher.Platform/SHLauncher.Platform.csproj" />
+  <ProjectReference Include="../SHLauncher.Application/SHLauncher.Application.csproj" />
+  <ProjectReference Include="../SHLauncher.Infrastructure/SHLauncher.Infrastructure.csproj" />
+  <ProjectReference Include="../SHLauncher.Engine.CmlLib/SHLauncher.Engine.CmlLib.csproj" />
+  <ProjectReference Include="../SHLauncher.Downloads/SHLauncher.Downloads.csproj" />
+</ItemGroup></Project>

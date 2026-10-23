@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../SHLauncher.Contracts/SHLauncher.Contracts.csproj" />
+    <PackageReference Include="SharpZipLib" />
+    <PackageReference Include="Tomlyn" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,23 @@
+<UserControl xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:vm="using:SHLauncher.UI.ViewModels" x:Class="SHLauncher.UI.Components.ImportPreview" x:DataType="vm:ModpackImportViewModel" KeyboardNavigation.TabNavigation="Cycle">
+<UserControl.Styles><StyleInclude Source="/Design/Controls.axaml"/></UserControl.Styles>
+ <UserControl.KeyBindings><KeyBinding Gesture="Escape" Command="{Binding CancelCommand}"/></UserControl.KeyBindings>
+ <Border Background="{DynamicResource Background.Primary}" CornerRadius="{DynamicResource RadiusHero}" Padding="32" MaxWidth="640" HorizontalAlignment="Stretch" VerticalAlignment="Center" AutomationProperties.Name="整合包安装预览">
+  <StackPanel Spacing="20">
+   <StackPanel Spacing="8"><TextBlock Text="导入整合包" Classes="page-title"/><TextBlock Text="先确认信息，再建立独立实例。" Classes="secondary"/></StackPanel>
+   <ProgressBar Classes="transfer" IsIndeterminate="True" IsVisible="{Binding IsBusy}" AutomationProperties.Name="整合包检查进度"/>
+   <Border Background="{DynamicResource Surface.Secondary}" CornerRadius="{DynamicResource RadiusSmall}" Padding="16" IsVisible="{Binding HasPreview}">
+    <TextBlock Text="{Binding Summary}" TextWrapping="Wrap"/>
+   </Border>
+   <StackPanel Spacing="8" IsVisible="{Binding HasPreview}">
+    <TextBlock Text="实例名称" FontWeight="SemiBold"/>
+    <TextBox Text="{Binding DisplayName}" PlaceholderText="给这个整合包起个名字" MaxLength="64" AutomationProperties.Name="整合包实例名称"/>
+    <TextBlock Text="{Binding Placement}" Classes="caption" TextWrapping="Wrap"/>
+   </StackPanel>
+   <TextBlock Text="{Binding Message}" Classes="caption" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"/>
+   <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Right">
+    <Button Name="CancelButton" Classes="shell secondary" Content="取消" Command="{Binding CancelCommand}" AutomationProperties.Name="取消导入"/>
+    <Button Classes="shell primary" Content="确认安装" Command="{Binding ConfirmCommand}" AutomationProperties.Name="确认安装整合包"/>
+   </StackPanel>
+  </StackPanel>
+ </Border>
+</UserControl>

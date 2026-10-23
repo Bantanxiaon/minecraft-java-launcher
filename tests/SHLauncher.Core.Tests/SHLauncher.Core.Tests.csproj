@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/SHLauncher.Core/SHLauncher.Core.csproj" />
+    <ProjectReference Include="../../src/SHLauncher.Contracts/SHLauncher.Contracts.csproj" />
+    <Compile Include="../ArchitectureChecks.cs" Link="ArchitectureChecks.cs" />
+  </ItemGroup>
+</Project>

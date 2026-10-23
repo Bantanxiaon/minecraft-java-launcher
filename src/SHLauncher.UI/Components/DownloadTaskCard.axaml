@@ -1,0 +1,37 @@
+<UserControl xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:vm="using:SHLauncher.UI.ViewModels" x:Class="SHLauncher.UI.Components.DownloadTaskCard" x:DataType="vm:DownloadCardViewModel">
+ <Border Classes="panel" Margin="0,0,0,16">
+  <StackPanel Spacing="16">
+   <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+    <TextBlock Text="{Binding DisplayName}" FontSize="18" FontWeight="SemiBold" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"/>
+    <Border Grid.Column="1" Classes.error="{Binding IsFailed}" Background="{DynamicResource Surface.Secondary}" CornerRadius="{DynamicResource RadiusSmall}" Padding="12,6" VerticalAlignment="Top">
+     <TextBlock Text="{Binding StateLabel}" Classes="caption" Classes.error="{Binding IsFailed}" Classes.success="{Binding IsCompleted}"/>
+    </Border>
+   </Grid>
+   <StackPanel Spacing="8">
+    <TextBlock Text="{Binding EnvironmentLabel}" Classes="caption"/>
+    <TextBlock Text="{Binding Stage}" Classes="secondary" TextWrapping="Wrap"/>
+    <TextBlock Text="{Binding Counts}" Classes="caption" TextWrapping="Wrap"/>
+    <ProgressBar Classes="transfer" Value="{Binding Progress}" IsIndeterminate="{Binding IsIndeterminate}" IsVisible="{Binding IsActive}" Minimum="0" Maximum="100" AutomationProperties.Name="当前安装阶段进度"/>
+    
+    <TextBlock Text="{Binding Transfer}" Classes="caption" TextWrapping="Wrap"/>
+    <TextBlock Text="{Binding SourceSummary}" Classes="caption"/>
+   </StackPanel>
+   <Border IsVisible="{Binding HasProblem}" Classes.error="{Binding IsFailed}" CornerRadius="{DynamicResource RadiusSmall}" Padding="12">
+    <TextBlock Text="{Binding Problem}" Classes="secondary" Classes.error="{Binding IsFailed}" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"/>
+   </Border>
+   <StackPanel Orientation="Horizontal" Spacing="12">
+    <Button Classes="shell secondary" Content="取消" Command="{Binding CancelCommand}" IsVisible="{Binding IsActive}" AutomationProperties.Name="取消下载任务"/>
+    <Button Classes="shell primary" Content="重试" Command="{Binding RetryCommand}" IsVisible="{Binding CanRetry}" AutomationProperties.Name="重试下载任务"/>
+    <Button Classes="shell primary" Content="打开实例" Command="{Binding OpenCommand}" IsVisible="{Binding CanOpen}" AutomationProperties.Name="打开已安装实例"/>
+   </StackPanel>
+   <Expander Classes="quiet" Header="技术详情" AutomationProperties.Name="下载任务技术详情">
+    <Border Background="{DynamicResource Surface.Secondary}" CornerRadius="{DynamicResource RadiusSmall}" Padding="16">
+     <StackPanel Spacing="12"><TextBlock Text="进度按当前安装阶段显示；最终结果包含全部已验证文件。来源、校验和重试信息如下。" Classes="caption" TextWrapping="Wrap"/>
+     <ScrollViewer MaxHeight="260" HorizontalScrollBarVisibility="Disabled">
+      <SelectableTextBlock Text="{Binding Details}" Classes="caption" FontFamily="Cascadia Mono, Consolas, monospace" TextWrapping="Wrap"/>
+     </ScrollViewer></StackPanel>
+    </Border>
+   </Expander>
+  </StackPanel>
+ </Border>
+</UserControl>

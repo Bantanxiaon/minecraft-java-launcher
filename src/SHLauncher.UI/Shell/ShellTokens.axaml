@@ -1,0 +1,13 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:sys="using:System">
+ <Color x:Key="SHLN.AccentColor">#438DEB</Color><Color x:Key="SHLN.GlassTint">#C0111520</Color>
+ <SolidColorBrush x:Key="SHLN.Accent" Color="{StaticResource SHLN.AccentColor}"/><SolidColorBrush x:Key="SHLN.AccentHover" Color="#69A5F0"/>
+ <SolidColorBrush x:Key="SHLN.Background" Color="#10141C"/><SolidColorBrush x:Key="SHLN.Surface" Color="#191F2A"/><SolidColorBrush x:Key="SHLN.SurfaceElevated" Color="#232C3B"/>
+ <SolidColorBrush x:Key="SHLN.BorderSubtle" Color="#293546"/><SolidColorBrush x:Key="SHLN.OverlayDim" Color="#9C080D16"/>
+ <SolidColorBrush x:Key="SHLN.TextPrimary" Color="#EDF3FC"/><SolidColorBrush x:Key="SHLN.TextSecondary" Color="#A7B7CD"/><SolidColorBrush x:Key="SHLN.Success" Color="#79C69B"/><SolidColorBrush x:Key="SHLN.Warning" Color="#E3BE79"/><SolidColorBrush x:Key="SHLN.Error" Color="#F599A4"/>
+ <CornerRadius x:Key="SHLN.WindowRadius">12</CornerRadius><CornerRadius x:Key="SHLN.PanelRadius">8</CornerRadius><CornerRadius x:Key="SHLN.DialogRadius">12</CornerRadius><CornerRadius x:Key="SHLN.ControlRadius">6</CornerRadius>
+ <x:Double x:Key="SHLN.XS">4</x:Double><x:Double x:Key="SHLN.S">8</x:Double><x:Double x:Key="SHLN.M">12</x:Double><x:Double x:Key="SHLN.L">20</x:Double><x:Double x:Key="SHLN.XL">28</x:Double><x:Double x:Key="SHLN.XXL">40</x:Double>
+ <Thickness x:Key="SHLN.WindowInset">28,16</Thickness><Thickness x:Key="SHLN.ContentInset">32</Thickness><Thickness x:Key="SHLN.DialogInset">24</Thickness>
+ <x:Double x:Key="SHLN.Display">72</x:Double><x:Double x:Key="SHLN.TitleLarge">32</x:Double><x:Double x:Key="SHLN.Title">24</x:Double><x:Double x:Key="SHLN.Subtitle">18</x:Double><x:Double x:Key="SHLN.Body">14</x:Double><x:Double x:Key="SHLN.Caption">12</x:Double>
+ <x:Double x:Key="SHLN.CaptionHeight">48</x:Double><x:Double x:Key="SHLN.CaptionButtonWidth">46</x:Double><x:Double x:Key="SHLN.CaptionButtonHeight">40</x:Double><x:Double x:Key="SHLN.GlassBlur">5</x:Double>
+ <sys:TimeSpan x:Key="SHLN.MotionInstant">0:0:0</sys:TimeSpan><sys:TimeSpan x:Key="SHLN.MotionFast">0:0:0.12</sys:TimeSpan><sys:TimeSpan x:Key="SHLN.MotionStandard">0:0:0.2</sys:TimeSpan><sys:TimeSpan x:Key="SHLN.MotionEmphasized">0:0:0.28</sys:TimeSpan><sys:TimeSpan x:Key="SHLN.MotionScenic">0:0:0.6</sys:TimeSpan>
+</ResourceDictionary>

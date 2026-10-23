@@ -1,0 +1,12 @@
+<Styles xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+ <Style Selector="Button.nav"><Setter Property="Background" Value="Transparent"/><Setter Property="BorderThickness" Value="0"/><Setter Property="Padding" Value="18,9"/><Setter Property="FontSize" Value="16"/></Style>
+ <Style Selector="Button.nav.selected"><Setter Property="Background" Value="#254D6688"/><Setter Property="Foreground" Value="#EDF3FC"/></Style>
+ <Style Selector="Button.account"><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Padding" Value="14,12"/><Setter Property="Background" Value="#20293645"/><Setter Property="BorderBrush" Value="#354D607A"/></Style>
+ <Style Selector="Button.launch"><Setter Property="Background" Value="#377FBD"/><Setter Property="Foreground" Value="White"/><Setter Property="FontSize" Value="18"/><Setter Property="FontWeight" Value="SemiBold"/><Setter Property="CornerRadius" Value="24"/><Setter Property="RenderTransform" Value="scale(1)"/><Setter Property="RenderTransformOrigin" Value="50%,50%"/><Setter Property="Transitions"><Transitions><TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.12"/></Transitions></Setter></Style>
+ <Style Selector="Button.launch:pointerover"><Setter Property="RenderTransform" Value="scale(1.015)"/></Style>
+ <Style Selector="Button.launch:pressed"><Setter Property="RenderTransform" Value="scale(0.985)"/></Style>
+ <Style Selector="Window.reduced Button.launch"><Setter Property="RenderTransform" Value="scale(1)"/><Setter Property="Transitions"><Transitions/></Setter></Style>
+ <Style Selector="Button.instance"><Setter Property="HorizontalAlignment" Value="Stretch"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="Padding" Value="20,16"/><Setter Property="Background" Value="#B0191F2A"/><Setter Property="BorderBrush" Value="#30485C76"/></Style>
+ <Style Selector="Button.instance.selected"><Setter Property="BorderBrush" Value="#ABC8E8"/></Style>
+ <Style Selector="Window.reduced TransitioningContentControl.launch-label"><Setter Property="PageTransition" Value="{x:Null}"/></Style>
+</Styles>

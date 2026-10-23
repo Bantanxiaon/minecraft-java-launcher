@@ -1,0 +1,12 @@
+<UserControl xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:vm="using:SHLauncher.UI.ViewModels" xmlns:content="clr-namespace:SHLauncher.Contracts.Content;assembly=SHLauncher.Contracts" x:Class="SHLauncher.UI.Shell.OnlineModsSurface" x:DataType="vm:OnlineModsViewModel">
+ <Grid Width="680" Height="350" RowDefinitions="Auto,Auto,*,Auto,Auto" RowSpacing="10">
+  <Grid ColumnDefinitions="*,Auto"><TextBlock Text="{Binding Context}" Opacity="0.7"/><Button Grid.Column="1" Content="恢复中断的更新" Command="{Binding RecoverCommand}" ToolTip.Tip="离线检查并恢复未完成的文件替换"/></Grid>
+  <Grid Grid.Row="1" ColumnDefinitions="140,*,Auto,Auto" ColumnSpacing="8"><ComboBox IsEnabled="{Binding !Busy}" ItemsSource="{Binding Providers}" SelectedIndex="{Binding Provider}"/><TextBox IsEnabled="{Binding !Busy}" Grid.Column="1" Text="{Binding Query}" PlaceholderText="搜索 Mod"/><Button Grid.Column="2" Content="搜索" Command="{Binding SearchCommand}"/><Button Grid.Column="3" Content="取消" Command="{Binding CancelCommand}"/></Grid>
+  <Grid Grid.Row="2" ColumnDefinitions="*,*" ColumnSpacing="14">
+   <Grid RowDefinitions="*,Auto" RowSpacing="8"><ListBox IsEnabled="{Binding !Busy}" ItemsSource="{Binding Projects}" SelectedItem="{Binding Project}"><ListBox.ItemTemplate><DataTemplate x:DataType="content:ContentSearchResult"><TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis"/></DataTemplate></ListBox.ItemTemplate></ListBox><Button Grid.Row="1" Content="查看匹配版本" Command="{Binding VersionsCommand}"/></Grid>
+   <Grid Grid.Column="1" RowDefinitions="*,Auto" RowSpacing="8"><ListBox IsEnabled="{Binding !Busy}" ItemsSource="{Binding Versions}" SelectedItem="{Binding Version}"><ListBox.ItemTemplate><DataTemplate x:DataType="content:OnlineModFile"><TextBlock Text="{Binding FileName}" TextTrimming="CharacterEllipsis"/></DataTemplate></ListBox.ItemTemplate></ListBox><Button Grid.Row="1" Content="检查依赖与安装位置" Command="{Binding PreviewCommand}"/></Grid>
+  </Grid>
+  <ScrollViewer Grid.Row="3" MaxHeight="120"><TextBlock Text="{Binding PlanText}" TextWrapping="Wrap" FontSize="12"/></ScrollViewer>
+  <Grid Grid.Row="4" ColumnDefinitions="*,Auto"><TextBlock Text="{Binding Message}" TextWrapping="Wrap" MaxWidth="560"/><Button Grid.Column="1" Content="安装此计划" Command="{Binding InstallCommand}" IsEnabled="{Binding CanInstall}"/></Grid>
+ </Grid>
+</UserControl>

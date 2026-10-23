@@ -1,0 +1,81 @@
+<UserControl xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:vm="using:SHLauncher.UI.ViewModels" x:Class="SHLauncher.UI.Views.Pages.SettingsView" x:DataType="vm:SettingsViewModel">
+<UserControl.Styles><StyleInclude Source="/Design/Controls.axaml"/></UserControl.Styles>
+<ThemeVariantScope Name="LegacyTheme">
+ <ScrollViewer HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch" AutomationProperties.Name="设置内容">
+  <StackPanel Name="SettingsLayout" Margin="{DynamicResource PagePadding}" Spacing="24" MaxWidth="{DynamicResource PageMaxWidth}">
+   <StackPanel Spacing="8"><TextBlock Text="设置" Classes="page-title"/><TextBlock Text="启动、下载与显示设置" Classes="secondary"/></StackPanel>
+   <StackPanel MaxWidth="{DynamicResource SettingsMaxWidth}" Width="{Binding Bounds.Width, ElementName=SettingsLayout}" HorizontalAlignment="Left" Spacing="24">
+    <StackPanel Spacing="12">
+     <TextBlock Text="外观" Classes="section-title"/>
+     <Border Background="{DynamicResource Surface.Primary}" CornerRadius="{DynamicResource RadiusCard}">
+      <StackPanel>
+       <Border Classes="settings-row separator">
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16"><StackPanel Spacing="4"><TextBlock Text="主题" FontWeight="Medium"/><TextBlock Text="管理页面采用深色工作区" Classes="caption"/></StackPanel>
+         <TextBlock Grid.Column="1" Text="深色" VerticalAlignment="Center"/>
+        </Grid>
+       </Border>
+       <Border Classes="settings-row separator">
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16"><StackPanel Spacing="4"><TextBlock Text="减少动态效果" FontWeight="Medium"/><TextBlock Text="关闭非必要的位移与缩放" Classes="caption"/></StackPanel>
+         <ToggleSwitch Name="MotionToggle" Grid.Column="1" IsChecked="{Binding ReducedMotion}" OnContent="已开启" OffContent="已关闭" AutomationProperties.Name="减少动态效果"/>
+        </Grid>
+       </Border>
+       <Border Classes="settings-row"><Grid ColumnDefinitions="*,Auto"><TextBlock Text="语言"/><TextBlock Grid.Column="1" Text="简体中文" Classes="secondary"/></Grid></Border>
+      </StackPanel>
+     </Border>
+    </StackPanel>
+    <StackPanel Spacing="12">
+     <TextBlock Text="下载" Classes="section-title"/>
+     <Border Background="{DynamicResource Surface.Primary}" CornerRadius="{DynamicResource RadiusCard}">
+      <StackPanel>
+       <Border Classes="settings-row separator">
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+         <StackPanel Spacing="4"><TextBlock Text="下载源" FontWeight="Medium"/><TextBlock Text="{Binding SourceStatus}" Classes="caption" AutomationProperties.LiveSetting="Polite"/></StackPanel>
+         <ComboBox Grid.Column="1" ItemsSource="{Binding SourceModes}" SelectedIndex="{Binding SourceMode}" MinWidth="190" AutomationProperties.Name="下载源"/>
+        </Grid>
+       </Border>
+       <Border Classes="settings-row"><TextBlock Text="推荐自动选择：官方来源优先，遇到失败时尝试已核实的镜像。没有对应镜像的文件继续使用上游来源。" Classes="caption" TextWrapping="Wrap"/></Border>
+      </StackPanel>
+     </Border>
+    </StackPanel>
+    <StackPanel Spacing="12">
+     <TextBlock Text="游戏与 Java" Classes="section-title"/>
+     <Border Classes="panel">
+      <StackPanel Spacing="12">
+       <Grid ColumnDefinitions="*,Auto" ColumnSpacing="16">
+        <StackPanel Spacing="6"><TextBlock Text="Java 运行环境" FontWeight="Medium"/><TextBlock Text="启动前会检查版本与架构" Classes="caption"/></StackPanel>
+        <Button Grid.Column="1" Classes="shell secondary" Content="选择现有 Java" Command="{Binding ChooseJavaCommand}" AutomationProperties.Name="选择现有 Java"/>
+       </Grid>
+       <TextBlock Text="{Binding JavaLabel}" Classes="caption" TextWrapping="Wrap"/>
+       <TextBlock Text="{Binding ConnectionMessage}" Classes="caption" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"/>
+      </StackPanel>
+     </Border>
+    </StackPanel>
+    <ContentControl Name="MemorySettingsHost"/><ContentControl Name="DesktopSettingsHost"/>
+    <Border IsVisible="{Binding CanRename}" Classes="panel">
+     <StackPanel Spacing="12"><TextBlock Text="当前实例名称" FontWeight="SemiBold"/>
+      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12"><TextBox Text="{Binding RenameName}" MaxLength="64" AutomationProperties.Name="当前实例显示名称"/><Button Grid.Column="1" Content="保存名称" Classes="shell secondary" Command="{Binding RenameCommand}"/></Grid>
+      <TextBlock Text="只更新显示名称，不移动游戏文件。" Classes="caption"/></StackPanel>
+    </Border>
+    <Expander Classes="quiet" Header="高级" AutomationProperties.Name="高级设置">
+     <StackPanel Spacing="16" Margin="0,12,0,0">
+      <Border Classes="panel">
+       <StackPanel Spacing="12"><TextBlock Text="连接已有游戏目录" FontWeight="SemiBold"/><TextBlock Text="{Binding RootLabel}" Classes="caption" TextWrapping="Wrap"/>
+        <TextBlock Text="只读扫描已有目录。新安装的实例使用独立存储，互不混用。" Classes="caption" TextWrapping="Wrap"/>
+        <Button Classes="shell secondary" Content="选择游戏根目录" Command="{Binding ChooseRootCommand}" HorizontalAlignment="Left" AutomationProperties.Name="选择游戏根目录"/>
+       </StackPanel>
+      </Border>
+      <Border Classes="panel">
+       <StackPanel Spacing="12"><TextBlock Text="游戏日志" FontWeight="SemiBold"/>
+        <Button Classes="shell secondary" Content="刷新游戏日志" Command="{Binding RefreshLogsCommand}" HorizontalAlignment="Left"/>
+        <ScrollViewer MaxHeight="220"><SelectableTextBlock Text="{Binding RecentGameLogs}" Classes="caption" TextWrapping="Wrap"/></ScrollViewer>
+       </StackPanel>
+      </Border>
+
+     </StackPanel>
+    </Expander>
+    <TextBlock Text="外观在当前会话即时生效；下载源偏好会自动保存。" Classes="caption" TextWrapping="Wrap"/>
+   </StackPanel>
+  </StackPanel>
+ </ScrollViewer>
+</ThemeVariantScope>
+</UserControl>

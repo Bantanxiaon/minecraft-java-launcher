@@ -1,0 +1,21 @@
+<Application xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:shell="using:SHLauncher.UI.Shell" xmlns:vm="using:SHLauncher.UI.ViewModels" xmlns:pages="using:SHLauncher.UI.Views.Pages" x:Class="SHLauncher.UI.App" RequestedThemeVariant="Default">
+  <Application.Resources>
+    <ResourceDictionary>
+      <ResourceDictionary.MergedDictionaries>
+        <ResourceInclude Source="/Design/Tokens.axaml"/>
+      </ResourceDictionary.MergedDictionaries>
+    </ResourceDictionary>
+  </Application.Resources>
+  <Application.Styles>
+    <shell:SHLNPresentationTheme/>
+    <StyleInclude Source="/Shell/PhaseTwoStyles.axaml"/>
+  </Application.Styles>
+  <Application.DataTemplates>
+
+
+    <DataTemplate DataType="{x:Type vm:SettingsViewModel}">
+      <pages:SettingsView/>
+    </DataTemplate>
+    <DataTemplate DataType="{x:Type vm:DownloadsViewModel}"><pages:DownloadsView/></DataTemplate>
+  </Application.DataTemplates>
+</Application>

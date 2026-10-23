@@ -1,0 +1,209 @@
+<Styles xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Style Selector="Window">
+    <Setter Property="FontFamily" Value="Segoe UI, Helvetica Neue, Microsoft YaHei UI, Noto Sans CJK SC, sans-serif"/>
+    <Setter Property="FontSize" Value="{DynamicResource FontBody}"/>
+    <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+    <Setter Property="Background" Value="{DynamicResource Background.Primary}"/>
+  </Style>
+  <Style Selector="TextBlock.secondary">
+    <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
+  </Style>
+  <Style Selector="TextBlock.caption">
+    <Setter Property="FontSize" Value="{DynamicResource FontCaption}"/>
+    <Setter Property="Foreground" Value="{DynamicResource Text.Tertiary}"/>
+  </Style>
+  <Style Selector="TextBlock.page-title">
+    <Setter Property="FontSize" Value="{DynamicResource FontPage}"/>
+    <Setter Property="FontWeight" Value="SemiBold"/>
+  </Style>
+  <Style Selector="TextBlock.section-title">
+    <Setter Property="FontSize" Value="{DynamicResource FontSection}"/>
+    <Setter Property="FontWeight" Value="SemiBold"/>
+  </Style>
+  <Style Selector="Button.shell">
+    <!-- The template provides its own rounded keyboard focus outline. -->
+    <Setter Property="FocusAdorner" Value="{x:Null}"/>
+    <Setter Property="CornerRadius" Value="{DynamicResource RadiusSmall}"/>
+    <Setter Property="Padding" Value="{DynamicResource ButtonPadding}"/>
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+    <Setter Property="BorderThickness" Value="{DynamicResource FocusThickness}"/>
+    <Setter Property="BorderBrush" Value="Transparent"/>
+    <Setter Property="RenderTransformOrigin" Value="50%,50%"/>
+    <Setter Property="RenderTransform" Value="scale(1)"/>
+    <Setter Property="VerticalContentAlignment" Value="Center"/>
+    <Setter Property="Transitions">
+      <Transitions>
+        <TransformOperationsTransition Property="RenderTransform" Duration="{DynamicResource MotionFast}" Easing="{StaticResource MotionEase}"/>
+        <DoubleTransition Property="Opacity" Duration="{DynamicResource MotionFast}"/>
+      </Transitions>
+    </Setter>
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Name="Chrome" Background="{TemplateBinding Background}" CornerRadius="{TemplateBinding CornerRadius}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+          <ContentPresenter Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}" Padding="{TemplateBinding Padding}" HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"/>
+        </Border>
+      </ControlTemplate>
+    </Setter>
+  </Style>
+  <Style Selector="Button.shell:pointerover">
+    <Setter Property="Background" Value="{DynamicResource Surface.Hover}"/>
+  </Style>
+  <Style Selector="Button.shell:pressed">
+    <Setter Property="RenderTransform" Value="scale(0.985)"/>
+  </Style>
+  <Style Selector="Button.shell:disabled">
+    <Setter Property="Opacity" Value="{DynamicResource OpacityDisabled}"/>
+  </Style>
+  <Style Selector="Button.primary">
+    <Setter Property="Background" Value="{DynamicResource Accent.Primary}"/>
+    <Setter Property="Foreground" Value="{DynamicResource Action.Foreground}"/>
+    <Setter Property="FontWeight" Value="SemiBold"/>
+    <Setter Property="MinWidth" Value="{DynamicResource PrimaryMinWidth}"/>
+    <Setter Property="CornerRadius" Value="{DynamicResource RadiusPill}"/>
+  </Style>
+  <Style Selector="Button.primary:pointerover">
+    <Setter Property="Opacity" Value="{DynamicResource OpacityHover}"/>
+    <Setter Property="Background" Value="{DynamicResource Accent.Primary}"/>
+  </Style>
+  <Style Selector="Button.secondary">
+    <Setter Property="Background" Value="{DynamicResource Surface.Elevated}"/>
+  </Style>
+  <Style Selector="Button.nav">
+    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+    <Setter Property="Padding" Value="{DynamicResource NavPadding}"/>
+    <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
+  </Style>
+  <Style Selector="Button.nav.active">
+    <Setter Property="Background" Value="{DynamicResource Navigation.Selected}"/>
+    <Setter Property="Foreground" Value="{DynamicResource Text.Primary}"/>
+    <Setter Property="FontWeight" Value="SemiBold"/>
+  </Style>
+  <Style Selector="Button.instance">
+    <Setter Property="Background" Value="{DynamicResource Surface.Primary}"/>
+    <Setter Property="CornerRadius" Value="{DynamicResource RadiusCard}"/>
+    <Setter Property="Padding" Value="{DynamicResource Zero}"/>
+    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+  </Style>
+  <Style Selector="Button.instance /template/ Border#Chrome"><Setter Property="BoxShadow" Value="{DynamicResource ElevationSoft}"/></Style>
+  <Style Selector="Button.instance:pointerover /template/ Border#Chrome"><Setter Property="BoxShadow" Value="{DynamicResource ElevationHover}"/></Style>
+  <Style Selector="Button.instance:pointerover">
+    <Setter Property="Background" Value="{DynamicResource Surface.Elevated}"/>
+    <Setter Property="RenderTransform" Value="scale(1.006)"/>
+  </Style>
+  <Style Selector="Button.instance.selected">
+    <Setter Property="Background" Value="{DynamicResource Surface.Selected}"/>
+  </Style>
+  <Style Selector="Border.surface">
+    <Setter Property="Background" Value="{DynamicResource Surface.Primary}"/>
+    <Setter Property="CornerRadius" Value="{DynamicResource RadiusCard}"/>
+    <Setter Property="Padding" Value="{DynamicResource HeroPadding}"/>
+  </Style>
+  <Style Selector="Border.settings-row">
+    <Setter Property="Padding" Value="{DynamicResource RowPadding}"/>
+  </Style>
+  <Style Selector="Border.separator">
+    <Setter Property="BorderBrush" Value="{DynamicResource Border.Subtle}"/>
+    <Setter Property="BorderThickness" Value="{DynamicResource Hairline}"/>
+  </Style>
+  <Style Selector="Button.caption">
+    <Setter Property="Padding" Value="{DynamicResource Zero}"/>
+    <Setter Property="Width" Value="{DynamicResource CaptionButtonWidth}"/>
+    <Setter Property="Height" Value="{DynamicResource CaptionHeight}"/>
+    <Setter Property="CornerRadius" Value="0"/>
+  </Style>
+  <Style Selector="Button.caption.close:pointerover">
+    <Setter Property="Background" Value="{DynamicResource State.ErrorSurface}"/>
+    <Setter Property="Foreground" Value="{DynamicResource State.Error}"/>
+  </Style>
+  <Style Selector="Button.hero-quiet">
+    <Setter Property="Foreground" Value="{StaticResource HeroForegroundBrush}"/>
+  </Style>
+  <Style Selector="Button.hero-quiet:pointerover">
+    <Setter Property="Background" Value="{StaticResource HeroGlassBrush}"/>
+  </Style>
+  <Style Selector="Button.shell:focus-visible /template/ Border#Chrome">
+    <Setter Property="BorderBrush" Value="{DynamicResource Accent.Primary}"/>
+  </Style>
+  <Style Selector="Button.primary:focus-visible /template/ Border#Chrome">
+    <Setter Property="BorderBrush" Value="{DynamicResource Action.Foreground}"/>
+  </Style>
+  <Style Selector="Button.hero-quiet:focus-visible /template/ Border#Chrome">
+    <Setter Property="BorderBrush" Value="{StaticResource HeroForegroundBrush}"/>
+  </Style>
+  <Style Selector="ComboBox">
+    <Setter Property="MinWidth" Value="170"/>
+    <Setter Property="CornerRadius" Value="{DynamicResource RadiusSmall}"/>
+  </Style>
+  <Style Selector="ProgressBar">
+    <Setter Property="Height" Value="{DynamicResource ProgressHeight}"/>
+    <Setter Property="CornerRadius" Value="{DynamicResource RadiusPill}"/>
+    <Setter Property="Foreground" Value="{StaticResource HeroForegroundBrush}"/>
+    <Setter Property="Background" Value="{StaticResource HeroGlassBrush}"/>
+    <Setter Property="Transitions">
+      <Transitions>
+        <DoubleTransition Property="Value" Duration="{DynamicResource MotionFast}"/>
+      </Transitions>
+    </Setter>
+  </Style>
+  <Style Selector="Window.reduced Button.shell:pointerover, Window.reduced Button.shell:pressed">
+    <Setter Property="RenderTransform" Value="scale(1)"/>
+  </Style>
+  <Style Selector="Button.shell"><Setter Property="MinHeight" Value="42"/></Style>
+  <Style Selector="Button.caption"><Setter Property="MinHeight" Value="0"/></Style>
+  <Style Selector="Button.primary:disabled">
+    <Setter Property="Opacity" Value="1"/>
+    <Setter Property="Background" Value="{DynamicResource Action.Disabled}"/>
+    <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
+  </Style>
+  <Style Selector="Button.hero-primary, Button.hero-primary:pointerover">
+    <Setter Property="Background" Value="{StaticResource HeroForegroundBrush}"/>
+    <Setter Property="Foreground" Value="{StaticResource InkBrush}"/>
+  </Style>
+  <Style Selector="Button.hero-primary:disabled"><Setter Property="Opacity" Value="{DynamicResource OpacityDisabled}"/></Style>
+  <Style Selector="Border.panel">
+    <Setter Property="Background" Value="{DynamicResource Surface.Primary}"/>
+    <Setter Property="CornerRadius" Value="{DynamicResource RadiusCard}"/>
+    <Setter Property="Padding" Value="{DynamicResource Inset24}"/>
+  </Style>
+  <Style Selector="TextBox">
+    <Setter Property="MinHeight" Value="42"/>
+    <Setter Property="CornerRadius" Value="{DynamicResource RadiusSmall}"/>
+  </Style>
+  <Style Selector="ComboBox"><Setter Property="MinHeight" Value="42"/></Style>
+  <Style Selector="Expander.quiet">
+    <Setter Property="Background" Value="Transparent"/>
+    <Setter Property="BorderThickness" Value="0"/>
+    <Setter Property="HorizontalAlignment" Value="Stretch"/>
+    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+  </Style>
+  <Style Selector="ProgressBar.transfer">
+    <Setter Property="Foreground" Value="{DynamicResource Accent.Primary}"/>
+    <Setter Property="Background" Value="{DynamicResource Border.Subtle}"/>
+    <Setter Property="Height" Value="6"/>
+  </Style>
+  <Style Selector="TextBlock.error"><Setter Property="Foreground" Value="{DynamicResource State.Error}"/></Style>
+  <Style Selector="Border.error"><Setter Property="Background" Value="{DynamicResource State.ErrorSurface}"/></Style>
+  <Style Selector="TextBlock.success"><Setter Property="Foreground" Value="{DynamicResource State.Success}"/></Style>
+  <Style Selector="Button.hero-primary:focus-visible /template/ Border#Chrome"><Setter Property="BorderBrush" Value="{StaticResource InkBrush}"/></Style>
+  <!-- Keep Fluent's expansion, keyboard and automation behavior; only reskin its header. -->
+  <Style Selector="Expander.quiet /template/ ToggleButton#ExpanderHeader">
+    <Setter Property="CornerRadius" Value="{DynamicResource RadiusSmall}"/>
+  </Style>
+  <Style Selector="Expander.quiet /template/ ToggleButton#ExpanderHeader /template/ Border#ToggleButtonBackground">
+    <Setter Property="Background" Value="{DynamicResource Surface.Secondary}"/>
+    <Setter Property="BorderBrush" Value="Transparent"/>
+  </Style>
+  <Style Selector="Expander.quiet /template/ ToggleButton#ExpanderHeader:pointerover /template/ Border#ToggleButtonBackground">
+    <Setter Property="Background" Value="{DynamicResource Surface.Hover}"/>
+  </Style>
+  <Style Selector="Expander.quiet /template/ ToggleButton#ExpanderHeader:focus-visible /template/ Border#ToggleButtonBackground">
+    <Setter Property="BorderBrush" Value="{DynamicResource Accent.Primary}"/>
+  </Style>
+  <Style Selector="Expander.quiet /template/ ToggleButton#ExpanderHeader /template/ ContentPresenter#PART_ContentPresenter">
+    <Setter Property="Foreground" Value="{DynamicResource Text.Secondary}"/>
+  </Style>
+  <Style Selector="Expander.quiet /template/ ToggleButton#ExpanderHeader /template/ Path#ExpandCollapseChevron">
+    <Setter Property="Stroke" Value="{DynamicResource Text.Secondary}"/>
+  </Style>
+</Styles>

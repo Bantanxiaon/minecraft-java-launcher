@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/SHLauncher.Platform/SHLauncher.Platform.csproj" />
+    <ProjectReference Include="../../src/SHLauncher.Engine.CmlLib/SHLauncher.Engine.CmlLib.csproj" />
+    <ProjectReference Include="../../src/SHLauncher.Infrastructure/SHLauncher.Infrastructure.csproj" />
+    <ProjectReference Include="../../src/SHLauncher.Application/SHLauncher.Application.csproj" />
+    <ProjectReference Include="../../src/SHLauncher.Downloads/SHLauncher.Downloads.csproj" />
+    <ProjectReference Include="../../src/SHLauncher.Bootstrap/SHLauncher.Bootstrap.csproj" />
+  </ItemGroup>
+</Project>

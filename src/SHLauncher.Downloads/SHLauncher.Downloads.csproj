@@ -1,0 +1,1 @@
+<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><ProjectReference Include="../SHLauncher.Contracts/SHLauncher.Contracts.csproj" /></ItemGroup></Project>

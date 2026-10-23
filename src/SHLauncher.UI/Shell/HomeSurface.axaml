@@ -1,0 +1,28 @@
+<UserControl xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:vm="using:SHLauncher.UI.ViewModels" x:Class="SHLauncher.UI.Shell.HomeSurface" x:DataType="vm:ShellViewModel">
+ <Grid>
+ <Border IsHitTestVisible="False"><Border.Background><LinearGradientBrush StartPoint="0%,0%" EndPoint="0%,100%"><GradientStop Color="#00080E18" Offset="0.35"/><GradientStop Color="#80080E18" Offset="0.75"/><GradientStop Color="#D0080E18" Offset="1"/></LinearGradientBrush></Border.Background></Border>
+ <Grid Margin="36,0,36,22" RowDefinitions="*,Auto,Auto" RowSpacing="24" ColumnDefinitions="*,260" ColumnSpacing="28">
+  <StackPanel Grid.Row="1" Spacing="7" VerticalAlignment="Bottom" Margin="0,0,0,0">
+   <TextBlock Text="{Binding Home.InstanceName}" FontSize="{Binding Home.HeroFontSize}" FontWeight="Light" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"/>
+   <TextBlock Text="{Binding Home.Metadata}" FontSize="14" Classes="secondary" TextWrapping="Wrap"/>
+  </StackPanel>
+  <StackPanel Grid.Row="1" Grid.Column="1" Spacing="14" VerticalAlignment="Bottom">
+
+   <TextBlock Text="{Binding Launch.Message}" IsVisible="{Binding Launch.ShowProgress}" FontSize="12" Classes="secondary" TextWrapping="Wrap"/>
+   <TextBlock Text="{Binding Launch.ErrorMessage}" IsVisible="{Binding Launch.ShowError}" Foreground="#F599A4" FontSize="12" TextWrapping="Wrap"/>
+   <ProgressBar Value="{Binding Launch.Progress}" IsIndeterminate="{Binding Launch.IsIndeterminate}" IsVisible="{Binding Launch.ShowProgress}" Height="3"/>
+  </StackPanel>
+  <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+   <Button Classes="nav selected" Content="主页" Command="{Binding HomeCommand}"/><Button Classes="nav" Content="实例" Command="{Binding LibraryCommand}"/><Button Classes="nav" Content="下载" Command="{Binding DownloadsCommand}"/><Button Classes="nav" Content="设置" Command="{Binding SettingsCommand}"/>
+  </StackPanel>
+  <Grid Grid.Row="2" Grid.Column="1">
+   <Button Name="LaunchButton" Classes="launch" Command="{Binding Launch.StartCommand}" IsEnabled="{Binding Launch.PresentationCanStart}" Width="260" Height="48" AutomationProperties.Name="{Binding Launch.PresentationLabel}" AutomationProperties.LiveSetting="Polite"><TransitioningContentControl Classes="launch-label" Content="{Binding Launch.PresentationLabel}"><TransitioningContentControl.PageTransition><CrossFade Duration="0:0:0.12"/></TransitioningContentControl.PageTransition></TransitioningContentControl></Button>
+  </Grid>
+  <StackPanel Grid.Row="1" Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-30,0,0" Orientation="Horizontal">
+   <Button Content="取消" Command="{Binding Launch.CancelCommand}" IsVisible="{Binding Launch.ShowCancel}"/>
+   <Button Content="结束游戏" Command="{Binding Launch.StartCommand}" IsVisible="{Binding Launch.IsRunning}"/>
+
+  </StackPanel>
+ </Grid>
+ </Grid>
+</UserControl>

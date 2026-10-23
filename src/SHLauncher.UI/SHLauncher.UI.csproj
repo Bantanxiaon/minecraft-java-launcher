@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>WinExe</OutputType><AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../SHLauncher.Application/SHLauncher.Application.csproj" />
+    <ProjectReference Include="../SHLauncher.Bootstrap/SHLauncher.Bootstrap.csproj" />
+    <PackageReference Include="Avalonia" />
+    <PackageReference Include="AnimationImage.Avalonia" />
+    <PackageReference Include="Irihi.Ursa" />
+    <PackageReference Include="Irihi.Ursa.Themes.Semi" />
+    <PackageReference Include="Avalonia.Desktop" />
+    <PackageReference Include="Avalonia.Themes.Fluent" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(Configuration)' == 'Debug'">
+    <Compile Include="../../tests/SHLauncher.UI.Diagnostics/OnlineModUiAudit.cs" Link="Diagnostics/OnlineModUiAudit.cs" />
+    <Compile Include="../../tests/SHLauncher.UI.Diagnostics/ModWorkspaceAudit.cs" Link="Diagnostics/ModWorkspaceAudit.cs" />
+    <Compile Include="../../tests/SHLauncher.UI.Diagnostics/MasterAccountAudit.cs" Link="Diagnostics/MasterAccountAudit.cs" />
+    <Compile Include="../../tests/SHLauncher.UI.Diagnostics/PhaseTwoAudit.cs" Link="Diagnostics/%(Filename)%(Extension)" />
+  </ItemGroup>
+  <ItemGroup><AvaloniaResource Include="Assets/Backgrounds/*" /><AvaloniaResource Include="Assets/Skins/*" /><AvaloniaResource Include="Assets/Icons/*" /></ItemGroup>
+</Project>
